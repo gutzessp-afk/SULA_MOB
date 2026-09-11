@@ -1,2 +1,8 @@
-/* Estilos globales + configuración de Tailwind v4.
-   Aquí van las variables de color del tema (rojo #E30613, fondos, etc.) */
+@import "tailwindcss";
+
+@layer base {
+  body {
+    background-color: #0b0c10;
+    color: #f1f5f9;
+  }
+}

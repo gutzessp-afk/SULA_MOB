@@ -1,4 +1,5 @@
-// Página raíz (/). Redirige al login.
-export default function Home() {
-  return null;
+import { redirect } from 'next/navigation'
+
+export default function RootPage() {
+  redirect('/login')
 }

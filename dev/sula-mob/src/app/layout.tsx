@@ -1,15 +1,21 @@
-// Layout raíz de toda la app.
-// Aquí van: la fuente global (Plus Jakarta Sans), el <html>/<body>,
-// metadata (título, descripción) y el tema oscuro.
+import './globals.css'
+import type { Metadata } from 'next'
+
+export const metadata: Metadata = {
+  title: 'SULA MOB',
+  description: 'Sistema de Mantenimiento y Operaciones',
+}
 
 export default function RootLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: React.ReactNode
 }) {
   return (
-    <html lang="es">
-      <body>{children}</body>
+    <html lang="es" className="dark">
+      <body className="bg-[#0b0c10] text-slate-100 antialiased selection:bg-red-500 selection:text-white">
+        {children}
+      </body>
     </html>
-  );
+  )
 }
