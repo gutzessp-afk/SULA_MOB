@@ -1,148 +1,97 @@
-'use client'
+'use client';
 
-import { 
-  FolderKanban, 
-  Layers, 
-  Users, 
-  Activity, 
-  ArrowUpRight, 
-  CheckCircle2, 
-  Clock, 
-  AlertTriangle 
-} from 'lucide-react'
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { supabase } from '@/lib/supabase';
+import { Folder, Layers, QrCode, FileText, Users, ArrowRight } from 'lucide-react';
 
-export default function AdminDashboardPage() {
-  // Datos simulados (puedes conectarlos a tu base de datos de Supabase más adelante)
-  const stats = [
-    { title: 'Proyectos Activos', value: '12', change: '+2 este mes', icon: FolderKanban, color: 'text-red-500', bg: 'bg-red-500/10' },
-    { title: 'Áreas Operativas', value: '8', change: '100% operativas', icon: Layers, color: 'text-blue-500', bg: 'bg-blue-500/10' },
-    { title: 'Operadores en Turno', value: '34', change: 'Activos ahora', icon: Users, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
-    { title: 'Eficiencia Global', value: '94.2%', change: '+1.5% vs ayer', icon: Activity, color: 'text-amber-500', bg: 'bg-amber-500/10' },
-  ]
+export default function DashboardPage() {
+  const [counts, setCounts] = useState({ proyectos: 0, areas: 0, operadores: 0 });
 
-  const areasStatus = [
-    { name: 'Corte Láser', progress: 85, status: 'Normal', statusColor: 'text-emerald-400 bg-emerald-950/50 border-emerald-800' },
-    { name: 'Doblez y CNC', progress: 62, status: 'Atención', statusColor: 'text-amber-400 bg-amber-950/50 border-amber-800' },
-    { name: 'Soldadura', progress: 90, status: 'Normal', statusColor: 'text-emerald-400 bg-emerald-950/50 border-emerald-800' },
-    { name: 'Ensamblaje', progress: 45, status: 'Retrasado', statusColor: 'text-red-400 bg-red-950/50 border-red-800' },
-    { name: 'Pintura y Acabados', progress: 78, status: 'Normal', statusColor: 'text-emerald-400 bg-emerald-950/50 border-emerald-800' },
-  ]
+  useEffect(() => {
+    async function loadStats() {
+      const [{ count: pCount }, { count: aCount }, { count: uCount }] = await Promise.all([
+        supabase.from('proyectos').select('*', { count: 'exact', head: true }),
+        supabase.from('areas').select('*', { count: 'exact', head: true }),
+        supabase.from('usuarios').select('*', { count: 'exact', head: true }).eq('rol', 'operador')
+      ]);
 
-  const recentActivity = [
-    { id: 1, user: 'Carlos Mendoza', action: 'Completó lote de piezas #402', area: 'Corte Láser', time: 'Hace 5 min', type: 'success' },
-    { id: 2, user: 'Roberto Gómez', action: 'Reportó incidencia de material', area: 'Doblez y CNC', time: 'Hace 15 min', type: 'warning' },
-    { id: 3, user: 'Ana Torres', action: 'Inició turno y escaneo de orden', area: 'Ensamblaje', time: 'Hace 32 min', type: 'info' },
-    { id: 4, user: 'Admin System', action: 'Actualizó catálogo de productos TEGEC', area: 'Sistema', time: 'Hace 1 hora', type: 'info' },
-  ]
+      setCounts({
+        proyectos: pCount || 0,
+        areas: aCount || 0,
+        operadores: uCount || 0
+      });
+    }
+    void loadStats();
+  }, []);
+
+  const accesosRapidos = [
+    { title: 'Gestión de Proyectos', desc: 'Crear, editar y dar seguimiento a órdenes', href: '/admin/proyectos', icon: Folder },
+    { title: 'Áreas de Producción', desc: 'Monitorear las 7 estaciones fijas', href: '/admin/actividades', icon: Layers },
+    { title: 'Escáner QR', desc: 'Control e inspección rápida de piezas', href: '/admin/verificacion', icon: QrCode },
+    { title: 'Reportes', desc: 'Métricas de desempeño y descargas', href: '/admin/reportes', icon: FileText },
+    { title: 'Usuarios', desc: 'Administración de roles u operadores', href: '/admin/usuarios', icon: Users },
+  ];
 
   return (
-    <div className="space-y-6 pb-12">
-      {/* Título de Bienvenida */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-[#0e1017]/80 backdrop-blur-xl border border-slate-800 p-6 rounded-2xl shadow-xl">
-        <div>
-          <h1 className="text-xl font-black text-white tracking-wider uppercase">
-            Panel de Control <span className="text-red-600">General</span>
-          </h1>
-          <p className="text-xs text-slate-400 mt-1">
-            Monitoreo en tiempo real de áreas, producción y rendimiento de operadores.
-          </p>
+    <div className="p-8 space-y-8 bg-[#0B0F17] min-h-screen text-slate-100">
+      {/* Banner Principal */}
+      <div className="bg-[#121824] border border-slate-800 rounded-2xl p-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xl font-bold tracking-wider text-white">SULA MOB</span>
+            <span className="text-[10px] font-bold bg-red-950/80 text-red-500 border border-red-800/50 px-2.5 py-0.5 rounded-full uppercase tracking-wide">
+              Control de Manufactura
+            </span>
+          </div>
+          <h1 className="text-3xl font-extrabold text-white tracking-tight">Cada proyecto, cada área, cada pieza.</h1>
+          <p className="text-slate-400 text-sm">Seguimiento de proyectos por área, registro de producción y reportes en un solo lugar.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-950/60 text-emerald-400 border border-emerald-800/80">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            Sistema Conectado
-          </span>
+
+        {/* Métricas Dinámicas */}
+        <div className="flex items-center gap-8 bg-[#0B0F17]/60 border border-slate-800/80 px-6 py-4 rounded-xl">
+          <div className="text-center">
+            <div className="text-3xl font-black text-white">{counts.proyectos}</div>
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Proyectos</div>
+          </div>
+          <div className="w-px h-8 bg-slate-800" />
+          <div className="text-center">
+            <div className="text-3xl font-black text-white">{counts.areas}</div>
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Áreas</div>
+          </div>
+          <div className="w-px h-8 bg-slate-800" />
+          <div className="text-center">
+            <div className="text-3xl font-black text-white">{counts.operadores}</div>
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Operadores</div>
+          </div>
         </div>
       </div>
 
-      {/* Tarjetas de KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat, index) => {
-          const Icon = stat.icon
-          return (
-            <div 
-              key={index} 
-              className="bg-[#0e1017]/80 backdrop-blur-xl border border-slate-800 p-5 rounded-2xl shadow-xl flex items-center justify-between transition hover:border-slate-700"
-            >
-              <div>
-                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">{stat.title}</p>
-                <h3 className="text-2xl font-black text-white mt-1">{stat.value}</h3>
-                <span className="text-[10px] text-slate-500 mt-1 block font-medium">{stat.change}</span>
-              </div>
-              <div className={`p-3.5 rounded-xl ${stat.bg} ${stat.color}`}>
-                <Icon className="w-5 h-5" />
-              </div>
-            </div>
-          )
-        })}
-      </div>
+      {/* Grid de Accesos Rápidos */}
+      <div className="space-y-4">
+        <h2 className="text-lg font-bold text-white uppercase tracking-wider">Accesos Rápidos</h2>
+        <p className="text-xs text-slate-400">Selecciona un módulo del menú o accede directamente desde aquí.</p>
 
-      {/* Sección Inferior: Estado por Área y Actividad Reciente */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Estado por Área (Ocupa 2 columnas) */}
-        <div className="lg:col-span-2 bg-[#0e1017]/80 backdrop-blur-xl border border-slate-800 p-6 rounded-2xl shadow-xl flex flex-col">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-              <Layers className="w-4 h-4 text-red-600" />
-              Estado de Producción por Área
-            </h2>
-            <span className="text-xs text-slate-400">Progreso general</span>
-          </div>
-
-          <div className="space-y-5 flex-1">
-            {areasStatus.map((area, idx) => (
-              <div key={idx} className="space-y-2">
-                <div className="flex justify-between text-xs font-semibold">
-                  <span className="text-slate-300">{area.name}</span>
-                  <div className="flex items-center gap-3">
-                    <span className={`px-2 py-0.5 rounded-md text-[10px] border ${area.statusColor}`}>
-                      {area.status}
-                    </span>
-                    <span className="text-white font-mono">{area.progress}%</span>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 pt-2">
+          {accesosRapidos.map((card) => {
+            const Icon = card.icon;
+            return (
+              <div key={card.title} className="bg-[#121824] border border-slate-800 hover:border-slate-700 p-6 rounded-2xl space-y-4 flex flex-col justify-between transition-all">
+                <div className="space-y-3">
+                  <div className="w-10 h-10 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-red-500">
+                    <Icon className="w-5 h-5" />
                   </div>
+                  <h3 className="text-base font-semibold text-white">{card.title}</h3>
+                  <p className="text-slate-400 text-xs">{card.desc}</p>
                 </div>
-                <div className="w-full bg-[#08090d] h-2 rounded-full overflow-hidden border border-slate-800/60">
-                  <div 
-                    className="bg-gradient-to-r from-red-600 to-red-500 h-full rounded-full transition-all duration-500" 
-                    style={{ width: `${area.progress}%` }}
-                  ></div>
-                </div>
+                <Link href={card.href} className="inline-flex items-center gap-2 text-xs font-bold text-red-500 hover:text-red-400 uppercase tracking-wider pt-2">
+                  Abrir Módulo <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
-
-        {/* Actividad Reciente (Ocupa 1 columna) */}
-        <div className="bg-[#0e1017]/80 backdrop-blur-xl border border-slate-800 p-6 rounded-2xl shadow-xl flex flex-col">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-              <Activity className="w-4 h-4 text-red-600" />
-              Actividad Reciente
-            </h2>
-          </div>
-
-          <div className="space-y-4 flex-1">
-            {recentActivity.map((act) => (
-              <div key={act.id} className="flex items-start gap-3 pb-3 border-b border-slate-800/60 last:border-0 last:pb-0">
-                <div className="mt-0.5">
-                  {act.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
-                  {act.type === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-500" />}
-                  {act.type === 'info' && <Clock className="w-4 h-4 text-blue-500" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-white truncate">{act.action}</p>
-                  <div className="flex items-center justify-between mt-1">
-                    <span className="text-[10px] text-slate-400 font-semibold">{act.user} • <span className="text-red-500">{act.area}</span></span>
-                    <span className="text-[10px] text-slate-600">{act.time}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
       </div>
     </div>
-  )
+  );
 }
