@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import { Folder, Layers, QrCode, FileText, Users, ArrowRight } from 'lucide-react';
+import { FolderKanban, Factory, FileSpreadsheet, Users, ArrowRight } from 'lucide-react';
 
 export default function DashboardPage() {
   const [counts, setCounts] = useState({ proyectos: 0, areas: 0, operadores: 0 });
@@ -13,7 +13,7 @@ export default function DashboardPage() {
       const [{ count: pCount }, { count: aCount }, { count: uCount }] = await Promise.all([
         supabase.from('proyectos').select('*', { count: 'exact', head: true }),
         supabase.from('areas').select('*', { count: 'exact', head: true }),
-        supabase.from('usuarios').select('*', { count: 'exact', head: true }).eq('rol', 'operador')
+        supabase.from('usuarios').select('*', { count: 'exact', head: true })
       ]);
 
       setCounts({
@@ -26,10 +26,9 @@ export default function DashboardPage() {
   }, []);
 
   const accesosRapidos = [
-    { title: 'Gestión de Proyectos', desc: 'Crear, editar y dar seguimiento a órdenes', href: '/admin/proyectos', icon: Folder },
-    { title: 'Áreas de Producción', desc: 'Monitorear las 7 estaciones fijas', href: '/admin/actividades', icon: Layers },
-    { title: 'Escáner QR', desc: 'Control e inspección rápida de piezas', href: '/admin/verificacion', icon: QrCode },
-    { title: 'Reportes', desc: 'Métricas de desempeño y descargas', href: '/admin/reportes', icon: FileText },
+    { title: 'Gestión de Proyectos', desc: 'Crear, editar y dar seguimiento a órdenes o escanear PDF', href: '/admin/proyectos', icon: FolderKanban },
+    { title: 'Áreas de Producción', desc: 'Monitorear las estaciones de trabajo', href: '/admin/actividades', icon: Factory },
+    { title: 'Reportes', desc: 'Métricas de desempeño e incidentes', href: '/admin/reportes', icon: FileSpreadsheet },
     { title: 'Usuarios', desc: 'Administración de roles u operadores', href: '/admin/usuarios', icon: Users },
   ];
 
@@ -62,7 +61,7 @@ export default function DashboardPage() {
           <div className="w-px h-8 bg-slate-800" />
           <div className="text-center">
             <div className="text-3xl font-black text-white">{counts.operadores}</div>
-            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Operadores</div>
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Usuarios</div>
           </div>
         </div>
       </div>
@@ -72,7 +71,7 @@ export default function DashboardPage() {
         <h2 className="text-lg font-bold text-white uppercase tracking-wider">Accesos Rápidos</h2>
         <p className="text-xs text-slate-400">Selecciona un módulo del menú o accede directamente desde aquí.</p>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 pt-2">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-5 pt-2">
           {accesosRapidos.map((card) => {
             const Icon = card.icon;
             return (
