@@ -36,8 +36,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   };
 
   return (
-    <div className="flex flex-col md:flex-row min-h-screen bg-[#070A0F] text-slate-100 font-sans selection:bg-red-500 selection:text-white">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[#070A0F] text-slate-100 font-sans selection:bg-red-500 selection:text-white relative overflow-x-hidden">
       
+      {/* CAPA DE FONDO DIFUMINADO INDUSTRIAL */}
+      <div 
+        className="fixed inset-0 pointer-events-none opacity-15 bg-cover bg-center mix-blend-luminosity z-0"
+        style={{ backgroundImage: "url('/images/fond.png')" }}
+      />
+
       {/* HEADER SUPERIOR EN MÓVILES */}
       <header className="md:hidden flex items-center justify-between p-4 bg-[#0E131F]/90 backdrop-blur-xl border-b border-slate-800/80 sticky top-0 z-50">
         <div className="flex items-center gap-2">
@@ -158,10 +164,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </div>
       </aside>
 
-      {/* CONTENIDO PRINCIPAL CON EFECTO GLOW DE FONDO */}
-      <main className="flex-1 p-4 sm:p-6 lg:p-10 overflow-y-auto relative">
-        <div className="pointer-events-none absolute top-0 right-1/4 w-[500px] h-[500px] bg-red-600/5 rounded-full blur-[140px] -z-10" />
-        <div className="pointer-events-none absolute bottom-10 left-10 w-[400px] h-[400px] bg-blue-600/5 rounded-full blur-[140px] -z-10" />
+      {/* CONTENIDO PRINCIPAL */}
+      <main className="flex-1 p-4 sm:p-6 lg:p-10 overflow-y-auto relative z-10">
         {children}
       </main>
     </div>

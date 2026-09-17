@@ -28,7 +28,7 @@ export default function DashboardPage() {
   }, []);
 
   const accesosRapidos = [
-    { title: 'Gestión de Proyectos', desc: 'Crear, editar u ordenes en PDF', href: '/admin/proyectos', icon: FolderKanban },
+    { title: 'Gestión de Proyectos', desc: 'Crear, editar u órdenes en PDF', href: '/admin/proyectos', icon: FolderKanban },
     { title: 'Áreas de Producción', desc: 'Monitorear estaciones fijas', href: '/admin/actividades', icon: Factory },
     { title: 'Notificaciones', desc: `Mensajes de operadores`, href: '/admin/notificaciones', icon: Bell, badge: counts.notificaciones },
     { title: 'Reportes', desc: 'Métricas de desempeño e incidentes', href: '/admin/reportes', icon: FileSpreadsheet },
@@ -37,13 +37,14 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
-      {/* BANNER ESTILO HERO / YAMAHA CONCEPT */}
-      <div className="relative overflow-hidden rounded-3xl border border-slate-800/80 bg-gradient-to-br from-[#121824] via-[#0E131F] to-[#070A0F] p-6 sm:p-10 shadow-2xl">
-        <div className="absolute -top-24 -right-24 w-96 h-96 bg-red-600/10 rounded-full blur-3xl pointer-events-none" />
-        
+      {/* BANNER CON FONDO TEXTURIZADO Y GLOW */}
+      <div 
+        className="relative overflow-hidden rounded-3xl border border-slate-800/80 p-6 sm:p-10 shadow-2xl bg-cover bg-center"
+        style={{ backgroundImage: `linear-gradient(to right, rgba(11,15,23,0.95), rgba(18,24,36,0.8)), url('/images/fondo.png')` }}
+      >
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-8">
           <div className="space-y-3 max-w-2xl">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-950/60 border border-red-500/30 text-red-400 text-xs font-bold tracking-wider uppercase">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-950/80 border border-red-500/40 text-red-400 text-xs font-bold tracking-wider uppercase backdrop-blur-md">
               <Sparkles className="w-3.5 h-3.5" /> Control de Manufactura SULA MOB
             </div>
             <h1 className="text-3xl sm:text-5xl font-black text-white tracking-tight leading-tight">
@@ -52,28 +53,28 @@ export default function DashboardPage() {
                 cada área, cada pieza.
               </span>
             </h1>
-            <p className="text-slate-400 text-sm sm:text-base font-normal">
+            <p className="text-slate-300 text-sm sm:text-base font-normal leading-relaxed">
               Seguimiento de producción en tiempo real, trazabilidad por áreas y comunicación directa con operadores.
             </p>
           </div>
 
           {/* MÉTRICAS FLOTANTES RESPONSIVAS */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4 gap-3 bg-[#070A0F]/60 backdrop-blur-xl border border-slate-800/80 p-4 rounded-2xl shadow-inner">
-            <div className="text-center p-3 rounded-xl bg-slate-900/40 border border-slate-800/40">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4 gap-3 bg-[#070A0F]/80 backdrop-blur-xl border border-slate-800/80 p-4 rounded-2xl shadow-2xl">
+            <div className="text-center p-3 rounded-xl bg-slate-900/60 border border-slate-800/50">
               <div className="text-2xl sm:text-3xl font-black text-white">{counts.proyectos}</div>
-              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">Proyectos</div>
+              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Proyectos</div>
             </div>
-            <div className="text-center p-3 rounded-xl bg-slate-900/40 border border-slate-800/40">
+            <div className="text-center p-3 rounded-xl bg-slate-900/60 border border-slate-800/50">
               <div className="text-2xl sm:text-3xl font-black text-white">{counts.areas}</div>
-              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">Áreas</div>
+              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Áreas</div>
             </div>
-            <div className="text-center p-3 rounded-xl bg-slate-900/40 border border-slate-800/40">
+            <div className="text-center p-3 rounded-xl bg-slate-900/60 border border-slate-800/50">
               <div className="text-2xl sm:text-3xl font-black text-white">{counts.operadores}</div>
-              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">Usuarios</div>
+              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Usuarios</div>
             </div>
-            <div className="text-center p-3 rounded-xl bg-red-950/20 border border-red-900/30">
+            <div className="text-center p-3 rounded-xl bg-red-950/40 border border-red-900/40">
               <div className="text-2xl sm:text-3xl font-black text-red-500">{counts.notificaciones}</div>
-              <div className="text-[10px] font-bold text-red-400/80 uppercase tracking-widest mt-0.5">Avisos</div>
+              <div className="text-[10px] font-bold text-red-400 uppercase tracking-widest mt-0.5">Avisos</div>
             </div>
           </div>
         </div>
