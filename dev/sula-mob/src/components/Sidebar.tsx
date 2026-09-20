@@ -29,11 +29,10 @@ export default function Sidebar({ userRole = 'admin' }: SidebarProps) {
     { name: 'Usuarios', href: '/admin/usuarios', icon: Users },
   ]
 
-  const operadorLinks = [
-    { name: 'Mi Área', href: '/operador', icon: Factory },
-    { name: 'Escanear QR', href: '/operador/escaneo', icon: QrCode },
-    { name: 'Mis Avances', href: '/operador/avances', icon: FileText },
-  ]
+ const operadorLinks = [
+  { name: 'Dashboard', href: '/operator/dashboard', icon: LayoutDashboard },
+  { name: 'Actividades', href: '/operator/actividades', icon: Factory },
+]
 
   const links = userRole === 'admin' ? adminLinks : operadorLinks
 
