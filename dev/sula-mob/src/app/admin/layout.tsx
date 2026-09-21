@@ -10,21 +10,20 @@ import {
   FileSpreadsheet,
   Users,
   Bell,
+  LogOut,
   Menu,
-  X,
-  LogOut
+  X
 } from 'lucide-react';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [isHovered, setIsHovered] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const menuItems = [
     { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutDashboard },
     { name: 'Proyectos', href: '/admin/proyectos', icon: FolderKanban },
-    { name: 'Áreas de Producción', href: '/admin/actividades', icon: Factory },
+    { name: 'Áreas', href: '/admin/actividades', icon: Factory },
     { name: 'Notificaciones', href: '/admin/notificaciones', icon: Bell },
     { name: 'Reportes', href: '/admin/reportes', icon: FileSpreadsheet },
     { name: 'Usuarios', href: '/admin/usuarios', icon: Users },
@@ -36,37 +35,72 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   };
 
   return (
-    <div className="flex flex-col md:flex-row min-h-screen bg-[#070A0F] text-slate-100 font-sans selection:bg-red-500 selection:text-white relative overflow-x-hidden">
+    <div className="min-h-screen bg-[#070A0F] text-slate-100 font-sans relative overflow-x-hidden selection:bg-red-500 selection:text-white pb-12">
       
-      {/* CAPA DE FONDO DIFUMINADO INDUSTRIAL */}
+      {/* Fondo industrial sutil difuminado con glassmorphism */}
       <div 
-        className="fixed inset-0 pointer-events-none opacity-15 bg-cover bg-center mix-blend-luminosity z-0"
+        className="fixed inset-0 pointer-events-none opacity-20 bg-cover bg-center mix-blend-luminosity z-0"
         style={{ backgroundImage: "url('/images/fond.png')" }}
       />
 
-      {/* HEADER SUPERIOR EN MÓVILES */}
-      <header className="md:hidden flex items-center justify-between p-4 bg-[#0E131F]/90 backdrop-blur-xl border-b border-slate-800/80 sticky top-0 z-50">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-red-600/20 border border-red-500/40 flex items-center justify-center font-black text-red-500 text-sm">
-            S
+      {/* TOP NAVBAR FLOTANTE CON GLASSMORPHISM */}
+      <header className="sticky top-4 z-50 px-4 max-w-6xl mx-auto">
+        <div className="bg-[#0E131F]/80 backdrop-blur-xl border border-slate-700/50 rounded-full px-6 py-3 shadow-[0_8px_32px_0_rgba(0,0,0,0.5)] flex items-center justify-between">
+          
+          {/* Logo SULA MOB */}
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-red-600 to-red-900 border border-red-500/50 flex items-center justify-center font-black text-white text-sm shadow-lg shadow-red-950/50">
+              S
+            </div>
+            <span className="font-black text-lg tracking-wider text-white hidden sm:inline">
+              SULA <span className="text-red-500">MOB</span>
+            </span>
           </div>
-          <span className="text-lg font-black tracking-wider text-white">
-            SULA <span className="text-red-500">MOB</span>
-          </span>
-        </div>
-        
-        <button
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white"
-        >
-          {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-        </button>
-      </header>
 
-      {/* MENÚ DESPLEGABLE MÓVIL */}
-      {mobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 top-[65px] bg-[#070A0F]/95 backdrop-blur-2xl z-40 p-6 flex flex-col justify-between border-b border-slate-800 animate-in fade-in slide-in-from-top-4 duration-200">
-          <nav className="space-y-2">
+          {/* Menú de Opciones Centrado con Efecto Agrandar (Hover Zoom) */}
+          <nav className="hidden md:flex items-center gap-1.5 bg-[#0B0F17]/60 p-1.5 rounded-full border border-slate-800/80 backdrop-blur-md">
+            {menuItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = pathname === item.href;
+
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold transition-all duration-300 ease-out transform hover:scale-110 ${
+                    isActive
+                      ? 'bg-gradient-to-r from-red-600 to-red-700 text-white shadow-lg shadow-red-600/30 border border-red-400/30'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                  <span>{item.name}</span>
+                </Link>
+              );
+            })}
+          </nav>
+
+          {/* Botón Salir */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleLogout}
+              className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900/80 hover:bg-red-950/60 text-slate-300 hover:text-red-400 text-xs font-semibold transition-all duration-300 border border-slate-800 hover:border-red-800/50 transform hover:scale-105"
+            >
+              <LogOut className="w-3.5 h-3.5" /> Salir
+            </button>
+
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="md:hidden p-2 rounded-full bg-slate-900 text-slate-300 border border-slate-800"
+            >
+              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Menú Desplegable Móvil */}
+        {mobileMenuOpen && (
+          <div className="md:hidden mt-3 bg-[#0E131F]/95 border border-slate-800 rounded-3xl p-4 shadow-2xl backdrop-blur-2xl space-y-2">
             {menuItems.map((item) => {
               const Icon = item.icon;
               const isActive = pathname === item.href;
@@ -75,97 +109,27 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                   key={item.href}
                   href={item.href}
                   onClick={() => setMobileMenuOpen(false)}
-                  className={`flex items-center gap-3.5 px-4 py-3.5 rounded-xl text-sm font-semibold transition-all ${
-                    isActive
-                      ? 'bg-gradient-to-r from-red-950/80 to-slate-900 text-red-400 border border-red-500/30 shadow-lg shadow-red-950/20'
-                      : 'text-slate-400 hover:bg-slate-900/60 hover:text-white'
+                  className={`flex items-center gap-3 px-4 py-3 rounded-2xl text-xs font-bold transition-all ${
+                    isActive ? 'bg-red-600 text-white' : 'text-slate-400 hover:bg-slate-800/50 hover:text-white'
                   }`}
                 >
-                  <Icon className={`w-5 h-5 ${isActive ? 'text-red-500' : 'text-slate-400'}`} />
+                  <Icon className="w-4 h-4" />
                   <span>{item.name}</span>
                 </Link>
               );
             })}
-          </nav>
-
-          <button
-            onClick={handleLogout}
-            className="flex items-center justify-center gap-2 w-full py-3.5 rounded-xl bg-red-950/30 border border-red-500/20 text-red-400 text-sm font-semibold"
-          >
-            <LogOut className="w-4 h-4" /> Cerrar Sesión
-          </button>
-        </div>
-      )}
-
-      {/* SIDEBAR ESCRITORIO Y TABLETS */}
-      <aside
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-        className={`hidden md:flex flex-col justify-between bg-[#0B0F17]/90 border-r border-slate-800/80 backdrop-blur-2xl transition-all duration-300 ease-in-out z-40 sticky top-0 h-screen ${
-          isHovered ? 'w-64' : 'w-20'
-        }`}
-      >
-        <div className="p-4">
-          <div className="mb-8 px-2 flex items-center justify-between h-10 overflow-hidden">
-            {isHovered ? (
-              <div className="transition-all duration-300">
-                <h1 className="text-xl font-black tracking-wider text-white">
-                  SULA <span className="text-red-500">MOB</span>
-                </h1>
-                <p className="text-[9px] font-bold text-slate-500 tracking-widest uppercase whitespace-nowrap">
-                  Control de Manufactura
-                </p>
-              </div>
-            ) : (
-              <div className="mx-auto w-10 h-10 rounded-xl bg-gradient-to-br from-red-600 to-red-900 flex items-center justify-center font-black text-white text-lg shadow-lg shadow-red-950/50">
-                S
-              </div>
-            )}
+            <button
+              onClick={handleLogout}
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl bg-red-950/40 text-red-400 text-xs font-bold border border-red-800/40"
+            >
+              <LogOut className="w-4 h-4" /> Cerrar Sesión
+            </button>
           </div>
-
-          <nav className="space-y-1.5">
-            {menuItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = pathname === item.href;
-
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`flex items-center gap-3.5 px-3.5 py-3 rounded-xl font-medium text-sm transition-all relative group ${
-                    isActive
-                      ? 'bg-gradient-to-r from-red-950/60 to-[#121824] text-red-400 border border-red-500/30 font-semibold shadow-md shadow-red-950/20'
-                      : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/40'
-                  }`}
-                  title={!isHovered ? item.name : undefined}
-                >
-                  {isActive && (
-                    <span className="absolute left-0 top-2 bottom-2 w-1 bg-red-500 rounded-r-full shadow-[0_0_12px_#ef4444]" />
-                  )}
-                  <Icon className={`w-5 h-5 shrink-0 transition-transform group-hover:scale-110 ${isActive ? 'text-red-500' : 'text-slate-400'}`} />
-                  {isHovered && <span className="whitespace-nowrap transition-opacity duration-200">{item.name}</span>}
-                </Link>
-              );
-            })}
-          </nav>
-        </div>
-
-        <div className="p-4 border-t border-slate-800/80 bg-[#070A0F]/40">
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-all"
-            title={!isHovered ? 'Cerrar Sesión' : undefined}
-          >
-            <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-white text-xs shrink-0">
-              N
-            </div>
-            {isHovered && <span className="whitespace-nowrap font-semibold">Cerrar Sesión</span>}
-          </button>
-        </div>
-      </aside>
+        )}
+      </header>
 
       {/* CONTENIDO PRINCIPAL */}
-      <main className="flex-1 p-4 sm:p-6 lg:p-10 overflow-y-auto relative z-10">
+      <main className="max-w-7xl mx-auto px-4 pt-6 relative z-10">
         {children}
       </main>
     </div>

@@ -1,126 +1,73 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import { supabase } from '@/lib/supabase';
-import { AlertTriangle, CheckCircle2, Clock } from 'lucide-react';
-
-interface ReporteProduccion {
-  id: string;
-  fecha: string;
-  hora_inicio?: string;
-  hora_fin?: string;
-  piezas: number;
-  proyectos?: { nombre: string; codigo: string };
-  areas?: { nombre: string };
-  usuarios?: { nombre: string };
-}
-
-interface ReporteRetraso {
-  id: string;
-  motivo?: string;
-  descripcion?: string;
-  tiempo_estimado_retraso?: number;
-  created_at?: string;
-  proyectos?: { nombre: string; codigo: string };
-  areas?: { nombre: string };
-}
+import Image from 'next/image';
+import { FileSpreadsheet, Download, AlertCircle, BarChart3 } from 'lucide-react';
 
 export default function ReportesPage() {
-  const [producciones, setProducciones] = useState<ReporteProduccion[]>([]);
-  const [retrasos, setRetrasos] = useState<ReporteRetraso[]>([]);
-
-  const fetchReportes = useCallback(async () => {
-    const [{ data: pData }, { data: rData }] = await Promise.all([
-      supabase.from('produccion').select('*, proyectos(nombre, codigo), areas(nombre), usuarios!produccion_operador_id_fkey(nombre)').order('fecha', { ascending: false }),
-      supabase.from('retrasos').select('*, proyectos(nombre, codigo), areas(nombre)').order('created_at', { ascending: false })
-    ]);
-
-    if (pData) setProducciones(pData as ReporteProduccion[]);
-    if (rData) setRetrasos(rData as ReporteRetraso[]);
-  }, []);
-
-  useEffect(() => {
-    let isMounted = true;
-    async function init() {
-      if (isMounted) await fetchReportes();
-    }
-    void init();
-    return () => { isMounted = false; };
-  }, [fetchReportes]);
-
   return (
-    <div className="p-8 space-y-8 bg-[#0B0F17] min-h-screen text-slate-100">
-      <h1 className="text-2xl font-bold text-white">Reportes de Producción e Incidentes</h1>
-
-      {/* Tabla de Registros de Producción por Operador */}
-      <div className="space-y-4">
-        <h2 className="text-base font-bold text-white flex items-center gap-2">
-          <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Registro de Piezas Producidas
-        </h2>
-        <div className="bg-[#121824] border border-slate-800 rounded-2xl overflow-hidden">
-          <table className="w-full text-left text-sm text-slate-300">
-            <thead className="bg-[#0B0F17] text-slate-400 uppercase text-[11px] font-bold">
-              <tr>
-                <th className="p-4">Fecha / Horario</th>
-                <th className="p-4">Proyecto</th>
-                <th className="p-4">Área</th>
-                <th className="p-4">Operador</th>
-                <th className="p-4">Piezas Producidas</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60">
-              {producciones.map((p) => (
-                <tr key={p.id} className="hover:bg-slate-900/40">
-                  <td className="p-4 text-xs">
-                    <div className="font-semibold text-white">{p.fecha}</div>
-                    <div className="text-slate-500 flex items-center gap-1 mt-0.5">
-                      <Clock className="w-3 h-3" /> {p.hora_inicio || '--:--'} - {p.hora_fin || '--:--'}
-                    </div>
-                  </td>
-                  <td className="p-4">
-                    <div className="font-semibold text-white">{p.proyectos?.nombre || 'N/A'}</div>
-                    <div className="text-xs font-mono text-red-400">{p.proyectos?.codigo}</div>
-                  </td>
-                  <td className="p-4 text-slate-300">{p.areas?.nombre || 'N/A'}</td>
-                  <td className="p-4 text-slate-400">{p.usuarios?.nombre || 'Anónimo'}</td>
-                  <td className="p-4 font-black text-emerald-400 text-base">{p.piezas} pzs</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <div className="space-y-6 max-w-7xl mx-auto">
+      
+      {/* HEADER LIQUID GLASS CON IMAGEN TÉCNICA 'nuevap.png' */}
+      <div 
+        className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 sm:p-8 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-cover bg-center"
+        style={{ backgroundImage: `linear-gradient(to right, rgba(11,15,23,0.95), rgba(18,24,36,0.8)), url('/images/nuevap.png')` }}
+      >
+        <div>
+          <h1 className="text-2xl font-bold text-white tracking-wide flex items-center gap-3">
+            <FileSpreadsheet className="w-6 h-6 text-red-500" />
+            Reportes e Indicadores
+          </h1>
+          <p className="text-xs text-white/65 mt-1">
+            Generación de métricas de desempeño, eficiencia por estación y descargas de datos.
+          </p>
         </div>
       </div>
 
-      {/* Tabla de Retrasos e Incidentes */}
-      <div className="space-y-4 pt-4">
-        <h2 className="text-base font-bold text-white flex items-center gap-2">
-          <AlertTriangle className="w-5 h-5 text-red-500" /> Reportes de Retrasos e Incidentes
-        </h2>
-        <div className="bg-[#121824] border border-slate-800 rounded-2xl overflow-hidden">
-          <table className="w-full text-left text-sm text-slate-300">
-            <thead className="bg-[#0B0F17] text-slate-400 uppercase text-[11px] font-bold">
-              <tr>
-                <th className="p-4">Proyecto / Área</th>
-                <th className="p-4">Motivo</th>
-                <th className="p-4">Descripción / Detalles</th>
-                <th className="p-4">Retraso Estimado</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60">
-              {retrasos.map((r) => (
-                <tr key={r.id} className="hover:bg-slate-900/40">
-                  <td className="p-4">
-                    <div className="font-semibold text-white">{r.proyectos?.nombre || 'N/A'}</div>
-                    <div className="text-xs text-slate-400">{r.areas?.nombre}</div>
-                  </td>
-                  <td className="p-4 font-semibold text-red-400">{r.motivo || 'Sin motivo'}</td>
-                  <td className="p-4 text-slate-300 text-xs">{r.descripcion || 'Sin descripción.'}</td>
-                  <td className="p-4 font-bold text-amber-400">{r.tiempo_estimado_retraso ? `${r.tiempo_estimado_retraso} hrs` : 'N/A'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* PANEL DE DESCARGAS Y TARJETAS LIQUID GLASS */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <div className="lg:col-span-2 space-y-6">
+          <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-white/60 border-b border-white/10 pb-3">
+              Descarga de Reportes
+            </h2>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="bg-white/[0.07] border border-white/10 p-5 rounded-2xl space-y-3">
+                <div className="flex items-center gap-3 text-white font-bold text-sm">
+                  <BarChart3 className="w-5 h-5 text-red-400" /> Reporte de Producción
+                </div>
+                <p className="text-xs text-white/60">Exporta el acumulado de proyectos finalizados por estación.</p>
+                <button className="bg-white text-neutral-900 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 hover:bg-white/90 shadow-md">
+                  <Download className="w-4 h-4" /> Exportar CSV
+                </button>
+              </div>
+
+              <div className="bg-white/[0.07] border border-white/10 p-5 rounded-2xl space-y-3">
+                <div className="flex items-center gap-3 text-white font-bold text-sm">
+                  <AlertCircle className="w-5 h-5 text-amber-400" /> Historial de Incidencias
+                </div>
+                <p className="text-xs text-white/60">Consolidado de avisos y detenciones enviadas por operadores.</p>
+                <button className="bg-white text-neutral-900 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 hover:bg-white/90 shadow-md">
+                  <Download className="w-4 h-4" /> Exportar CSV
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
+
+        {/* TARJETA VISUAL CON 'instalaciones.png' */}
+        <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-4 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] h-64 flex flex-col justify-end">
+          <Image src="/images/instalaciones.png" alt="Infraestructura" fill className="object-cover rounded-2xl opacity-75" />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#0B0F17] via-transparent to-transparent rounded-2xl" />
+          <div className="relative z-10 p-2 space-y-1">
+            <span className="text-[10px] uppercase tracking-wider font-bold text-red-400 bg-black/60 px-2.5 py-1 rounded-full border border-white/10 backdrop-blur-md inline-block">
+              Trazabilidad Total
+            </span>
+            <p className="text-xs text-white/80">Informes optimizados para análisis técnico y auditorías.</p>
+          </div>
+        </div>
+
       </div>
     </div>
   );
