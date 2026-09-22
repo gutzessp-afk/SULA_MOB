@@ -3,11 +3,15 @@
 import { useEffect, useState, useCallback } from 'react';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
-import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, X, PieChart, CheckCircle2, Factory } from 'lucide-react';
+import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, X, PieChart, CheckCircle2, Factory, Calendar, User, MapPin, Download } from 'lucide-react';
+import { parsePedidoPdf } from '@/lib/parse-pedido';
+import { generarPdfPedido } from '@/lib/generar-pdf-pedido';
 
-interface ProductoItem {
-  nombre: string;
+interface PartidaItem {
   cantidad: number;
+  clave: string;
+  unidad: string;
+  descripcion: string;
 }
 
 interface ProductoDB {
@@ -33,12 +37,16 @@ export default function ProyectosPage() {
   const [proyectos, setProyectos] = useState<Proyecto[]>([]);
   const [areasDisponibles, setAreasDisponibles] = useState<Area[]>([]);
 
-  // Formulario
+  // Formulario — campos que coinciden con PedidoData del PDF
   const [codigo, setCodigo] = useState('');
   const [nombre, setNombre] = useState('');
   const [cliente, setCliente] = useState('');
+  const [fecha, setFecha] = useState('');
+  const [fechaEntrega, setFechaEntrega] = useState('');
+  const [referencia, setReferencia] = useState('');
+  const [elaboradoPor, setElaboradoPor] = useState('');
   const [prioridad, setPrioridad] = useState('media');
-  const [productos, setProductos] = useState<ProductoItem[]>([{ nombre: '', cantidad: 1 }]);
+  const [partidas, setPartidas] = useState<PartidaItem[]>([{ cantidad: 1, clave: '', unidad: 'Pieza', descripcion: '' }]);
   const [selectedAreas, setSelectedAreas] = useState<string[]>([]);
   const [search, setSearch] = useState('');
 
@@ -75,19 +83,19 @@ export default function ProyectosPage() {
     return () => { isMounted = false; };
   }, [loadDependencies, fetchProyectos]);
 
-  const addProductoInput = () => {
-    setProductos([...productos, { nombre: '', cantidad: 1 }]);
+  const addPartida = () => {
+    setPartidas([...partidas, { cantidad: 1, clave: '', unidad: 'Pieza', descripcion: '' }]);
   };
 
-  const removeProductoInput = (index: number) => {
-    if (productos.length === 1) return;
-    setProductos(productos.filter((_, i) => i !== index));
+  const removePartida = (index: number) => {
+    if (partidas.length === 1) return;
+    setPartidas(partidas.filter((_, i) => i !== index));
   };
 
-  const updateProductoInput = (index: number, field: keyof ProductoItem, value: string | number) => {
-    const newProds = [...productos];
-    newProds[index] = { ...newProds[index], [field]: value };
-    setProductos(newProds);
+  const updatePartida = (index: number, field: keyof PartidaItem, value: string | number) => {
+    const updated = [...partidas];
+    updated[index] = { ...updated[index], [field]: value };
+    setPartidas(updated);
   };
 
   const toggleArea = (id: string) => {
@@ -96,15 +104,28 @@ export default function ProyectosPage() {
 
   async function handleCrearProyecto(e: React.FormEvent) {
     e.preventDefault();
-    const validProductos = productos.filter(p => p.nombre.trim().length > 0);
-    if (!nombre.trim() || !codigo.trim() || validProductos.length === 0) {
-      alert('Por favor ingresa nombre, código y al menos 1 producto.');
+    const validPartidas = partidas.filter(p => p.descripcion.trim().length > 0);
+    if (!nombre.trim() || !codigo.trim() || validPartidas.length === 0) {
+      alert('Por favor ingresa código, nombre y al menos 1 partida con descripción.');
       return;
     }
 
     const { data: projectData, error } = await supabase
       .from('proyectos')
-      .insert([{ codigo, nombre, cliente, prioridad, progreso: 0 }])
+      .insert([{
+        codigo,
+        nombre,
+        cliente,
+        prioridad,
+        progreso: 0,
+        // Campos extra del pedido
+        descripcion: [
+          fecha && `Fecha: ${fecha}`,
+          fechaEntrega && `Entrega: ${fechaEntrega}`,
+          referencia && `Ref: ${referencia}`,
+          elaboradoPor && `Elaboró: ${elaboradoPor}`,
+        ].filter(Boolean).join(' | ') || undefined,
+      }])
       .select()
       .single();
 
@@ -113,9 +134,9 @@ export default function ProyectosPage() {
       return;
     }
 
-    const prodInserts = validProductos.map(p => ({
+    const prodInserts = validPartidas.map(p => ({
       proyecto_id: projectData.id,
-      nombre: p.nombre,
+      nombre: `[${p.clave}] ${p.descripcion}`,
       cantidad: p.cantidad,
       progreso: 0
     }));
@@ -132,7 +153,11 @@ export default function ProyectosPage() {
       await supabase.from('producto_area_avance').insert(matrizInserts);
     }
 
-    setCodigo(''); setNombre(''); setCliente(''); setProductos([{ nombre: '', cantidad: 1 }]); setSelectedAreas([]);
+    // Reset form
+    setCodigo(''); setNombre(''); setCliente(''); setFecha(''); setFechaEntrega('');
+    setReferencia(''); setElaboradoPor('');
+    setPartidas([{ cantidad: 1, clave: '', unidad: 'Pieza', descripcion: '' }]);
+    setSelectedAreas([]);
     await fetchProyectos();
     setActiveTab('lista');
   }
@@ -216,27 +241,55 @@ export default function ProyectosPage() {
     }
   };
 
-  const handlePdfUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsParsingPdf(true);
     setPdfSuccess('');
 
-    setTimeout(() => {
-      const randomCode = 'PRJ-' + Math.floor(1000 + Math.random() * 9000);
-      setCodigo(randomCode);
-      setNombre(file.name.replace('.pdf', '').toUpperCase());
-      setCliente('CLIENTE EXTRAÍDO PDF');
-      setProductos([
-        { nombre: 'Mesas Tipo A', cantidad: 10 },
-        { nombre: 'Estantes Metálicos', cantidad: 4 },
-        { nombre: 'Muebles Mostrador', cantidad: 5 },
-        { nombre: 'Sillas Industriales', cantidad: 6 }
-      ]);
+    try {
+      const pedido = await parsePedidoPdf(file);
+
+      // Llenar campos del formulario con los datos del PDF
+      setCodigo(pedido.numero_pedido ? `PED-${pedido.numero_pedido}` : '');
+      setNombre(pedido.numero_pedido ? `Pedido ${pedido.numero_pedido}` : file.name.replace('.pdf', ''));
+      setCliente(pedido.cliente || '');
+      setFecha(pedido.fecha || '');
+      setFechaEntrega(pedido.fecha_entrega || '');
+      setReferencia(pedido.referencia_sucursal || '');
+      setElaboradoPor(pedido.elaborado_por || '');
+
+      if (pedido.partidas.length > 0) {
+        setPartidas(pedido.partidas.map(p => ({
+          cantidad: p.cantidad,
+          clave: p.clave,
+          unidad: p.unidad,
+          descripcion: p.descripcion,
+        })));
+      }
+
+      setPdfSuccess(`PDF "${file.name}" procesado — ${pedido.partidas.length} partidas detectadas.`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error desconocido';
+      setPdfSuccess('');
+      alert('Error al procesar PDF: ' + msg);
+    } finally {
       setIsParsingPdf(false);
-      setPdfSuccess(`PDF "${file.name}" procesado con 4 productos detectados.`);
-    }, 1200);
+    }
+  };
+
+  const handleDescargarPdf = () => {
+    const pedido = {
+      numero_pedido: codigo.replace(/^PED-/, ''),
+      cliente,
+      fecha,
+      fecha_entrega: fechaEntrega,
+      referencia_sucursal: referencia,
+      elaborado_por: elaboradoPor,
+      partidas,
+    };
+    generarPdfPedido(pedido, partidas);
   };
 
   const filtrados = proyectos.filter(p =>
@@ -341,28 +394,48 @@ export default function ProyectosPage() {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <form onSubmit={handleCrearProyecto} className="lg:col-span-2 relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-8 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] space-y-6">
+        <div className="space-y-6">
+          {/* Card para cargar PDF — arriba del formulario */}
+          <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7]">
+            <div className="flex flex-col sm:flex-row items-center gap-4 p-5 sm:p-6">
+              <div className="w-12 h-12 rounded-2xl bg-red-950/60 border border-red-500/40 flex items-center justify-center text-red-400 flex-shrink-0">
+                {isParsingPdf ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileText className="w-5 h-5" />}
+              </div>
+              <div className="text-center sm:text-left flex-1">
+                <h3 className="font-bold text-white text-sm">Cargar Pedido PDF</h3>
+                <p className="text-xs text-white/60 mt-0.5">Sube el PDF del pedido Click Balance para auto-llenar todos los campos.</p>
+              </div>
+              <label className="cursor-pointer bg-red-600 hover:bg-red-700 text-white text-xs px-5 py-3 rounded-2xl font-bold inline-flex items-center gap-2 shadow-lg shadow-red-950/50 flex-shrink-0 transition-colors">
+                <FileUp className="w-4 h-4" /> Cargar Orden PDF
+                <input type="file" accept="application/pdf" onChange={handlePdfUpload} className="hidden" />
+              </label>
+            </div>
+            {pdfSuccess && (
+              <div className="px-5 pb-4 -mt-1">
+                <p className="text-xs text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-3 py-2 inline-block">{pdfSuccess}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Formulario principal */}
+          <form onSubmit={handleCrearProyecto} className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-5 sm:p-8 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] space-y-6">
             <h2 className="text-xs font-bold uppercase tracking-wider text-white/60 border-b border-white/10 pb-3">
-              Alta de Proyecto y Desglose de Productos
+              Alta de Proyecto — Datos del Pedido
             </h2>
 
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+            {/* Fila 1: Código + Nombre + Prioridad */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
-                <label className="text-xs text-white/60 block mb-1">Código Orden *</label>
-                <input type="text" placeholder="Ej: VENTO-101" value={codigo} onChange={e => setCodigo(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50" required />
+                <label className="text-xs text-white/60 block mb-1">No. Pedido / Código *</label>
+                <input type="text" placeholder="Ej: PED-3486" value={codigo} onChange={e => setCodigo(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors" required />
               </div>
               <div>
                 <label className="text-xs text-white/60 block mb-1">Nombre Proyecto *</label>
-                <input type="text" placeholder="Ej: Pedido Especial Vento" value={nombre} onChange={e => setNombre(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50" required />
-              </div>
-              <div>
-                <label className="text-xs text-white/60 block mb-1">Cliente Comercial</label>
-                <input type="text" placeholder="Ej: Vento" value={cliente} onChange={e => setCliente(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50" />
+                <input type="text" placeholder="Ej: Pedido 3486 Vento" value={nombre} onChange={e => setNombre(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors" required />
               </div>
               <div>
                 <label className="text-xs text-white/60 block mb-1">Prioridad</label>
-                <select value={prioridad} onChange={e => setPrioridad(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-[#121824] px-4 text-sm text-white outline-none focus:border-white/50">
+                <select value={prioridad} onChange={e => setPrioridad(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-[#121824] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors">
                   <option value="baja">Baja</option>
                   <option value="media">Media</option>
                   <option value="alta">Alta</option>
@@ -371,45 +444,132 @@ export default function ProyectosPage() {
               </div>
             </div>
 
-            <div className="space-y-3 bg-white/[0.03] p-4 rounded-2xl border border-white/10">
-              <div className="flex justify-between items-center">
-                <label className="text-xs font-bold uppercase text-white/80">Productos Solicitados (División Ponderada)</label>
-                <button type="button" onClick={addProductoInput} className="text-xs text-sky-400 font-bold hover:underline flex items-center gap-1">
-                  <Plus className="w-3.5 h-3.5" /> Agregar Producto
+            {/* Fila 2: Cliente + Elaborado por */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5">
+                  <User className="w-3 h-3" /> Cliente
+                </label>
+                <input type="text" placeholder="Ej: WATTS SUSTENTABLES" value={cliente} onChange={e => setCliente(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors" />
+              </div>
+              <div>
+                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5">
+                  <User className="w-3 h-3" /> Elaborado Por
+                </label>
+                <input type="text" placeholder="Ej: Alejandra Palacios" value={elaboradoPor} onChange={e => setElaboradoPor(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors" />
+              </div>
+            </div>
+
+            {/* Fila 3: Fecha + Fecha Entrega + Referencia/Sucursal */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5">
+                  <Calendar className="w-3 h-3" /> Fecha
+                </label>
+                <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-[#121824] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors" />
+              </div>
+              <div>
+                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5">
+                  <Calendar className="w-3 h-3" /> Fecha de Entrega
+                </label>
+                <input type="date" value={fechaEntrega} onChange={e => setFechaEntrega(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-[#121824] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors" />
+              </div>
+              <div>
+                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5">
+                  <MapPin className="w-3 h-3" /> Referencia / Sucursal
+                </label>
+                <input type="text" placeholder="Ej: VENTO" value={referencia} onChange={e => setReferencia(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors" />
+              </div>
+            </div>
+
+            {/* Partidas / Productos del Pedido */}
+            <div className="space-y-3 bg-white/[0.03] p-4 sm:p-5 rounded-2xl border border-white/10">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                <label className="text-xs font-bold uppercase text-white/80">Partidas del Pedido</label>
+                <button type="button" onClick={addPartida} className="text-xs text-sky-400 font-bold hover:underline flex items-center gap-1">
+                  <Plus className="w-3.5 h-3.5" /> Agregar Partida
                 </button>
               </div>
 
-              {productos.map((prod, index) => (
-                <div key={index} className="flex items-center gap-3">
-                  <input
-                    type="text"
-                    placeholder={`Producto ${index + 1} (Ej: Mesas, Estantes)`}
-                    value={prod.nombre}
-                    onChange={e => updateProductoInput(index, 'nombre', e.target.value)}
-                    className="flex-1 h-[44px] rounded-xl border border-white/20 bg-white/[0.07] px-3 text-sm text-white outline-none"
-                    required
-                  />
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="Cant."
-                    value={prod.cantidad}
-                    onChange={e => updateProductoInput(index, 'cantidad', parseInt(e.target.value) || 1)}
-                    className="w-24 h-[44px] rounded-xl border border-white/20 bg-white/[0.07] px-3 text-sm text-white outline-none"
-                    required
-                  />
-                  {productos.length > 1 && (
-                    <button type="button" onClick={() => removeProductoInput(index)} className="p-2 text-red-400 hover:bg-red-500/20 rounded-xl">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
+              {/* Header de columnas — solo desktop */}
+              <div className="hidden sm:grid sm:grid-cols-[70px_120px_90px_1fr_40px] gap-2 px-1">
+                <span className="text-[10px] text-white/40 uppercase font-bold">Cant.</span>
+                <span className="text-[10px] text-white/40 uppercase font-bold">Clave</span>
+                <span className="text-[10px] text-white/40 uppercase font-bold">Unidad</span>
+                <span className="text-[10px] text-white/40 uppercase font-bold">Descripción</span>
+                <span />
+              </div>
+
+              {partidas.map((partida, index) => (
+                <div key={index} className="flex flex-col sm:grid sm:grid-cols-[70px_120px_90px_1fr_40px] gap-2 bg-white/[0.02] sm:bg-transparent p-3 sm:p-0 rounded-xl sm:rounded-none border border-white/10 sm:border-0">
+                  {/* Mobile labels */}
+                  <div className="sm:hidden text-[10px] text-white/40 uppercase font-bold">Partida {index + 1}</div>
+                  <div className="flex gap-2 sm:contents">
+                    <div className="w-20 sm:w-auto">
+                      <span className="sm:hidden text-[9px] text-white/30 block mb-0.5">Cant.</span>
+                      <input
+                        type="number"
+                        min="1"
+                        value={partida.cantidad}
+                        onChange={e => updatePartida(index, 'cantidad', parseInt(e.target.value) || 1)}
+                        className="w-full h-[42px] rounded-xl border border-white/20 bg-white/[0.07] px-2 text-sm text-white outline-none text-center"
+                      />
+                    </div>
+                    <div className="flex-1 sm:flex-none">
+                      <span className="sm:hidden text-[9px] text-white/30 block mb-0.5">Clave</span>
+                      <input
+                        type="text"
+                        placeholder="2-1-0072"
+                        value={partida.clave}
+                        onChange={e => updatePartida(index, 'clave', e.target.value)}
+                        className="w-full h-[42px] rounded-xl border border-white/20 bg-white/[0.07] px-2 text-sm text-white outline-none font-mono text-xs"
+                      />
+                    </div>
+                    <div className="w-24 sm:w-auto">
+                      <span className="sm:hidden text-[9px] text-white/30 block mb-0.5">Unidad</span>
+                      <select
+                        value={partida.unidad}
+                        onChange={e => updatePartida(index, 'unidad', e.target.value)}
+                        className="w-full h-[42px] rounded-xl border border-white/20 bg-[#121824] px-2 text-xs text-white outline-none"
+                      >
+                        <option value="Pieza">Pieza</option>
+                        <option value="Juego">Juego</option>
+                        <option value="Metro">Metro</option>
+                        <option value="Kg">Kg</option>
+                        <option value="Litro">Litro</option>
+                        <option value="Servicio">Servicio</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="sm:contents">
+                    <div className="flex-1">
+                      <span className="sm:hidden text-[9px] text-white/30 block mb-0.5">Descripción</span>
+                      <input
+                        type="text"
+                        placeholder="Descripción del producto..."
+                        value={partida.descripcion}
+                        onChange={e => updatePartida(index, 'descripcion', e.target.value)}
+                        className="w-full h-[42px] rounded-xl border border-white/20 bg-white/[0.07] px-3 text-sm text-white outline-none"
+                        required
+                      />
+                    </div>
+                    <div className="flex justify-end sm:block">
+                      {partidas.length > 1 && (
+                        <button type="button" onClick={() => removePartida(index)} className="p-2 text-red-400 hover:bg-red-500/20 rounded-xl transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
               ))}
+
               <p className="text-[11px] text-white/40 italic">
-                Cada producto registrado equivaldrá automáticamente al {(100 / (productos.length || 1)).toFixed(1)}% del proyecto global.
+                {partidas.length} partida{partidas.length !== 1 ? 's' : ''} — cada una equivale al {(100 / (partidas.length || 1)).toFixed(1)}% del avance global.
               </p>
             </div>
 
+            {/* Estaciones */}
             <div className="space-y-2">
               <label className="text-xs font-bold uppercase text-white/60 block">Estaciones por las que pasarán los productos</label>
               <div className="flex flex-wrap gap-2">
@@ -430,33 +590,24 @@ export default function ProyectosPage() {
               </div>
             </div>
 
-            <div className="flex justify-end pt-4 border-t border-white/10">
-              <button type="submit" className="bg-white text-neutral-900 hover:bg-white/90 font-bold text-xs px-8 py-3.5 rounded-2xl flex items-center gap-2 shadow-lg">
-                <Plus className="w-4 h-4" /> Guardar Orden de Proyecto
-              </button>
+            <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4 border-t border-white/10">
+              <div className="relative overflow-hidden rounded-2xl border border-white/10 h-24 w-full sm:w-48 flex-shrink-0">
+                <Image src="/images/instalaciones.png" alt="Planta" fill className="object-cover opacity-60" />
+              </div>
+              <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={handleDescargarPdf}
+                  className="w-full sm:w-auto bg-emerald-500/90 text-white hover:bg-emerald-400 font-bold text-xs px-8 py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-lg transition-colors"
+                >
+                  <Download className="w-4 h-4" /> Descargar PDF
+                </button>
+                <button type="submit" className="w-full sm:w-auto bg-white text-neutral-900 hover:bg-white/90 font-bold text-xs px-8 py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-lg transition-colors">
+                  <Plus className="w-4 h-4" /> Guardar Orden de Proyecto
+                </button>
+              </div>
             </div>
           </form>
-
-          <div className="space-y-6">
-            <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] space-y-4 text-center">
-              <div className="w-14 h-14 rounded-2xl bg-red-950/60 border border-red-500/40 mx-auto flex items-center justify-center text-red-400">
-                {isParsingPdf ? <Loader2 className="w-6 h-6 animate-spin" /> : <FileText className="w-6 h-6" />}
-              </div>
-              <div>
-                <h3 className="font-bold text-white text-sm">Cargar Pedido Ejemplo</h3>
-                <p className="text-xs text-white/60 mt-1">Sube la orden PDF para auto-desglosar productos.</p>
-              </div>
-              <label className="cursor-pointer bg-red-600 hover:bg-red-700 text-white text-xs px-5 py-3 rounded-2xl font-bold inline-flex items-center gap-2 shadow-lg shadow-red-950/50">
-                <FileUp className="w-4 h-4" /> Cargar Orden PDF
-                <input type="file" accept="application/pdf" onChange={handlePdfUpload} className="hidden" />
-              </label>
-              {pdfSuccess && <p className="text-xs text-emerald-400 font-bold">{pdfSuccess}</p>}
-            </div>
-
-            <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-4 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] h-52 flex items-center justify-center">
-              <Image src="/images/instalaciones.png" alt="Planta" fill className="object-cover rounded-2xl opacity-75" />
-            </div>
-          </div>
         </div>
       )}
 
