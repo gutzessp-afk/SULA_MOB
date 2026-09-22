@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
-import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, X, PieChart, CheckCircle2, Factory, Calendar, User, MapPin, Download } from 'lucide-react';
+import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, X, PieChart, Factory, Calendar, User, MapPin, Download } from 'lucide-react';
 import { parsePedidoPdf } from '@/lib/parse-pedido';
 import { generarPdfPedido } from '@/lib/generar-pdf-pedido';
 
@@ -50,10 +50,10 @@ export default function ProyectosPage() {
   const [selectedAreas, setSelectedAreas] = useState<string[]>([]);
   const [search, setSearch] = useState('');
 
-  // Modal de Detalles Dashboard
+  // Modal de Detalles Dashboard — ahora con porcentajes (number) en vez de boolean
   const [selectedProyecto, setSelectedProyecto] = useState<Proyecto | null>(null);
   const [modalProductos, setModalProductos] = useState<ProductoDB[]>([]);
-  const [modalAvances, setModalAvances] = useState<Record<string, Record<string, boolean>>>({});
+  const [modalAvances, setModalAvances] = useState<Record<string, Record<string, number>>>({});
   const [loadingModal, setLoadingModal] = useState(false);
 
   const [isParsingPdf, setIsParsingPdf] = useState(false);
@@ -144,10 +144,10 @@ export default function ProyectosPage() {
     const { data: insertedProducts } = await supabase.from('proyecto_productos').insert(prodInserts).select();
 
     if (insertedProducts && selectedAreas.length > 0) {
-      const matrizInserts: { producto_id: string; area_id: string; completado: boolean }[] = [];
+      const matrizInserts: { producto_id: string; area_id: string; porcentaje: number; completado: boolean }[] = [];
       insertedProducts.forEach(prod => {
         selectedAreas.forEach(areaId => {
-          matrizInserts.push({ producto_id: prod.id, area_id: areaId, completado: false });
+          matrizInserts.push({ producto_id: prod.id, area_id: areaId, porcentaje: 0, completado: false });
         });
       });
       await supabase.from('producto_area_avance').insert(matrizInserts);
@@ -181,10 +181,13 @@ export default function ProyectosPage() {
         .select('*')
         .in('producto_id', prodIds);
 
-      const mapAvances: Record<string, Record<string, boolean>> = {};
-      (avancesData || []).forEach((item: { producto_id: string; area_id: string; completado: boolean }) => {
+      const mapAvances: Record<string, Record<string, number>> = {};
+      (avancesData || []).forEach((item: { producto_id: string; area_id: string; completado?: boolean; porcentaje?: number }) => {
         if (!mapAvances[item.producto_id]) mapAvances[item.producto_id] = {};
-        mapAvances[item.producto_id][item.area_id] = item.completado;
+        // Compatible: usa porcentaje si existe, sino convierte completado (true=100, false=0)
+        mapAvances[item.producto_id][item.area_id] = item.porcentaje !== undefined && item.porcentaje !== null
+          ? Number(item.porcentaje)
+          : (item.completado ? 100 : 0);
       });
       setModalAvances(mapAvances);
     }
@@ -192,45 +195,58 @@ export default function ProyectosPage() {
     setLoadingModal(false);
   };
 
-  const toggleAreaProducto = async (productoId: string, areaId: string, actualCompletado: boolean) => {
-    const nuevoEstado = !actualCompletado;
+  // Actualizar porcentaje parcial de un área para un producto
+  const updateAreaPorcentaje = async (productoId: string, areaId: string, nuevoPorcentaje: number) => {
+    const pct = Math.max(0, Math.min(100, nuevoPorcentaje));
 
+    // 1. Guardar en BD
     await supabase
       .from('producto_area_avance')
-      .update({ completado: nuevoEstado })
+      .update({ porcentaje: pct, completado: pct >= 100 })
       .match({ producto_id: productoId, area_id: areaId });
 
+    // 2. Actualizar mapa de avances local
     const updatedMap = { ...modalAvances };
     if (!updatedMap[productoId]) updatedMap[productoId] = {};
-    updatedMap[productoId][areaId] = nuevoEstado;
+    updatedMap[productoId][areaId] = pct;
     setModalAvances(updatedMap);
 
+    // 3. Recalcular avance de cada producto y el global
     const totalProductosCount = modalProductos.length;
     const valorPorProducto = 100 / totalProductosCount;
 
     let sumaGlobalProyecto = 0;
+    const updatedProductos = [...modalProductos];
 
-    for (const prod of modalProductos) {
+    for (let i = 0; i < updatedProductos.length; i++) {
+      const prod = updatedProductos[i];
       const areasOfProd = updatedMap[prod.id] || {};
       const areaIdsAsignadas = Object.keys(areasOfProd);
-      
+
       let pesoTotalAreasAssigned = 0;
-      let pesoCompletadoProd = 0;
+      let pesoAvanzadoProd = 0;
 
       areaIdsAsignadas.forEach(aId => {
         const areaObj = areasDisponibles.find(a => a.id === aId);
         const pesoEstacion = areaObj ? Number(areaObj.peso) : 14.28;
         pesoTotalAreasAssigned += pesoEstacion;
-        if (areasOfProd[aId]) pesoCompletadoProd += pesoEstacion;
+        // Porcentaje parcial ponderado
+        pesoAvanzadoProd += pesoEstacion * (areasOfProd[aId] / 100);
       });
 
-      const pctProducto = pesoTotalAreasAssigned > 0 
-        ? (pesoCompletadoProd / pesoTotalAreasAssigned) * 100 
+      const pctProducto = pesoTotalAreasAssigned > 0
+        ? (pesoAvanzadoProd / pesoTotalAreasAssigned) * 100
         : 0;
 
-      await supabase.from('proyecto_productos').update({ progreso: Math.round(pctProducto) }).eq('id', prod.id);
+      const pctRedondeado = Math.round(pctProducto);
+      updatedProductos[i] = { ...prod, progreso: pctRedondeado };
+
+      await supabase.from('proyecto_productos').update({ progreso: pctRedondeado }).eq('id', prod.id);
       sumaGlobalProyecto += (pctProducto * (valorPorProducto / 100));
     }
+
+    // 4. Actualizar productos en UI local (se refleja al instante)
+    setModalProductos(updatedProductos);
 
     const progresoFinalGlobal = Math.min(100, Math.round(sumaGlobalProyecto));
 
@@ -371,7 +387,7 @@ export default function ProyectosPage() {
                     <td className="p-4">
                       <div className="flex items-center gap-3">
                         <div className="w-32 h-2.5 bg-black/40 rounded-full overflow-hidden border border-white/10">
-                          <div 
+                          <div
                             className="h-full bg-gradient-to-r from-sky-500 via-indigo-400 to-emerald-400 transition-all duration-500"
                             style={{ width: `${p.progreso}%` }}
                           />
@@ -611,6 +627,7 @@ export default function ProyectosPage() {
         </div>
       )}
 
+      {/* MODAL DETALLES CON PORCENTAJES PARCIALES */}
       {selectedProyecto && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
           <div className="relative w-full max-w-4xl bg-[#0E131F] border border-white/20 rounded-[30px] p-6 sm:p-8 space-y-6 shadow-2xl my-8">
@@ -646,10 +663,10 @@ export default function ProyectosPage() {
             ) : (
               <div className="space-y-6">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-white/60 flex items-center gap-2">
-                  <Factory className="w-4 h-4 text-sky-400" /> Avance Individual por Producto y Estaciones
+                  <Factory className="w-4 h-4 text-sky-400" /> Asignación de Porcentaje Parcial por Estación
                 </h3>
 
-                <div className="space-y-4 max-h-[420px] overflow-y-auto pr-1">
+                <div className="space-y-4 max-h-[440px] overflow-y-auto pr-1">
                   {modalProductos.map((prod) => {
                     const prodAvances = modalAvances[prod.id] || {};
                     return (
@@ -664,28 +681,51 @@ export default function ProyectosPage() {
                           </span>
                         </div>
 
-                        <div className="space-y-1.5">
-                          <span className="text-[10px] uppercase font-bold text-white/40 block">Marcar Estaciones Completadas:</span>
-                          <div className="flex flex-wrap gap-2">
-                            {areasDisponibles.map((area) => {
-                              const isChecked = !!prodAvances[area.id];
-                              return (
-                                <button
-                                  key={area.id}
-                                  onClick={() => toggleAreaProducto(prod.id, area.id, isChecked)}
-                                  className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-all ${
-                                    isChecked
-                                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 shadow-sm'
-                                      : 'bg-white/[0.05] text-white/40 border-white/10 hover:border-white/30'
-                                  }`}
-                                >
-                                  <CheckCircle2 className={`w-3.5 h-3.5 ${isChecked ? 'text-emerald-400' : 'text-white/20'}`} />
-                                  <span>{area.nombre}</span>
-                                  <span className="text-[10px] opacity-60">({area.peso}%)</span>
-                                </button>
-                              );
-                            })}
-                          </div>
+                        {/* Controles porcentuales: slider + input por área */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-1">
+                          {areasDisponibles.map((area) => {
+                            const pct = prodAvances[area.id] ?? 0;
+                            return (
+                              <div
+                                key={area.id}
+                                className={`p-3 rounded-xl border transition-all space-y-2 ${
+                                  pct >= 100
+                                    ? 'bg-emerald-500/15 border-emerald-500/40'
+                                    : pct > 0
+                                      ? 'bg-sky-500/10 border-sky-400/30'
+                                      : 'bg-white/[0.03] border-white/10'
+                                }`}
+                              >
+                                <div className="flex justify-between items-center text-xs">
+                                  <span className="font-bold text-white">{area.nombre}</span>
+                                  <span className="text-[10px] text-white/40">Peso: {area.peso}%</span>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="range"
+                                    min="0"
+                                    max="100"
+                                    step="5"
+                                    value={pct}
+                                    onChange={(e) => updateAreaPorcentaje(prod.id, area.id, Number(e.target.value))}
+                                    className="w-full accent-emerald-400 cursor-pointer h-1.5 bg-black/40 rounded-lg"
+                                  />
+                                  <div className="flex items-center gap-0.5 shrink-0">
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max="100"
+                                      value={pct}
+                                      onChange={(e) => updateAreaPorcentaje(prod.id, area.id, Number(e.target.value))}
+                                      className="w-12 h-7 bg-black/50 border border-white/20 rounded-lg text-center text-xs text-emerald-400 font-bold font-mono outline-none focus:border-sky-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                    />
+                                    <span className="text-[10px] text-white/40 font-bold">%</span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     );
