@@ -3,9 +3,9 @@
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 
-export async function signup(prevState: unknown, formData: FormData) {
-  const nombre = (formData.get('nombre') as string)?.trim()
-  const correo = (formData.get('correo') as string)?.trim()
+export async function signup(formData: FormData) {
+  const nombre = (formData.get('fullName') as string)?.trim()
+  const correo = (formData.get('email') as string)?.trim()
   const password = formData.get('password') as string
 
   if (!nombre || !correo || !password) {
