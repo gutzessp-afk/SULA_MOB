@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
-import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, X, PieChart, Factory, Calendar, User, MapPin, Download } from 'lucide-react';
+import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, X, PieChart, Factory, Calendar, User, MapPin, Download, CheckCircle2 } from 'lucide-react';
 import { parsePedidoPdf } from '@/lib/parse-pedido';
 import { generarPdfPedido } from '@/lib/generar-pdf-pedido';
 
@@ -32,12 +32,18 @@ interface Proyecto {
   progreso: number;
 }
 
+interface AvanceEstadoArea {
+  porcentaje: number;
+  piezas_totales: number;
+  piezas_completadas: number;
+}
+
 export default function ProyectosPage() {
   const [activeTab, setActiveTab] = useState<'lista' | 'crear'>('lista');
   const [proyectos, setProyectos] = useState<Proyecto[]>([]);
   const [areasDisponibles, setAreasDisponibles] = useState<Area[]>([]);
 
-  // Formulario — campos que coinciden con PedidoData del PDF
+  // Formulario — campos del Pedido Data
   const [codigo, setCodigo] = useState('');
   const [nombre, setNombre] = useState('');
   const [cliente, setCliente] = useState('');
@@ -50,10 +56,10 @@ export default function ProyectosPage() {
   const [selectedAreas, setSelectedAreas] = useState<string[]>([]);
   const [search, setSearch] = useState('');
 
-  // Modal de Detalles Dashboard — ahora con porcentajes (number) en vez de boolean
+  // Modal de Detalles Dashboard — Estado por Piezas y Porcentaje
   const [selectedProyecto, setSelectedProyecto] = useState<Proyecto | null>(null);
   const [modalProductos, setModalProductos] = useState<ProductoDB[]>([]);
-  const [modalAvances, setModalAvances] = useState<Record<string, Record<string, number>>>({});
+  const [modalAvances, setModalAvances] = useState<Record<string, Record<string, AvanceEstadoArea>>>({});
   const [loadingModal, setLoadingModal] = useState(false);
 
   const [isParsingPdf, setIsParsingPdf] = useState(false);
@@ -102,6 +108,28 @@ export default function ProyectosPage() {
     setSelectedAreas(prev => prev.includes(id) ? prev.filter(a => a !== id) : [...prev, id]);
   };
 
+  const handleEliminarProyecto = async (proyecto: Proyecto) => {
+    const confirmacion = window.confirm(
+      `¿Estás seguro de que deseas dar de baja o eliminar el proyecto "${proyecto.nombre}" (${proyecto.codigo})?\n\nEsta acción eliminará todos los registros y avances asociados.`
+    );
+
+    if (!confirmacion) return;
+
+    try {
+      const { error } = await supabase.from('proyectos').delete().eq('id', proyecto.id);
+
+      if (error) {
+        alert('Error al eliminar el proyecto: ' + error.message);
+      } else {
+        alert('El proyecto se ha dado de baja correctamente.');
+        await fetchProyectos();
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error desconocido';
+      alert('Ocurrió un error inesperado: ' + msg);
+    }
+  };
+
   async function handleCrearProyecto(e: React.FormEvent) {
     e.preventDefault();
     const validPartidas = partidas.filter(p => p.descripcion.trim().length > 0);
@@ -118,7 +146,6 @@ export default function ProyectosPage() {
         cliente,
         prioridad,
         progreso: 0,
-        // Campos extra del pedido
         descripcion: [
           fecha && `Fecha: ${fecha}`,
           fechaEntrega && `Entrega: ${fechaEntrega}`,
@@ -144,16 +171,30 @@ export default function ProyectosPage() {
     const { data: insertedProducts } = await supabase.from('proyecto_productos').insert(prodInserts).select();
 
     if (insertedProducts && selectedAreas.length > 0) {
-      const matrizInserts: { producto_id: string; area_id: string; porcentaje: number; completado: boolean }[] = [];
+      const matrizInserts: { 
+        producto_id: string; 
+        area_id: string; 
+        porcentaje: number; 
+        completado: boolean;
+        piezas_totales: number;
+        piezas_completadas: number;
+      }[] = [];
+
       insertedProducts.forEach(prod => {
         selectedAreas.forEach(areaId => {
-          matrizInserts.push({ producto_id: prod.id, area_id: areaId, porcentaje: 0, completado: false });
+          matrizInserts.push({ 
+            producto_id: prod.id, 
+            area_id: areaId, 
+            porcentaje: 0, 
+            completado: false,
+            piezas_totales: prod.cantidad || 0,
+            piezas_completadas: 0
+          });
         });
       });
       await supabase.from('producto_area_avance').insert(matrizInserts);
     }
 
-    // Reset form
     setCodigo(''); setNombre(''); setCliente(''); setFecha(''); setFechaEntrega('');
     setReferencia(''); setElaboradoPor('');
     setPartidas([{ cantidad: 1, clave: '', unidad: 'Pieza', descripcion: '' }]);
@@ -181,13 +222,25 @@ export default function ProyectosPage() {
         .select('*')
         .in('producto_id', prodIds);
 
-      const mapAvances: Record<string, Record<string, number>> = {};
-      (avancesData || []).forEach((item: { producto_id: string; area_id: string; completado?: boolean; porcentaje?: number }) => {
+      const mapAvances: Record<string, Record<string, AvanceEstadoArea>> = {};
+      (avancesData || []).forEach((item) => {
         if (!mapAvances[item.producto_id]) mapAvances[item.producto_id] = {};
-        // Compatible: usa porcentaje si existe, sino convierte completado (true=100, false=0)
-        mapAvances[item.producto_id][item.area_id] = item.porcentaje !== undefined && item.porcentaje !== null
-          ? Number(item.porcentaje)
-          : (item.completado ? 100 : 0);
+        
+        const prodMatch = prods.find(p => p.id === item.producto_id);
+        const piezasTotales = item.piezas_totales !== undefined && item.piezas_totales !== null 
+          ? item.piezas_totales 
+          : (prodMatch?.cantidad || 0);
+        const piezasCompletadas = item.piezas_completadas || (item.completado ? piezasTotales : 0);
+        
+        const pctCalculado = piezasTotales > 0 
+          ? Math.min(100, Math.round((piezasCompletadas / piezasTotales) * 100))
+          : (item.porcentaje || 0);
+
+        mapAvances[item.producto_id][item.area_id] = {
+          porcentaje: pctCalculado,
+          piezas_totales: piezasTotales,
+          piezas_completadas: piezasCompletadas
+        };
       });
       setModalAvances(mapAvances);
     }
@@ -195,23 +248,31 @@ export default function ProyectosPage() {
     setLoadingModal(false);
   };
 
-  // Actualizar porcentaje parcial de un área para un producto
-  const updateAreaPorcentaje = async (productoId: string, areaId: string, nuevoPorcentaje: number) => {
-    const pct = Math.max(0, Math.min(100, nuevoPorcentaje));
+  // CÁLCULO AUTOMÁTICO DE PORCENTAJE ACTUALIZANDO HECHAS Y/O META (PIEZAS TOTALES)
+  const updateDatosArea = async (productoId: string, areaId: string, piezasHechasNuevas: number, piezasMetaNuevas: number) => {
+    const metaValida = Math.max(0, piezasMetaNuevas);
+    const hechasValidas = Math.max(0, Math.min(metaValida, piezasHechasNuevas));
+    const nuevoPorcentaje = metaValida > 0 ? Math.min(100, Math.round((hechasValidas / metaValida) * 100)) : 0;
 
-    // 1. Guardar en BD
     await supabase
       .from('producto_area_avance')
-      .update({ porcentaje: pct, completado: pct >= 100 })
+      .update({ 
+        piezas_completadas: hechasValidas,
+        piezas_totales: metaValida,
+        porcentaje: nuevoPorcentaje, 
+        completado: nuevoPorcentaje >= 100 
+      })
       .match({ producto_id: productoId, area_id: areaId });
 
-    // 2. Actualizar mapa de avances local
     const updatedMap = { ...modalAvances };
     if (!updatedMap[productoId]) updatedMap[productoId] = {};
-    updatedMap[productoId][areaId] = pct;
+    updatedMap[productoId][areaId] = {
+      porcentaje: nuevoPorcentaje,
+      piezas_totales: metaValida,
+      piezas_completadas: hechasValidas
+    };
     setModalAvances(updatedMap);
 
-    // 3. Recalcular avance de cada producto y el global
     const totalProductosCount = modalProductos.length;
     const valorPorProducto = 100 / totalProductosCount;
 
@@ -230,8 +291,7 @@ export default function ProyectosPage() {
         const areaObj = areasDisponibles.find(a => a.id === aId);
         const pesoEstacion = areaObj ? Number(areaObj.peso) : 14.28;
         pesoTotalAreasAssigned += pesoEstacion;
-        // Porcentaje parcial ponderado
-        pesoAvanzadoProd += pesoEstacion * (areasOfProd[aId] / 100);
+        pesoAvanzadoProd += pesoEstacion * ((areasOfProd[aId]?.porcentaje || 0) / 100);
       });
 
       const pctProducto = pesoTotalAreasAssigned > 0
@@ -245,7 +305,6 @@ export default function ProyectosPage() {
       sumaGlobalProyecto += (pctProducto * (valorPorProducto / 100));
     }
 
-    // 4. Actualizar productos en UI local (se refleja al instante)
     setModalProductos(updatedProductos);
 
     const progresoFinalGlobal = Math.min(100, Math.round(sumaGlobalProyecto));
@@ -267,7 +326,6 @@ export default function ProyectosPage() {
     try {
       const pedido = await parsePedidoPdf(file);
 
-      // Llenar campos del formulario con los datos del PDF
       setCodigo(pedido.numero_pedido ? `PED-${pedido.numero_pedido}` : '');
       setNombre(pedido.numero_pedido ? `Pedido ${pedido.numero_pedido}` : file.name.replace('.pdf', ''));
       setCliente(pedido.cliente || '');
@@ -316,11 +374,11 @@ export default function ProyectosPage() {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-8">
-      {/* HEADER LIQUID GLASS */}
+      {/* HEADER PRINCIPAL */}
       <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-wide">Órdenes y Cálculo Ponderado de Avances</h1>
-          <p className="text-xs text-white/65 mt-1">El avance global se calcula proporcionalmente según los productos y estaciones completadas.</p>
+          <p className="text-xs text-white/65 mt-1">Modifica piezas fabricadas y metas por área para un ajuste dinámico de porcentaje.</p>
         </div>
 
         <div className="flex bg-white/[0.07] p-1.5 rounded-2xl border border-white/15 backdrop-blur-sm gap-1">
@@ -354,7 +412,7 @@ export default function ProyectosPage() {
             <Search className="w-4 h-4 text-white/50" />
             <input
               type="text"
-              placeholder="Buscar por código, cliente o proyecto (Ej: Vento, KFC)..."
+              placeholder="Buscar por código, cliente o proyecto..."
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="bg-transparent text-sm text-white outline-none w-full placeholder:text-white/40"
@@ -370,7 +428,7 @@ export default function ProyectosPage() {
                   <th className="p-4">Cliente</th>
                   <th className="p-4">Prioridad</th>
                   <th className="p-4">Progreso Global</th>
-                  <th className="p-4 text-right">Acción</th>
+                  <th className="p-4 text-right">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
@@ -396,12 +454,20 @@ export default function ProyectosPage() {
                       </div>
                     </td>
                     <td className="p-4 text-right">
-                      <button
-                        onClick={() => openProyectoDetalle(p)}
-                        className="bg-white/10 hover:bg-white/20 text-white text-xs px-3.5 py-1.5 rounded-xl border border-white/15 inline-flex items-center gap-1.5 backdrop-blur-md transition-all"
-                      >
-                        <Eye className="w-3.5 h-3.5 text-sky-400" /> Ver Avances
-                      </button>
+                      <div className="flex justify-end items-center gap-2">
+                        <button
+                          onClick={() => openProyectoDetalle(p)}
+                          className="bg-white/10 hover:bg-white/20 text-white text-xs px-3.5 py-1.5 rounded-xl border border-white/15 inline-flex items-center gap-1.5 backdrop-blur-md transition-all"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-sky-400" /> Capturar Piezas
+                        </button>
+                        <button
+                          onClick={() => handleEliminarProyecto(p)}
+                          className="bg-red-500/20 hover:bg-red-500/35 text-red-200 border border-red-400/30 text-xs px-3 py-1.5 rounded-xl inline-flex items-center gap-1.5 backdrop-blur-md transition-all"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-red-400" /> Dar de Baja
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -411,7 +477,6 @@ export default function ProyectosPage() {
         </div>
       ) : (
         <div className="space-y-6">
-          {/* Card para cargar PDF — arriba del formulario */}
           <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7]">
             <div className="flex flex-col sm:flex-row items-center gap-4 p-5 sm:p-6">
               <div className="w-12 h-12 rounded-2xl bg-red-950/60 border border-red-500/40 flex items-center justify-center text-red-400 flex-shrink-0">
@@ -433,13 +498,11 @@ export default function ProyectosPage() {
             )}
           </div>
 
-          {/* Formulario principal */}
           <form onSubmit={handleCrearProyecto} className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-5 sm:p-8 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] space-y-6">
             <h2 className="text-xs font-bold uppercase tracking-wider text-white/60 border-b border-white/10 pb-3">
               Alta de Proyecto — Datos del Pedido
             </h2>
 
-            {/* Fila 1: Código + Nombre + Prioridad */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs text-white/60 block mb-1">No. Pedido / Código *</label>
@@ -460,45 +523,32 @@ export default function ProyectosPage() {
               </div>
             </div>
 
-            {/* Fila 2: Cliente + Elaborado por */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5">
-                  <User className="w-3 h-3" /> Cliente
-                </label>
+                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5"><User className="w-3 h-3" /> Cliente</label>
                 <input type="text" placeholder="Ej: WATTS SUSTENTABLES" value={cliente} onChange={e => setCliente(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors" />
               </div>
               <div>
-                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5">
-                  <User className="w-3 h-3" /> Elaborado Por
-                </label>
+                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5"><User className="w-3 h-3" /> Elaborado Por</label>
                 <input type="text" placeholder="Ej: Alejandra Palacios" value={elaboradoPor} onChange={e => setElaboradoPor(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors" />
               </div>
             </div>
 
-            {/* Fila 3: Fecha + Fecha Entrega + Referencia/Sucursal */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
-                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5">
-                  <Calendar className="w-3 h-3" /> Fecha
-                </label>
+                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5"><Calendar className="w-3 h-3" /> Fecha</label>
                 <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-[#121824] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors" />
               </div>
               <div>
-                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5">
-                  <Calendar className="w-3 h-3" /> Fecha de Entrega
-                </label>
+                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5"><Calendar className="w-3 h-3" /> Fecha de Entrega</label>
                 <input type="date" value={fechaEntrega} onChange={e => setFechaEntrega(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-[#121824] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors" />
               </div>
               <div>
-                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5">
-                  <MapPin className="w-3 h-3" /> Referencia / Sucursal
-                </label>
+                <label className="text-xs text-white/60 block mb-1 flex items-center gap-1.5"><MapPin className="w-3 h-3" /> Referencia / Sucursal</label>
                 <input type="text" placeholder="Ej: VENTO" value={referencia} onChange={e => setReferencia(e.target.value)} className="w-full h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50 transition-colors" />
               </div>
             </div>
 
-            {/* Partidas / Productos del Pedido */}
             <div className="space-y-3 bg-white/[0.03] p-4 sm:p-5 rounded-2xl border border-white/10">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                 <label className="text-xs font-bold uppercase text-white/80">Partidas del Pedido</label>
@@ -507,87 +557,61 @@ export default function ProyectosPage() {
                 </button>
               </div>
 
-              {/* Header de columnas — solo desktop */}
-              <div className="hidden sm:grid sm:grid-cols-[70px_120px_90px_1fr_40px] gap-2 px-1">
-                <span className="text-[10px] text-white/40 uppercase font-bold">Cant.</span>
-                <span className="text-[10px] text-white/40 uppercase font-bold">Clave</span>
-                <span className="text-[10px] text-white/40 uppercase font-bold">Unidad</span>
-                <span className="text-[10px] text-white/40 uppercase font-bold">Descripción</span>
-                <span />
-              </div>
-
               {partidas.map((partida, index) => (
                 <div key={index} className="flex flex-col sm:grid sm:grid-cols-[70px_120px_90px_1fr_40px] gap-2 bg-white/[0.02] sm:bg-transparent p-3 sm:p-0 rounded-xl sm:rounded-none border border-white/10 sm:border-0">
-                  {/* Mobile labels */}
-                  <div className="sm:hidden text-[10px] text-white/40 uppercase font-bold">Partida {index + 1}</div>
-                  <div className="flex gap-2 sm:contents">
-                    <div className="w-20 sm:w-auto">
-                      <span className="sm:hidden text-[9px] text-white/30 block mb-0.5">Cant.</span>
-                      <input
-                        type="number"
-                        min="1"
-                        value={partida.cantidad}
-                        onChange={e => updatePartida(index, 'cantidad', parseInt(e.target.value) || 1)}
-                        className="w-full h-[42px] rounded-xl border border-white/20 bg-white/[0.07] px-2 text-sm text-white outline-none text-center"
-                      />
-                    </div>
-                    <div className="flex-1 sm:flex-none">
-                      <span className="sm:hidden text-[9px] text-white/30 block mb-0.5">Clave</span>
-                      <input
-                        type="text"
-                        placeholder="2-1-0072"
-                        value={partida.clave}
-                        onChange={e => updatePartida(index, 'clave', e.target.value)}
-                        className="w-full h-[42px] rounded-xl border border-white/20 bg-white/[0.07] px-2 text-sm text-white outline-none font-mono text-xs"
-                      />
-                    </div>
-                    <div className="w-24 sm:w-auto">
-                      <span className="sm:hidden text-[9px] text-white/30 block mb-0.5">Unidad</span>
-                      <select
-                        value={partida.unidad}
-                        onChange={e => updatePartida(index, 'unidad', e.target.value)}
-                        className="w-full h-[42px] rounded-xl border border-white/20 bg-[#121824] px-2 text-xs text-white outline-none"
-                      >
-                        <option value="Pieza">Pieza</option>
-                        <option value="Juego">Juego</option>
-                        <option value="Metro">Metro</option>
-                        <option value="Kg">Kg</option>
-                        <option value="Litro">Litro</option>
-                        <option value="Servicio">Servicio</option>
-                      </select>
-                    </div>
+                  <div className="w-20 sm:w-auto">
+                    <input
+                      type="number"
+                      min="1"
+                      value={partida.cantidad}
+                      onChange={e => updatePartida(index, 'cantidad', parseInt(e.target.value) || 1)}
+                      className="w-full h-[42px] rounded-xl border border-white/20 bg-white/[0.07] px-2 text-sm text-white outline-none text-center font-bold"
+                    />
                   </div>
-                  <div className="sm:contents">
-                    <div className="flex-1">
-                      <span className="sm:hidden text-[9px] text-white/30 block mb-0.5">Descripción</span>
-                      <input
-                        type="text"
-                        placeholder="Descripción del producto..."
-                        value={partida.descripcion}
-                        onChange={e => updatePartida(index, 'descripcion', e.target.value)}
-                        className="w-full h-[42px] rounded-xl border border-white/20 bg-white/[0.07] px-3 text-sm text-white outline-none"
-                        required
-                      />
-                    </div>
-                    <div className="flex justify-end sm:block">
-                      {partidas.length > 1 && (
-                        <button type="button" onClick={() => removePartida(index)} className="p-2 text-red-400 hover:bg-red-500/20 rounded-xl transition-colors">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
+                  <div className="flex-1 sm:flex-none">
+                    <input
+                      type="text"
+                      placeholder="Clave"
+                      value={partida.clave}
+                      onChange={e => updatePartida(index, 'clave', e.target.value)}
+                      className="w-full h-[42px] rounded-xl border border-white/20 bg-white/[0.07] px-2 text-sm text-white outline-none font-mono text-xs"
+                    />
+                  </div>
+                  <div className="w-24 sm:w-auto">
+                    <select
+                      value={partida.unidad}
+                      onChange={e => updatePartida(index, 'unidad', e.target.value)}
+                      className="w-full h-[42px] rounded-xl border border-white/20 bg-[#121824] px-2 text-xs text-white outline-none"
+                    >
+                      <option value="Pieza">Pieza</option>
+                      <option value="Juego">Juego</option>
+                      <option value="Metro">Metro</option>
+                      <option value="Kg">Kg</option>
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      placeholder="Descripción del producto..."
+                      value={partida.descripcion}
+                      onChange={e => updatePartida(index, 'descripcion', e.target.value)}
+                      className="w-full h-[42px] rounded-xl border border-white/20 bg-white/[0.07] px-3 text-sm text-white outline-none"
+                      required
+                    />
+                  </div>
+                  <div className="flex justify-end sm:block">
+                    {partidas.length > 1 && (
+                      <button type="button" onClick={() => removePartida(index)} className="p-2 text-red-400 hover:bg-red-500/20 rounded-xl transition-colors">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
-
-              <p className="text-[11px] text-white/40 italic">
-                {partidas.length} partida{partidas.length !== 1 ? 's' : ''} — cada una equivale al {(100 / (partidas.length || 1)).toFixed(1)}% del avance global.
-              </p>
             </div>
 
-            {/* Estaciones */}
             <div className="space-y-2">
-              <label className="text-xs font-bold uppercase text-white/60 block">Estaciones por las que pasarán los productos</label>
+              <label className="text-xs font-bold uppercase text-white/60 block">Estaciones Operativas Asignadas</label>
               <div className="flex flex-wrap gap-2">
                 {areasDisponibles.map(a => (
                   <button
@@ -627,10 +651,10 @@ export default function ProyectosPage() {
         </div>
       )}
 
-      {/* MODAL DETALLES CON PORCENTAJES PARCIALES */}
+      {/* MODAL DETALLES CON EDITABILIDAD EN HECHAS Y META DE PIEZAS */}
       {selectedProyecto && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
-          <div className="relative w-full max-w-4xl bg-[#0E131F] border border-white/20 rounded-[30px] p-6 sm:p-8 space-y-6 shadow-2xl my-8">
+          <div className="relative w-full max-w-5xl bg-[#0E131F] border border-white/20 rounded-[30px] p-6 sm:p-8 space-y-6 shadow-2xl my-8">
             <button
               onClick={() => setSelectedProyecto(null)}
               className="absolute top-6 right-6 p-2 rounded-full bg-white/10 text-white hover:bg-white/20"
@@ -646,82 +670,102 @@ export default function ProyectosPage() {
               </div>
 
               <div className="bg-white/[0.05] border border-white/15 px-6 py-3 rounded-2xl flex items-center gap-4">
-                <div className="relative w-12 h-12 flex items-center justify-center">
-                  <PieChart className="w-10 h-10 text-emerald-400" />
-                </div>
+                <PieChart className="w-9 h-9 text-emerald-400" />
                 <div>
                   <div className="text-2xl font-black text-emerald-400 font-mono">{selectedProyecto.progreso}%</div>
-                  <div className="text-[10px] text-white/50 uppercase font-bold">Avance Global Real</div>
+                  <div className="text-[10px] text-white/50 uppercase font-bold">Avance Global Recalculado</div>
                 </div>
               </div>
             </div>
 
             {loadingModal ? (
               <div className="py-12 flex justify-center items-center gap-2 text-white/50">
-                <Loader2 className="w-5 h-5 animate-spin text-sky-400" /> Cargando matriz de estaciones...
+                <Loader2 className="w-5 h-5 animate-spin text-sky-400" /> Cargando estación de trabajo...
               </div>
             ) : (
               <div className="space-y-6">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-white/60 flex items-center gap-2">
-                  <Factory className="w-4 h-4 text-sky-400" /> Asignación de Porcentaje Parcial por Estación
+                  <Factory className="w-4 h-4 text-sky-400" /> Captura de Piezas Fabricadas y Edición de Metas
                 </h3>
 
-                <div className="space-y-4 max-h-[440px] overflow-y-auto pr-1">
+                <div className="space-y-5 max-h-[460px] overflow-y-auto pr-1">
                   {modalProductos.map((prod) => {
                     const prodAvances = modalAvances[prod.id] || {};
                     return (
                       <div key={prod.id} className="p-5 rounded-2xl bg-white/[0.04] border border-white/10 space-y-4">
-                        <div className="flex justify-between items-center">
+                        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-white/5 pb-3">
                           <div>
                             <h4 className="text-sm font-bold text-white">{prod.nombre}</h4>
-                            <span className="text-[11px] text-white/50">Cantidad ordenada: {prod.cantidad} unidades</span>
+                            <span className="text-[11px] text-white/50">Ordenadas en Pedido: <strong className="text-sky-300 font-mono">{prod.cantidad}</strong> unidades</span>
                           </div>
-                          <span className="text-xs font-mono font-bold text-sky-300 bg-sky-500/10 px-3 py-1 rounded-full border border-sky-500/20">
+                          <span className="text-xs font-mono font-bold text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-xl border border-emerald-500/20">
                             Avance Producto: {prod.progreso || 0}%
                           </span>
                         </div>
 
-                        {/* Controles porcentuales: slider + input por área */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-1">
                           {areasDisponibles.map((area) => {
-                            const pct = prodAvances[area.id] ?? 0;
+                            const datosArea = prodAvances[area.id] || { piezas_totales: prod.cantidad, piezas_completadas: 0, porcentaje: 0 };
+                            const pctVal = datosArea.porcentaje;
+                            const completado = pctVal >= 100;
+
                             return (
                               <div
                                 key={area.id}
-                                className={`p-3 rounded-xl border transition-all space-y-2 ${
-                                  pct >= 100
-                                    ? 'bg-emerald-500/15 border-emerald-500/40'
-                                    : pct > 0
-                                      ? 'bg-sky-500/10 border-sky-400/30'
-                                      : 'bg-white/[0.03] border-white/10'
+                                className={`p-3.5 rounded-xl border transition-all space-y-2.5 ${
+                                  completado
+                                    ? 'bg-emerald-500/10 border-emerald-400/40 text-white'
+                                    : pctVal > 0
+                                    ? 'bg-sky-500/10 border-sky-400/40 text-white'
+                                    : 'bg-white/[0.03] border-white/10 text-white/60'
                                 }`}
                               >
                                 <div className="flex justify-between items-center text-xs">
-                                  <span className="font-bold text-white">{area.nombre}</span>
-                                  <span className="text-[10px] text-white/40">Peso: {area.peso}%</span>
+                                  <span className="font-bold text-white flex items-center gap-1">
+                                    {area.nombre}
+                                    {completado && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
+                                  </span>
+                                  <span className="text-[10px] text-white/40 font-mono">Peso: {area.peso}%</span>
                                 </div>
 
-                                <div className="flex items-center gap-2">
-                                  <input
-                                    type="range"
-                                    min="0"
-                                    max="100"
-                                    step="5"
-                                    value={pct}
-                                    onChange={(e) => updateAreaPorcentaje(prod.id, area.id, Number(e.target.value))}
-                                    className="w-full accent-emerald-400 cursor-pointer h-1.5 bg-black/40 rounded-lg"
-                                  />
-                                  <div className="flex items-center gap-0.5 shrink-0">
+                                {/* INPUTS EDITABLES: HECHAS Y META */}
+                                <div className="flex items-center justify-between gap-2 bg-black/40 p-2 rounded-xl border border-white/10">
+                                  <div className="flex flex-col">
+                                    <span className="text-[9px] text-white/40 uppercase font-bold">Hechas</span>
                                     <input
                                       type="number"
                                       min="0"
-                                      max="100"
-                                      value={pct}
-                                      onChange={(e) => updateAreaPorcentaje(prod.id, area.id, Number(e.target.value))}
-                                      className="w-12 h-7 bg-black/50 border border-white/20 rounded-lg text-center text-xs text-emerald-400 font-bold font-mono outline-none focus:border-sky-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      max={datosArea.piezas_totales}
+                                      value={datosArea.piezas_completadas}
+                                      onChange={(e) => updateDatosArea(prod.id, area.id, Number(e.target.value), datosArea.piezas_totales)}
+                                      className="w-16 h-8 bg-white/10 border border-white/20 rounded-lg text-center text-xs text-emerald-300 font-bold font-mono outline-none focus:border-emerald-400"
                                     />
-                                    <span className="text-[10px] text-white/40 font-bold">%</span>
                                   </div>
+
+                                  <span className="text-white/30 font-bold mt-3">/</span>
+
+                                  <div className="flex flex-col">
+                                    <span className="text-[9px] text-white/40 uppercase font-bold">Meta</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={datosArea.piezas_totales}
+                                      onChange={(e) => updateDatosArea(prod.id, area.id, datosArea.piezas_completadas, Number(e.target.value))}
+                                      className="w-16 h-8 bg-white/10 border border-white/20 rounded-lg text-center text-xs text-sky-300 font-bold font-mono outline-none focus:border-sky-400"
+                                    />
+                                  </div>
+
+                                  <div className="border-l border-white/10 pl-2 text-right">
+                                    <span className="text-[9px] text-white/40 uppercase block font-bold">Avance</span>
+                                    <span className="text-xs font-bold text-sky-400 font-mono">{pctVal}%</span>
+                                  </div>
+                                </div>
+
+                                <div className="w-full h-1.5 bg-black/50 rounded-full overflow-hidden">
+                                  <div
+                                    className={`h-full transition-all duration-300 ${completado ? 'bg-emerald-400' : 'bg-sky-400'}`}
+                                    style={{ width: `${pctVal}%` }}
+                                  />
                                 </div>
                               </div>
                             );
