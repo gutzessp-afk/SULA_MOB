@@ -9,7 +9,8 @@ import {
   QrCode, 
   FileText, 
   Users, 
-  LogOut 
+  LogOut,
+  ClipboardList
 } from 'lucide-react'
 
 interface SidebarProps {
@@ -32,6 +33,8 @@ export default function Sidebar({ userRole = 'admin' }: SidebarProps) {
  const operadorLinks = [
   { name: 'Dashboard', href: '/operator/dashboard', icon: LayoutDashboard },
   { name: 'Actividades', href: '/operator/actividades', icon: Factory },
+    { name: 'Registrar Avance', href: '/operator/avances', icon: ClipboardList },
+
 ]
 
   const links = userRole === 'admin' ? adminLinks : operadorLinks
