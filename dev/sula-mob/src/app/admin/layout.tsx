@@ -1,172 +1,292 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  LayoutDashboard,
-  FolderKanban,
-  Factory,
-  FileSpreadsheet,
-  Users,
+  LayoutGrid,
+  Briefcase,
+  Warehouse,
   Bell,
+  BarChart3,
+  Users,
+  LogOut,
   Menu,
   X,
-  LogOut
+  ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
+
+/* ── Secciones del menú ── */
+
+const menuSections = [
+  {
+    title: 'MENÚ',
+    items: [
+      { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutGrid },
+      { name: 'Proyectos', href: '/admin/proyectos', icon: Briefcase },
+      { name: 'Áreas', href: '/admin/actividades', icon: Warehouse },
+      { name: 'Notificaciones', href: '/admin/notificaciones', icon: Bell, badge: 3 },
+    ],
+  },
+  {
+    title: 'REPORTES',
+    items: [
+      { name: 'Reportes', href: '/admin/reportes', icon: BarChart3 },
+    ],
+  },
+  {
+    title: 'GENERAL',
+    items: [
+      { name: 'Usuarios', href: '/admin/usuarios', icon: Users },
+    ],
+  },
+];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [isHovered, setIsHovered] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
-  const menuItems = [
-    { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutDashboard },
-    { name: 'Proyectos', href: '/admin/proyectos', icon: FolderKanban },
-    { name: 'Áreas de Producción', href: '/admin/actividades', icon: Factory },
-    { name: 'Notificaciones', href: '/admin/notificaciones', icon: Bell },
-    { name: 'Reportes', href: '/admin/reportes', icon: FileSpreadsheet },
-    { name: 'Usuarios', href: '/admin/usuarios', icon: Users },
-  ];
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
+  useEffect(() => {
+    const fn = () => { if (window.innerWidth >= 1024) setMobileOpen(false); };
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('sula_user');
     router.push('/login');
   };
 
+  /* ── Clases del panel cristal (compartidas desktop + mobile) ──
+     Antes: bg-black/30 (casi sólido, tapaba todo lo de atrás).
+     Ahora: bg-white/[0.05] deja pasar mucha más luz/color, y subimos
+     blur + saturación para que ese color se vea "vidrioso" y no plano. */
+  const glassPanel = `
+    backdrop-blur-[50px] backdrop-saturate-[2.2]
+    bg-white/[0.05]
+    border-r border-white/[0.08]
+  `;
+
+  /* ── Contenido del sidebar ── */
+  const renderNav = (onNavigate?: () => void) => (
+    <>
+      {/* Logo — solo imagen, sin texto */}
+      <div className="flex justify-center pt-7 pb-5">
+        <Image
+          src="/logo-sula.png"
+          alt="SULA MOB"
+          width={84}
+          height={84}
+          className="rounded-2xl drop-shadow-[0_0_20px_rgba(239,68,68,0.25)]"
+        />
+      </div>
+
+      {/* Perfil */}
+      <div className="mx-4 mb-5 flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white/[0.06] cursor-pointer hover:bg-white/[0.1] transition-colors">
+        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-red-500 to-red-700 flex items-center justify-center text-white text-sm font-bold shadow-md">
+          A
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-white truncate">Admin</p>
+          <p className="text-[11px] text-slate-400">Administrador</p>
+        </div>
+        <ChevronRight className="w-4 h-4 text-slate-500" />
+      </div>
+
+      {/* Separador */}
+      <div className="mx-5 mb-4 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+
+      {/* Secciones de navegación */}
+      <nav className="flex-1 overflow-y-auto px-4 space-y-5">
+        {menuSections.map((section) => (
+          <div key={section.title}>
+            <p className="px-3 mb-2 text-[10px] font-bold tracking-[0.2em] text-slate-500 uppercase">
+              {section.title}
+            </p>
+            <div className="space-y-1">
+              {section.items.map((item) => {
+                const Icon = item.icon;
+                const isActive = pathname === item.href;
+
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={onNavigate}
+                    className={`
+                      group flex items-center gap-3 px-3 py-2.5 rounded-xl
+                      text-[13px] font-medium transition-all duration-200
+                      ${isActive
+                        ? 'bg-red-600 text-white shadow-lg shadow-red-600/25'
+                        : 'text-slate-300 hover:text-white hover:bg-white/[0.08]'
+                      }
+                    `}
+                  >
+                    <Icon className={`w-[18px] h-[18px] flex-shrink-0 ${isActive ? 'text-white' : 'text-slate-400 group-hover:text-white'}`} />
+                    <span>{item.name}</span>
+
+                    {'badge' in item && item.badge && (
+                      <span className={`
+                        ml-auto w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold
+                        ${isActive ? 'bg-white text-red-600' : 'bg-red-500 text-white'}
+                      `}>
+                        {item.badge}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </nav>
+
+      {/* Separador */}
+      <div className="mx-5 mt-auto mb-2 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+
+      {/* Cerrar sesión */}
+      <div className="px-4 pb-5 pt-2">
+        <button
+          onClick={handleLogout}
+          className="
+            group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl
+            text-[13px] font-medium text-slate-400
+            hover:text-red-400 hover:bg-white/[0.06]
+            transition-all duration-200
+          "
+        >
+          <LogOut className="w-[18px] h-[18px]" />
+          <span>Cerrar Sesión</span>
+        </button>
+      </div>
+    </>
+  );
+
   return (
-    <div className="flex flex-col md:flex-row min-h-screen bg-[#070A0F] text-slate-100 font-sans selection:bg-red-500 selection:text-white relative overflow-x-hidden">
-      
-      {/* CAPA DE FONDO DIFUMINADO INDUSTRIAL */}
-      <div 
-        className="fixed inset-0 pointer-events-none opacity-15 bg-cover bg-center mix-blend-luminosity z-0"
+    <div className="min-h-screen bg-[#060910] text-slate-100 font-sans selection:bg-red-500 selection:text-white">
+
+      {/* Fondo industrial — subimos opacidad y quitamos mix-blend-luminosity
+          para que se vea la foto de verdad, no solo una sombra gris */}
+      <div
+        className="fixed inset-0 pointer-events-none opacity-[0.22] bg-cover bg-center z-0"
         style={{ backgroundImage: "url('/images/fond.png')" }}
       />
 
-      {/* HEADER SUPERIOR EN MÓVILES */}
-      <header className="md:hidden flex items-center justify-between p-4 bg-[#0E131F]/90 backdrop-blur-xl border-b border-slate-800/80 sticky top-0 z-50">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-red-600/20 border border-red-500/40 flex items-center justify-center font-black text-red-500 text-sm">
-            S
-          </div>
-          <span className="text-lg font-black tracking-wider text-white">
-            SULA <span className="text-red-500">MOB</span>
-          </span>
-        </div>
-        
-        <button
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white"
-        >
-          {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-        </button>
-      </header>
+      {/* Blobs de color — esto es lo que le da "vida" al cristal.
+          Sin esto, el blur no tiene color/luz que atrapar y se ve plano. */}
+      <div className="fixed -top-32 -left-20 w-[420px] h-[420px] rounded-full bg-red-600/[0.06] blur-[130px] pointer-events-none z-0" />
+      <div className="fixed top-1/3 -left-10 w-[320px] h-[320px] rounded-full bg-amber-500/[0.05] blur-[120px] pointer-events-none z-0" />
+      <div className="fixed bottom-0 left-1/4 w-[380px] h-[380px] rounded-full bg-red-500/[0.03] blur-[140px] pointer-events-none z-0" />
 
-      {/* MENÚ DESPLEGABLE MÓVIL */}
-      {mobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 top-[65px] bg-[#070A0F]/95 backdrop-blur-2xl z-40 p-6 flex flex-col justify-between border-b border-slate-800 animate-in fade-in slide-in-from-top-4 duration-200">
-          <nav className="space-y-2">
-            {menuItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = pathname === item.href;
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={() => setMobileMenuOpen(false)}
-                  className={`flex items-center gap-3.5 px-4 py-3.5 rounded-xl text-sm font-semibold transition-all ${
-                    isActive
-                      ? 'bg-gradient-to-r from-red-950/80 to-slate-900 text-red-400 border border-red-500/30 shadow-lg shadow-red-950/20'
-                      : 'text-slate-400 hover:bg-slate-900/60 hover:text-white'
-                  }`}
-                >
-                  <Icon className={`w-5 h-5 ${isActive ? 'text-red-500' : 'text-slate-400'}`} />
-                  <span>{item.name}</span>
-                </Link>
-              );
-            })}
-          </nav>
-
-          <button
-            onClick={handleLogout}
-            className="flex items-center justify-center gap-2 w-full py-3.5 rounded-xl bg-red-950/30 border border-red-500/20 text-red-400 text-sm font-semibold"
-          >
-            <LogOut className="w-4 h-4" /> Cerrar Sesión
-          </button>
-        </div>
-      )}
-
-      {/* SIDEBAR ESCRITORIO Y TABLETS */}
+      {/* ═══ SIDEBAR DESKTOP — cristal transparente ═══ */}
       <aside
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-        className={`hidden md:flex flex-col justify-between bg-[#0B0F17]/90 border-r border-slate-800/80 backdrop-blur-2xl transition-all duration-300 ease-in-out z-40 sticky top-0 h-screen ${
-          isHovered ? 'w-64' : 'w-20'
-        }`}
+        className={`
+          fixed top-0 left-0 h-full z-40
+          hidden lg:flex flex-col
+          w-[260px]
+          ${glassPanel}
+          transition-transform duration-400 ease-[cubic-bezier(0.4,0,0.2,1)]
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+        `}
       >
-        <div className="p-4">
-          <div className="mb-8 px-2 flex items-center justify-between h-10 overflow-hidden">
-            {isHovered ? (
-              <div className="transition-all duration-300">
-                <h1 className="text-xl font-black tracking-wider text-white">
-                  SULA <span className="text-red-500">MOB</span>
-                </h1>
-                <p className="text-[9px] font-bold text-slate-500 tracking-widest uppercase whitespace-nowrap">
-                  Control de Manufactura
-                </p>
-              </div>
-            ) : (
-              <div className="mx-auto w-10 h-10 rounded-xl bg-gradient-to-br from-red-600 to-red-900 flex items-center justify-center font-black text-white text-lg shadow-lg shadow-red-950/50">
-                S
-              </div>
-            )}
-          </div>
-
-          <nav className="space-y-1.5">
-            {menuItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = pathname === item.href;
-
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`flex items-center gap-3.5 px-3.5 py-3 rounded-xl font-medium text-sm transition-all relative group ${
-                    isActive
-                      ? 'bg-gradient-to-r from-red-950/60 to-[#121824] text-red-400 border border-red-500/30 font-semibold shadow-md shadow-red-950/20'
-                      : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/40'
-                  }`}
-                  title={!isHovered ? item.name : undefined}
-                >
-                  {isActive && (
-                    <span className="absolute left-0 top-2 bottom-2 w-1 bg-red-500 rounded-r-full shadow-[0_0_12px_#ef4444]" />
-                  )}
-                  <Icon className={`w-5 h-5 shrink-0 transition-transform group-hover:scale-110 ${isActive ? 'text-red-500' : 'text-slate-400'}`} />
-                  {isHovered && <span className="whitespace-nowrap transition-opacity duration-200">{item.name}</span>}
-                </Link>
-              );
-            })}
-          </nav>
-        </div>
-
-        <div className="p-4 border-t border-slate-800/80 bg-[#070A0F]/40">
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm text-slate-400 hover:text-red-400 hover:bg-red-950/30 transition-all"
-            title={!isHovered ? 'Cerrar Sesión' : undefined}
-          >
-            <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-white text-xs shrink-0">
-              N
-            </div>
-            {isHovered && <span className="whitespace-nowrap font-semibold">Cerrar Sesión</span>}
-          </button>
-        </div>
+        {renderNav()}
       </aside>
 
-      {/* CONTENIDO PRINCIPAL */}
-      <main className="flex-1 p-4 sm:p-6 lg:p-10 overflow-y-auto relative z-10">
-        {children}
+      {/* Botón toggle desktop */}
+      <button
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+        className={`
+          hidden lg:flex fixed top-5 z-50
+          items-center justify-center
+          w-8 h-8 rounded-lg
+          backdrop-blur-xl bg-white/[0.06]
+          border border-white/[0.08]
+          text-slate-400 hover:text-white
+          transition-all duration-400 ease-[cubic-bezier(0.4,0,0.2,1)]
+          hover:bg-white/[0.12]
+          ${sidebarOpen ? 'left-[268px]' : 'left-4'}
+        `}
+      >
+        {sidebarOpen
+          ? <PanelLeftClose className="w-4 h-4" />
+          : <PanelLeftOpen className="w-4 h-4" />
+        }
+      </button>
+
+      {/* ═══ HEADER MÓVIL ═══ */}
+      <header className="lg:hidden sticky top-0 z-50">
+        <div className="mx-3 mt-3 backdrop-blur-[50px] backdrop-saturate-[2.2] bg-white/[0.06] border border-white/[0.08] rounded-2xl px-4 py-3 shadow-lg flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setMobileOpen(true)}
+              className="p-2 rounded-lg text-slate-300 hover:text-white transition-colors"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <Image src="/logo-sula.png" alt="SULA MOB" width={30} height={30} className="rounded-lg" />
+          </div>
+          <button
+            onClick={handleLogout}
+            className="p-2 rounded-lg text-slate-400 hover:text-red-400 transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
+      </header>
+
+      {/* ═══ OVERLAY MÓVIL ═══ */}
+      <div
+        className={`
+          lg:hidden fixed inset-0 z-40
+          bg-black/40 backdrop-blur-sm
+          transition-opacity duration-300
+          ${mobileOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}
+        `}
+        onClick={() => setMobileOpen(false)}
+      />
+
+      {/* ═══ DRAWER MÓVIL — cristal transparente ═══ */}
+      <div
+        className={`
+          lg:hidden fixed top-0 left-0 h-full w-[260px] z-50
+          flex flex-col
+          backdrop-blur-[50px] backdrop-saturate-[2.2]
+          bg-white/[0.06]
+          border-r border-white/[0.08]
+          shadow-2xl shadow-black/50
+          transition-transform duration-400 ease-[cubic-bezier(0.4,0,0.2,1)]
+          ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}
+        `}
+      >
+        {/* Botón cerrar */}
+        <button
+          onClick={() => setMobileOpen(false)}
+          className="absolute top-5 right-3 p-2 rounded-lg text-slate-400 hover:text-white transition-colors z-10"
+        >
+          <X className="w-5 h-5" />
+        </button>
+
+        {renderNav(() => setMobileOpen(false))}
+      </div>
+
+      {/* ═══ CONTENIDO ═══ */}
+      <main
+        className={`
+          relative z-10 min-h-screen
+          transition-all duration-400 ease-[cubic-bezier(0.4,0,0.2,1)]
+          px-4 sm:px-6 pt-6 pb-12
+          ${sidebarOpen ? 'lg:ml-[260px]' : 'lg:ml-0'}
+        `}
+      >
+        <div className="max-w-7xl mx-auto">
+          {children}
+        </div>
       </main>
     </div>
   );

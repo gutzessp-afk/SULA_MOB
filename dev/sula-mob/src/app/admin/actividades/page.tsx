@@ -2,32 +2,28 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Layers, Plus, UserCheck, Edit3, Trash2, CheckCircle, XCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { Layers, Plus, UserCheck, Edit3, Trash2, AlertCircle, Loader2, Percent } from 'lucide-react';
 
-interface Usuario {
-  id: string;
-  nombre: string;
-  apellidos?: string;
-}
-
+interface Usuario { id: string; nombre: string; apellidos?: string; }
 interface Area {
   id: string;
   nombre: string;
   descripcion?: string;
+  peso: number;
   responsable_id?: string;
   activo: boolean;
   usuarios?: Usuario | null;
 }
 
-// DICCIONARIO DE IMÁGENES LOCALES POR NOMBRE DE ÁREA
 const defaultAreaImages: Record<string, string> = {
   'corte de tubo': '/images/corte_tubo.png',
   'doblez': '/images/dobles.png',
   'corte de lámina': '/images/corte_lamina.png',
-  'soldadura': '/images/soldadura.png',
+  'soldadura': '/images/soldaduraa.png',
   'alambrón': '/images/alambron.png',
   'pintura': '/images/pintura.png',
   'empaque': '/images/empaque.png',
+  'corte de madera': '/images/corte_madera.png',
 };
 
 export default function ActividadesPage() {
@@ -39,6 +35,7 @@ export default function ActividadesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [nombre, setNombre] = useState('');
   const [descripcion, setDescripcion] = useState('');
+  const [peso, setPeso] = useState<number>(15);
   const [responsableId, setResponsableId] = useState('');
 
   const fetchUsuarios = useCallback(async () => {
@@ -53,14 +50,7 @@ export default function ActividadesPage() {
     try {
       const { data: areasData, error: areasError } = await supabase
         .from('areas')
-        .select(`
-          *,
-          usuarios!areas_responsable_id_fkey (
-            id,
-            nombre,
-            apellidos
-          )
-        `)
+        .select(`*, usuarios!areas_responsable_id_fkey (id, nombre, apellidos)`)
         .order('created_at', { ascending: true });
 
       if (areasError) {
@@ -69,7 +59,7 @@ export default function ActividadesPage() {
       } else {
         setAreas((areasData || []) as Area[]);
       }
-    } catch (err) {
+   } catch (err) {
       const error = err as Error;
       setErrorMsg('Error al consultar las áreas: ' + error.message);
     } finally {
@@ -95,20 +85,16 @@ export default function ActividadesPage() {
       const payload = {
         nombre: nombre.trim(),
         descripcion: descripcion.trim() || null,
+        peso: peso || 0,
         responsable_id: responsableId ? responsableId : null,
         activo: true
       };
 
       if (editingId) {
-        const { error } = await supabase
-          .from('areas')
-          .update(payload)
-          .eq('id', editingId);
+        const { error } = await supabase.from('areas').update(payload).eq('id', editingId);
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from('areas')
-          .insert([payload]);
+        const { error } = await supabase.from('areas').insert([payload]);
         if (error) throw error;
       }
 
@@ -124,6 +110,7 @@ export default function ActividadesPage() {
     setEditingId(area.id);
     setNombre(area.nombre);
     setDescripcion(area.descripcion || '');
+    setPeso(area.peso || 0);
     setResponsableId(area.responsable_id || '');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -132,12 +119,8 @@ export default function ActividadesPage() {
     setEditingId(null);
     setNombre('');
     setDescripcion('');
+    setPeso(15);
     setResponsableId('');
-  }
-
-  async function toggleEstadoArea(id: string, activoActual: boolean) {
-    const { error } = await supabase.from('areas').update({ activo: !activoActual }).eq('id', id);
-    if (!error) void fetchAreas();
   }
 
   async function handleDeleteArea(area: Area) {
@@ -145,7 +128,7 @@ export default function ActividadesPage() {
 
     const { error } = await supabase.from('areas').delete().eq('id', area.id);
     if (error) {
-      alert('No se puede eliminar la estación si tiene referencias asociadas. Intenta desactivarla.');
+      alert('No se puede eliminar la estación si tiene referencias asociadas.');
     } else {
       void fetchAreas();
     }
@@ -153,57 +136,80 @@ export default function ActividadesPage() {
 
   const getAreaImage = (nombreArea: string) => {
     const normalized = nombreArea.trim().toLowerCase();
-    return defaultAreaImages[normalized] || '/images/fondop.png';
+    return defaultAreaImages[normalized] || '/images/nueva.png';
   };
 
+  const totalPeso = areas.reduce((acc, curr) => acc + (Number(curr.peso) || 0), 0);
+
   return (
-    <div className="p-4 sm:p-8 space-y-6 bg-transparent text-slate-100 max-w-7xl mx-auto">
-      <div className="flex justify-between items-center">
+    <div className="space-y-6 max-w-7xl mx-auto">
+      <div 
+        className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 sm:p-8 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-cover bg-center"
+        style={{ backgroundImage: `linear-gradient(to right, rgba(11,15,23,0.95), rgba(18,24,36,0.8)), url('/images/nuevap.png')` }}
+      >
         <div>
-          <h1 className="text-2xl font-black text-white tracking-wide uppercase">Catálogo de Áreas y Procesos</h1>
-          <p className="text-xs text-slate-400 mt-1">Configura las estaciones de trabajo del flujo productivo.</p>
+          <h1 className="text-2xl font-bold text-white tracking-wide">Configuración de Áreas y Ponderación</h1>
+          <p className="text-xs text-white/65 mt-1">Asigna el porcentaje de importancia de cada estación dentro del flujo del 100%.</p>
+        </div>
+
+        <div className="bg-white/10 border border-white/15 px-4 py-2 rounded-2xl backdrop-blur-md text-xs text-white flex items-center gap-2">
+          <Percent className="w-4 h-4 text-emerald-400" />
+          <span>Suma total configurada: <strong className="text-emerald-400 font-mono text-sm">{totalPeso}%</strong></span>
         </div>
       </div>
 
       {errorMsg && (
-        <div className="bg-red-950/80 border border-red-500/50 p-4 rounded-xl flex items-center gap-3 text-sm text-red-200">
-          <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+        <div className="bg-red-500/20 border border-red-400/35 p-4 rounded-2xl flex items-center gap-3 text-sm text-red-100 backdrop-blur-sm">
+          <AlertCircle className="w-5 h-5 text-red-300 shrink-0" />
           <span>{errorMsg}</span>
         </div>
       )}
 
-      {/* Formulario */}
-      <form onSubmit={handleSubmit} className="bg-[#121824]/90 border border-slate-800 p-6 rounded-2xl space-y-4 shadow-2xl backdrop-blur-md">
-        <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-          {editingId ? 'Editar Área / Proceso' : 'Registrar Nueva Estación'}
+      {/* FORMULARIO */}
+      <form onSubmit={handleSubmit} className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] space-y-4">
+        <h2 className="text-xs font-bold uppercase tracking-wider text-white/60">
+          {editingId ? 'Editar Área / Estación' : 'Registrar Nueva Estación'}
         </h2>
         
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
           <input
             type="text"
-            placeholder="Nombre de la estación (Ej: Corte de Tubo, Pintura)"
+            placeholder="Nombre estación (Ej: Corte tubo)"
             value={nombre}
             onChange={(e) => setNombre(e.target.value)}
-            className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-red-500"
+            className="h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50"
             required
           />
           <input
             type="text"
-            placeholder="Descripción del proceso..."
+            placeholder="Descripción..."
             value={descripcion}
             onChange={(e) => setDescripcion(e.target.value)}
-            className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-red-500"
+            className="h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50"
           />
+          <div className="relative flex items-center">
+            <input
+              type="number"
+              step="0.1"
+              min="0"
+              max="100"
+              placeholder="Peso % (Ej: 25)"
+              value={peso}
+              onChange={(e) => setPeso(parseFloat(e.target.value) || 0)}
+              className="w-full h-[48px] rounded-2xl border border-white/20 bg-white/[0.07] px-4 text-sm text-white outline-none focus:border-white/50 pr-8"
+              required
+            />
+            <span className="absolute right-3 text-xs text-white/50 font-bold">%</span>
+          </div>
+
           <select
             value={responsableId}
             onChange={(e) => setResponsableId(e.target.value)}
-            className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-red-500"
+            className="h-[48px] rounded-2xl border border-white/20 bg-[#121824] px-4 text-sm text-white outline-none focus:border-white/50"
           >
-            <option value="">Sin responsable asignado</option>
+            <option value="">Sin responsable</option>
             {usuarios.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.nombre} {u.apellidos || ''}
-              </option>
+              <option key={u.id} value={u.id}>{u.nombre} {u.apellidos || ''}</option>
             ))}
           </select>
         </div>
@@ -213,26 +219,26 @@ export default function ActividadesPage() {
             <button
               type="button"
               onClick={resetForm}
-              className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs px-4 py-2.5 rounded-xl"
+              className="bg-white/10 hover:bg-white/20 text-white font-semibold text-xs px-4 py-2.5 rounded-xl border border-white/10"
             >
               Cancelar
             </button>
           )}
           <button
             type="submit"
-            className="bg-red-600 hover:bg-red-700 text-white font-semibold text-xs px-5 py-2.5 rounded-xl flex items-center gap-2 shadow-lg shadow-red-950/40"
+            className="bg-white text-neutral-900 hover:bg-white/90 font-bold text-xs px-6 py-2.5 rounded-xl flex items-center gap-2 shadow-lg shadow-black/30"
           >
             <Plus className="w-4 h-4" />
-            {editingId ? 'Guardar Cambios' : 'Crear Área'}
+            {editingId ? 'Guardar Estación' : 'Crear Estación'}
           </button>
         </div>
       </form>
 
-      {/* Grid de Áreas con Imagen */}
+      {/* LISTADO DE ÁREAS */}
       {loading ? (
-        <div className="flex justify-center items-center py-20 text-slate-500 gap-3">
+        <div className="flex justify-center items-center py-20 text-white/50 gap-3">
           <Loader2 className="w-6 h-6 animate-spin text-red-500" />
-          <span>Cargando catálogo...</span>
+          <span>Cargando estaciones de planta...</span>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -241,65 +247,52 @@ export default function ActividadesPage() {
             return (
               <div 
                 key={a.id} 
-                className={`bg-[#121824]/90 border rounded-2xl overflow-hidden flex flex-col justify-between transition-all backdrop-blur-md hover:-translate-y-1 shadow-xl ${
-                  a.activo ? 'border-slate-800 hover:border-red-500/40' : 'border-slate-800/40 opacity-60'
+                className={`relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] flex flex-col justify-between transition-all hover:border-white/40 ${
+                  !a.activo && 'opacity-50'
                 }`}
               >
-                {/* Cabecera con la Imagen Correspondiente */}
                 <div 
                   className="h-36 bg-cover bg-center relative p-4 flex justify-between items-start"
-                  style={{ 
-                    backgroundImage: `linear-gradient(to bottom, rgba(7,10,15,0.2), rgba(18,24,36,0.95)), url('${bgImg}')` 
-                  }}
+                  style={{ backgroundImage: `linear-gradient(to bottom, rgba(11,15,23,0.3), rgba(18,24,36,0.9)), url('${bgImg}')` }}
                 >
-                  <div className="w-9 h-9 rounded-xl bg-[#0B0F17]/80 backdrop-blur-md flex items-center justify-center text-red-500 border border-slate-800 shadow-md">
+                  <div className="w-9 h-9 rounded-xl bg-black/60 backdrop-blur-md flex items-center justify-center text-red-400 border border-white/10">
                     <Layers className="w-4 h-4" />
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => toggleEstadoArea(a.id, a.activo)}
-                    className={`flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full border backdrop-blur-md shadow-md ${
-                      a.activo
-                        ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800/50'
-                        : 'bg-slate-900/80 text-slate-500 border-slate-800'
-                    }`}
-                  >
-                    {a.activo ? <CheckCircle className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-                    {a.activo ? 'Activa' : 'Inactiva'}
-                  </button>
+                  <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 backdrop-blur-md">
+                    Peso: {a.peso}%
+                  </span>
                 </div>
 
-                {/* Contenido */}
                 <div className="p-6 space-y-4 flex-1 flex flex-col justify-between">
                   <div>
                     <h3 className="text-lg font-bold text-white">{a.nombre}</h3>
-                    <p className="text-xs text-slate-400 mt-1 leading-relaxed min-h-[32px]">
-                      {a.descripcion || 'Sin descripción asignada.'}
+                    <p className="text-xs text-white/60 mt-1 leading-relaxed min-h-[32px]">
+                      {a.descripcion || 'Sin descripción.'}
                     </p>
                   </div>
 
-                  <div className="bg-[#0B0F17] border border-slate-800/60 p-3 rounded-xl flex items-center justify-between text-xs text-slate-400">
+                  <div className="bg-white/[0.07] border border-white/10 p-3 rounded-2xl flex items-center justify-between text-xs text-white/70">
                     <span className="flex items-center gap-1.5">
-                      <UserCheck className="w-3.5 h-3.5 text-slate-500" /> Responsable:
+                      <UserCheck className="w-3.5 h-3.5 text-white/50" /> Encargado:
                     </span>
-                    <span className="font-semibold text-slate-200">
+                    <span className="font-semibold text-white">
                       {a.usuarios ? `${a.usuarios.nombre} ${a.usuarios.apellidos || ''}` : 'Sin asignar'}
                     </span>
                   </div>
 
-                  <div className="flex justify-end items-center gap-2 pt-2 border-t border-slate-800/60">
+                  <div className="flex justify-end items-center gap-2 pt-2 border-t border-white/10">
                     <button
                       type="button"
                       onClick={() => handleStartEdit(a)}
-                      className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg text-xs flex items-center gap-1 transition-colors"
+                      className="p-2 text-white/70 hover:text-white hover:bg-white/10 rounded-xl text-xs flex items-center gap-1 transition-colors"
                     >
                       <Edit3 className="w-3.5 h-3.5" /> Editar
                     </button>
                     <button
                       type="button"
                       onClick={() => handleDeleteArea(a)}
-                      className="p-2 text-red-400 hover:text-red-300 hover:bg-red-950/50 rounded-lg text-xs flex items-center gap-1 transition-colors"
+                      className="p-2 text-red-300 hover:text-red-100 hover:bg-red-500/20 rounded-xl text-xs flex items-center gap-1 transition-colors"
                     >
                       <Trash2 className="w-3.5 h-3.5" /> Eliminar
                     </button>

@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
-import { Mail, Lock, Eye, EyeOff, ArrowRight, Check, Loader2, AlertCircle } from 'lucide-react'
+import { Mail, Lock, Eye, EyeOff, ArrowRight, Check, Loader2, AlertCircle, ShieldCheck, HardHat } from 'lucide-react'
 import { loginAction } from './actions'
 
 const inputClass =
@@ -15,6 +15,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+  const [role, setRole] = useState<'admin' | 'operador'>('admin')
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -67,6 +68,39 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
 
+          {/* Selector de Rol (Administrador / Operador) */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[12px] font-medium text-white/70">Selecciona tu perfil:</label>
+            <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/20 bg-white/[0.05] p-1 backdrop-blur-sm">
+              <button
+                type="button"
+                onClick={() => setRole('admin')}
+                className={`flex items-center justify-center gap-2 rounded-xl py-2.5 text-[13px] font-semibold transition-all ${
+                  role === 'admin'
+                    ? 'bg-red-600 text-white shadow-lg shadow-red-950/50 border border-red-400/40'
+                    : 'text-white/60 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <ShieldCheck className="h-4 w-4" />
+                Administrador
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setRole('operador')}
+                className={`flex items-center justify-center gap-2 rounded-xl py-2.5 text-[13px] font-semibold transition-all ${
+                  role === 'operador'
+                    ? 'bg-red-600 text-white shadow-lg shadow-red-950/50 border border-red-400/40'
+                    : 'text-white/60 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <HardHat className="h-4 w-4" />
+                Operador
+              </button>
+            </div>
+            <input type="hidden" name="role" value={role} />
+          </div>
+
           {/* Error */}
           {error && (
             <div
@@ -115,7 +149,7 @@ export default function LoginPage() {
             </button>
           </div>
 
-          {/* Recordar + recuperar — apilados en móvil */}
+          {/* Recordar + recuperar */}
           <div className="flex flex-col items-start gap-3 py-1 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
             <label className="group flex cursor-pointer select-none items-center gap-2.5">
               <span className="relative flex h-[18px] w-[18px] items-center justify-center">
