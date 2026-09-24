@@ -28,7 +28,7 @@ const menuSections = [
       { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutGrid },
       { name: 'Proyectos', href: '/admin/proyectos', icon: Briefcase },
       { name: 'Áreas', href: '/admin/actividades', icon: Warehouse },
-      { name: 'Notificaciones', href: '/admin/notificaciones', icon: Bell, badge: 3 },
+      { name: 'Notificaciones', href: '/admin/notificaciones', icon: Bell },
     ],
   },
   {
@@ -63,20 +63,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     router.push('/login');
   };
 
-  /* ── Clases del panel cristal (compartidas desktop + mobile) ──
-     Antes: bg-black/30 (casi sólido, tapaba todo lo de atrás).
-     Ahora: bg-white/[0.05] deja pasar mucha más luz/color, y subimos
-     blur + saturación para que ese color se vea "vidrioso" y no plano. */
   const glassPanel = `
     backdrop-blur-[50px] backdrop-saturate-[2.2]
     bg-white/[0.05]
     border-r border-white/[0.08]
   `;
 
-  /* ── Contenido del sidebar ── */
   const renderNav = (onNavigate?: () => void) => (
     <>
-      {/* Logo — solo imagen, sin texto */}
       <div className="flex justify-center pt-7 pb-5">
         <Image
           src="/logo-sula.png"
@@ -87,7 +81,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         />
       </div>
 
-      {/* Perfil */}
       <div className="mx-4 mb-5 flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white/[0.06] cursor-pointer hover:bg-white/[0.1] transition-colors">
         <div className="w-9 h-9 rounded-full bg-gradient-to-br from-red-500 to-red-700 flex items-center justify-center text-white text-sm font-bold shadow-md">
           A
@@ -99,10 +92,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <ChevronRight className="w-4 h-4 text-slate-500" />
       </div>
 
-      {/* Separador */}
       <div className="mx-5 mb-4 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
 
-      {/* Secciones de navegación */}
       <nav className="flex-1 overflow-y-auto px-4 space-y-5">
         {menuSections.map((section) => (
           <div key={section.title}>
@@ -130,15 +121,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                   >
                     <Icon className={`w-[18px] h-[18px] flex-shrink-0 ${isActive ? 'text-white' : 'text-slate-400 group-hover:text-white'}`} />
                     <span>{item.name}</span>
-
-                    {'badge' in item && item.badge && (
-                      <span className={`
-                        ml-auto w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold
-                        ${isActive ? 'bg-white text-red-600' : 'bg-red-500 text-white'}
-                      `}>
-                        {item.badge}
-                      </span>
-                    )}
                   </Link>
                 );
               })}
@@ -147,10 +129,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         ))}
       </nav>
 
-      {/* Separador */}
       <div className="mx-5 mt-auto mb-2 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
 
-      {/* Cerrar sesión */}
       <div className="px-4 pb-5 pt-2">
         <button
           onClick={handleLogout}
@@ -171,20 +151,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <div className="min-h-screen bg-[#060910] text-slate-100 font-sans selection:bg-red-500 selection:text-white">
 
-      {/* Fondo industrial — subimos opacidad y quitamos mix-blend-luminosity
-          para que se vea la foto de verdad, no solo una sombra gris */}
       <div
         className="fixed inset-0 pointer-events-none opacity-[0.22] bg-cover bg-center z-0"
         style={{ backgroundImage: "url('/images/fond.png')" }}
       />
 
-      {/* Blobs de color — esto es lo que le da "vida" al cristal.
-          Sin esto, el blur no tiene color/luz que atrapar y se ve plano. */}
       <div className="fixed -top-32 -left-20 w-[420px] h-[420px] rounded-full bg-red-600/[0.06] blur-[130px] pointer-events-none z-0" />
       <div className="fixed top-1/3 -left-10 w-[320px] h-[320px] rounded-full bg-amber-500/[0.05] blur-[120px] pointer-events-none z-0" />
       <div className="fixed bottom-0 left-1/4 w-[380px] h-[380px] rounded-full bg-red-500/[0.03] blur-[140px] pointer-events-none z-0" />
 
-      {/* ═══ SIDEBAR DESKTOP — cristal transparente ═══ */}
       <aside
         className={`
           fixed top-0 left-0 h-full z-40
@@ -198,7 +173,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {renderNav()}
       </aside>
 
-      {/* Botón toggle desktop */}
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
         className={`
@@ -219,7 +193,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         }
       </button>
 
-      {/* ═══ HEADER MÓVIL ═══ */}
       <header className="lg:hidden sticky top-0 z-50">
         <div className="mx-3 mt-3 backdrop-blur-[50px] backdrop-saturate-[2.2] bg-white/[0.06] border border-white/[0.08] rounded-2xl px-4 py-3 shadow-lg flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -240,7 +213,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </div>
       </header>
 
-      {/* ═══ OVERLAY MÓVIL ═══ */}
       <div
         className={`
           lg:hidden fixed inset-0 z-40
@@ -251,7 +223,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         onClick={() => setMobileOpen(false)}
       />
 
-      {/* ═══ DRAWER MÓVIL — cristal transparente ═══ */}
       <div
         className={`
           lg:hidden fixed top-0 left-0 h-full w-[260px] z-50
@@ -264,7 +235,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}
         `}
       >
-        {/* Botón cerrar */}
         <button
           onClick={() => setMobileOpen(false)}
           className="absolute top-5 right-3 p-2 rounded-lg text-slate-400 hover:text-white transition-colors z-10"
@@ -275,7 +245,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {renderNav(() => setMobileOpen(false))}
       </div>
 
-      {/* ═══ CONTENIDO ═══ */}
       <main
         className={`
           relative z-10 min-h-screen
