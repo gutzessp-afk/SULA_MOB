@@ -51,16 +51,11 @@ function fechaActual() {
   })
 }
 
-// Genera un solo PDF con todos los avances del día, de todos los procesos,
-// igual que la hoja física de "Control Productivo".
-// TODO: cuando se conecte a Supabase, "operador" vendrá de la sesión real
-// (usuario_id del usuario logueado), no de este texto fijo.
 function generarPDFDelDia(
   avancesPorProceso: Record<Proceso, Avance[]>,
   operador: string,
   fecha: string
 ) {
-  // Junta todos los avances de hoy, de todos los procesos, con su nombre de proceso
   const todos: (Avance & { proceso: Proceso })[] = []
   PROCESOS.forEach((proceso) => {
     avancesPorProceso[proceso]
@@ -75,7 +70,6 @@ function generarPDFDelDia(
 
   const doc = new jsPDF({ unit: 'mm', format: 'a4' })
 
-  // Encabezado
   doc.setFillColor(15, 15, 20)
   doc.rect(0, 0, 210, 22, 'F')
   doc.setTextColor(255, 255, 255)
@@ -91,7 +85,6 @@ function generarPDFDelDia(
   doc.setFont('helvetica', 'normal')
   doc.text(`Generado digitalmente · ${fecha}`, 150, 12)
 
-  // Datos generales
   let y = 32
   doc.setFontSize(10)
   doc.setFont('helvetica', 'bold')
@@ -103,7 +96,6 @@ function generarPDFDelDia(
   doc.setFont('helvetica', 'normal')
   doc.text(fecha, 145, y)
 
-  // Tabla
   y += 8
   const colX = { proceso: 12, inicio: 50, termino: 68, proyecto: 86, operacion: 116, desc: 146, piezas: 190 }
 
@@ -150,12 +142,10 @@ function generarPDFDelDia(
     y += 7
   })
 
-  // Total
   y += 2
   doc.setFont('helvetica', 'bold')
   doc.text(`Total de piezas: ${total}`, colX.desc, y)
 
-  // Firmas
   y += 25
   doc.setDrawColor(150, 150, 150)
   doc.line(12, y, 80, y)
@@ -253,7 +243,6 @@ export default function AvancesPage() {
             : a
         ),
       }))
-      // TODO: Supabase -> UPDATE en la tabla "avances" donde id = editId
     } else {
       const nuevo: Avance = {
         id: crypto.randomUUID(),
@@ -270,9 +259,6 @@ export default function AvancesPage() {
         ...prev,
         [registroEnCurso.proceso]: [...prev[registroEnCurso.proceso], nuevo],
       }))
-      // TODO: Supabase -> INSERT en la tabla "avances"
-      // (usuario_id de la sesion, proceso, fecha, hora_inicio, hora_termino,
-      //  proyecto_id, operacion, descripcion, piezas)
     }
 
     setRegistroEnCurso(null)
@@ -329,7 +315,8 @@ export default function AvancesPage() {
               )}
             </div>
 
-            <div className="overflow-x-auto">
+            {/* Vista de tabla — solo tablet/laptop */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800/60">
@@ -449,6 +436,100 @@ export default function AvancesPage() {
               </table>
               {formularioAbierto && error && (
                 <p className="text-[11px] text-red-500 px-6 pb-3">{error}</p>
+              )}
+            </div>
+
+            {/* Vista de tarjetas — solo móvil */}
+            <div className="md:hidden divide-y divide-slate-800/40">
+              {avances[proceso].length === 0 && !formularioAbierto && (
+                <p className="px-6 py-6 text-center text-slate-600 text-xs">Sin registros todavía</p>
+              )}
+
+              {avances[proceso].map((a) => (
+                <div key={a.id} className="px-5 py-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-bold text-white">{a.proyecto}</span>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => iniciarEdicion(proceso, a)}
+                        className="text-slate-500 hover:text-amber-400 transition"
+                        title="Editar"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => eliminarAvance(proceso, a.id)}
+                        className="text-slate-500 hover:text-red-500 transition"
+                        title="Eliminar"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-xs text-red-400 font-semibold">{a.operacion}</p>
+                  {a.descripcion && <p className="text-xs text-slate-400">{a.descripcion}</p>}
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1">
+                    <span>{a.fecha} · {a.horaInicio} – {a.horaTermino}</span>
+                    <span className="text-white font-bold">{a.piezas} pzs</span>
+                  </div>
+                </div>
+              ))}
+
+              {formularioAbierto && registroEnCurso && (
+                <div className="px-5 py-4 space-y-3 bg-[#08090d]/60">
+                  <input
+                    type="text"
+                    value={registroEnCurso.proyecto}
+                    onChange={(e) =>
+                      setRegistroEnCurso((r) => (r ? { ...r, proyecto: e.target.value } : r))
+                    }
+                    placeholder="Proyecto"
+                    className="w-full bg-[#08090d] border border-slate-800 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700"
+                  />
+                  <input
+                    type="text"
+                    value={registroEnCurso.operacion}
+                    onChange={(e) =>
+                      setRegistroEnCurso((r) => (r ? { ...r, operacion: e.target.value } : r))
+                    }
+                    placeholder="Operación"
+                    className="w-full bg-[#08090d] border border-slate-800 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700"
+                  />
+                  <textarea
+                    value={registroEnCurso.descripcion}
+                    onChange={(e) =>
+                      setRegistroEnCurso((r) => (r ? { ...r, descripcion: e.target.value } : r))
+                    }
+                    placeholder="Descripción"
+                    rows={2}
+                    className="w-full bg-[#08090d] border border-slate-800 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700 resize-none"
+                  />
+                  <input
+                    type="number"
+                    value={registroEnCurso.piezas}
+                    onChange={(e) =>
+                      setRegistroEnCurso((r) => (r ? { ...r, piezas: e.target.value } : r))
+                    }
+                    placeholder="No. de piezas"
+                    className="w-full bg-[#08090d] border border-slate-800 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700"
+                  />
+                  {error && <p className="text-[11px] text-red-500">{error}</p>}
+                  <div className="flex items-center gap-3 pt-1">
+                    <button
+                      onClick={guardarAvance}
+                      className="flex-1 flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold uppercase py-2.5 rounded-xl transition"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      Guardar
+                    </button>
+                    <button
+                      onClick={cancelarRegistro}
+                      className="text-slate-500 hover:text-slate-300 text-xs font-bold uppercase px-3"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           </div>
