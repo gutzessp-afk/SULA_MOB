@@ -120,7 +120,7 @@ export async function loginAction(prevState: unknown, formData: FormData) {
           maxAge: 60 * 60 * 24 * 7,
         })
 
-        const destination = userRole === 'admin' ? '/admin/dashboard' : '/operador'
+        const destination = userRole === 'admin' ? '/admin/dashboard' : '/operator'
         return { success: true, redirectUrl: destination }
       }
     }
