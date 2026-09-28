@@ -1,69 +1,55 @@
 
 'use client'
 
-import { useState } from 'react'
-import {
-  CheckCircle2,
-  Plus,
-  Trash2,
-  Pencil,
-  Download,
-  ClipboardList,
-} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { CheckCircle2, Plus, Trash2, Download, ClipboardList } from 'lucide-react'
 import jsPDF from 'jspdf'
+import {
+  getUsuarioActual,
+  getModulosDeProduccion,
+  getAvancesDeHoy,
+  registrarAvance,
+  eliminarAvance,
+  type AreaDelOperador,
+  type AvanceRegistrado,
+} from '../actions'
 
-const PROCESOS = [
-  'Corte de Tubo',
-  'Doblez',
-  'Corte de Lámina',
-  'Soldadura',
-  'Alambrón',
-  'Pulido',
-  'Pintura',
-  'Empaque',
-] as const
-
-type Proceso = (typeof PROCESOS)[number]
-
-interface Avance {
-  id: string
-  fecha: string
+interface RegistroEnCurso {
+  areaId: string
   horaInicio: string
-  horaTermino: string
-  proyecto: string
+  productoId: string
   operacion: string
   descripcion: string
   piezas: string
 }
 
+const inputClass =
+  'w-full bg-[#08090d] border border-slate-800 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700'
+
 function horaActual() {
-  return new Date().toLocaleTimeString('es-MX', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
 }
 
 function fechaActual() {
-  return new Date().toLocaleDateString('es-MX', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  })
+  return new Date().toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 
-function generarPDFDelDia(
-  avancesPorProceso: Record<Proceso, Avance[]>,
-  operador: string,
-  fecha: string
-) {
-  const todos: (Avance & { proceso: Proceso })[] = []
-  PROCESOS.forEach((proceso) => {
-    avancesPorProceso[proceso]
-      .filter((a) => a.fecha === fecha)
-      .forEach((a) => todos.push({ ...a, proceso }))
-  })
+function fechaDeISO(iso: string) {
+  return new Date(iso).toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
 
-  if (todos.length === 0) {
+function horaDeISO(iso: string) {
+  return new Date(iso).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
+}
+
+function inicioDelDiaISO() {
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  return d.toISOString()
+}
+
+function generarPDFDelDia(avances: AvanceRegistrado[], operador: string, fecha: string) {
+  if (avances.length === 0) {
     alert('No hay registros de hoy todavía para generar el PDF.')
     return
   }
@@ -118,7 +104,7 @@ function generarPDFDelDia(
   doc.setFont('helvetica', 'normal')
 
   let total = 0
-  todos.forEach((a) => {
+  avances.forEach((a) => {
     if (y > 275) {
       doc.addPage()
       y = 20
@@ -126,13 +112,13 @@ function generarPDFDelDia(
       doc.setFont('helvetica', 'normal')
     }
 
-    total += Number(a.piezas) || 0
+    total += a.piezas
 
     doc.setFontSize(8)
-    doc.text(a.proceso, colX.proceso, y, { maxWidth: 36 })
+    doc.text(a.areaNombre, colX.proceso, y, { maxWidth: 36 })
     doc.text(a.horaInicio, colX.inicio, y)
-    doc.text(a.horaTermino, colX.termino, y)
-    doc.text(a.proyecto, colX.proyecto, y, { maxWidth: 28 })
+    doc.text(horaDeISO(a.createdAt), colX.termino, y)
+    doc.text(a.proyectoNombre, colX.proyecto, y, { maxWidth: 28 })
     doc.text(a.operacion, colX.operacion, y, { maxWidth: 28 })
     doc.text(a.descripcion || '—', colX.desc, y, { maxWidth: 42 })
     doc.text(String(a.piezas), colX.piezas, y)
@@ -159,36 +145,36 @@ function generarPDFDelDia(
 }
 
 export default function AvancesPage() {
-  const [avances, setAvances] = useState<Record<Proceso, Avance[]>>(() =>
-    PROCESOS.reduce((acc, p) => {
-      acc[p] = []
-      return acc
-    }, {} as Record<Proceso, Avance[]>)
-  )
-
-  const [registroEnCurso, setRegistroEnCurso] = useState<{
-    proceso: Proceso
-    editId: string | null
-    fecha: string
-    horaInicio: string
-    horaTermino: string
-    proyecto: string
-    operacion: string
-    descripcion: string
-    piezas: string
-  } | null>(null)
+  const [cargando, setCargando] = useState(true)
+  const [operador, setOperador] = useState('')
+  const [areas, setAreas] = useState<AreaDelOperador[]>([])
+  const [avancesHoy, setAvancesHoy] = useState<AvanceRegistrado[]>([])
+  const [registro, setRegistro] = useState<RegistroEnCurso | null>(null)
   const [error, setError] = useState('')
+  const [guardando, setGuardando] = useState(false)
+  const [eliminandoId, setEliminandoId] = useState<string | null>(null)
 
-  const operador = 'Nombre del Operador' // TODO: vendrá de la sesión real
+  async function cargarTodo() {
+    const [usuario, areasData, avancesData] = await Promise.all([
+      getUsuarioActual(),
+      getModulosDeProduccion(),
+      getAvancesDeHoy(inicioDelDiaISO()),
+    ])
+    setOperador(usuario?.nombre ?? 'Operador')
+    setAreas(areasData)
+    setAvancesHoy(avancesData)
+    setCargando(false)
+  }
 
-  function iniciarRegistro(proceso: Proceso) {
-    setRegistroEnCurso({
-      proceso,
-      editId: null,
-      fecha: fechaActual(),
+  useEffect(() => {
+    cargarTodo()
+  }, [])
+
+  function iniciarRegistro(areaId: string) {
+    setRegistro({
+      areaId,
       horaInicio: horaActual(),
-      horaTermino: '',
-      proyecto: '',
+      productoId: '',
       operacion: '',
       descripcion: '',
       piezas: '',
@@ -196,80 +182,74 @@ export default function AvancesPage() {
     setError('')
   }
 
-  function iniciarEdicion(proceso: Proceso, avance: Avance) {
-    setRegistroEnCurso({
-      proceso,
-      editId: avance.id,
-      fecha: avance.fecha,
-      horaInicio: avance.horaInicio,
-      horaTermino: avance.horaTermino,
-      proyecto: avance.proyecto,
-      operacion: avance.operacion,
-      descripcion: avance.descripcion,
-      piezas: avance.piezas,
-    })
-    setError('')
-  }
-
   function cancelarRegistro() {
-    setRegistroEnCurso(null)
+    setRegistro(null)
     setError('')
   }
 
-  function guardarAvance() {
-    if (!registroEnCurso) return
+  function cambiar(campo: keyof RegistroEnCurso, valor: string) {
+    setRegistro((r) => (r ? { ...r, [campo]: valor } : r))
+  }
 
-    if (
-      !registroEnCurso.proyecto.trim() ||
-      !registroEnCurso.operacion.trim() ||
-      !registroEnCurso.piezas.trim()
-    ) {
-      setError('Proyecto, operación y número de piezas son obligatorios.')
+  async function guardar() {
+    if (!registro) return
+
+    const piezas = Number(registro.piezas)
+    if (!registro.productoId || !registro.operacion.trim() || !piezas || piezas <= 0) {
+      setError('Producto, operación y número de piezas son obligatorios.')
       return
     }
 
-    if (registroEnCurso.editId) {
-      setAvances((prev) => ({
-        ...prev,
-        [registroEnCurso.proceso]: prev[registroEnCurso.proceso].map((a) =>
-          a.id === registroEnCurso.editId
-            ? {
-                ...a,
-                proyecto: registroEnCurso.proyecto,
-                operacion: registroEnCurso.operacion,
-                descripcion: registroEnCurso.descripcion,
-                piezas: registroEnCurso.piezas,
-              }
-            : a
-        ),
-      }))
-    } else {
-      const nuevo: Avance = {
-        id: crypto.randomUUID(),
-        fecha: registroEnCurso.fecha,
-        horaInicio: registroEnCurso.horaInicio,
-        horaTermino: horaActual(),
-        proyecto: registroEnCurso.proyecto,
-        operacion: registroEnCurso.operacion,
-        descripcion: registroEnCurso.descripcion,
-        piezas: registroEnCurso.piezas,
-      }
-
-      setAvances((prev) => ({
-        ...prev,
-        [registroEnCurso.proceso]: [...prev[registroEnCurso.proceso], nuevo],
-      }))
+    const area = areas.find((a) => a.areaId === registro.areaId)
+    const producto = area?.productos.find((p) => p.productoId === registro.productoId)
+    if (!area || !producto) {
+      setError('Selecciona un producto válido.')
+      return
     }
 
-    setRegistroEnCurso(null)
+    setGuardando(true)
+    const resultado = await registrarAvance({
+      proyectoId: producto.proyectoId,
+      areaId: area.areaId,
+      productoId: producto.productoId,
+      piezas,
+      operacion: registro.operacion.trim(),
+      descripcion: registro.descripcion.trim(),
+      horaInicio: registro.horaInicio,
+    })
+    setGuardando(false)
+
+    if (resultado.error) {
+      setError(resultado.error)
+      return
+    }
+
+    setRegistro(null)
     setError('')
+    await cargarTodo()
   }
 
-  function eliminarAvance(proceso: Proceso, id: string) {
-    setAvances((prev) => ({
-      ...prev,
-      [proceso]: prev[proceso].filter((a) => a.id !== id),
-    }))
+  async function borrar(id: string) {
+    if (!window.confirm('¿Eliminar este registro? Se restarán sus piezas del avance del proyecto.')) {
+      return
+    }
+    setEliminandoId(id)
+    const resultado = await eliminarAvance(id)
+    setEliminandoId(null)
+
+    if (resultado.error) {
+      alert(resultado.error)
+      return
+    }
+    await cargarTodo()
+  }
+
+  if (cargando) {
+    return (
+      <div className="bg-[#0e1017]/80 backdrop-blur-xl border border-slate-800 p-6 rounded-2xl text-slate-400 text-sm">
+        Cargando módulos...
+      </div>
+    )
   }
 
   return (
@@ -284,7 +264,7 @@ export default function AvancesPage() {
         </div>
 
         <button
-          onClick={() => generarPDFDelDia(avances, operador, fechaActual())}
+          onClick={() => generarPDFDelDia(avancesHoy, operador, fechaActual())}
           className="flex items-center gap-2 bg-red-700 hover:bg-red-600 text-white text-xs font-bold uppercase tracking-wide px-4 py-2.5 rounded-xl transition self-start sm:self-auto"
         >
           <Download className="w-4 h-4" />
@@ -292,21 +272,28 @@ export default function AvancesPage() {
         </button>
       </div>
 
-      {PROCESOS.map((proceso) => {
-        const formularioAbierto = registroEnCurso?.proceso === proceso
+      {areas.length === 0 && (
+        <div className="bg-[#0e1017]/80 backdrop-blur-xl border border-slate-800 p-6 rounded-2xl text-slate-400 text-sm text-center">
+          No hay módulos disponibles todavía.
+        </div>
+      )}
+
+      {areas.map((area) => {
+        const formularioAbierto = registro?.areaId === area.areaId
+        const registros = avancesHoy.filter((a) => a.areaId === area.areaId)
 
         return (
           <div
-            key={proceso}
+            key={area.areaId}
             className="bg-[#0e1017]/80 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-xl overflow-hidden"
           >
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
               <h2 className="text-sm font-bold text-white uppercase tracking-wider">
-                {proceso}
+                {area.areaNombre}
               </h2>
               {!formularioAbierto && (
                 <button
-                  onClick={() => iniciarRegistro(proceso)}
+                  onClick={() => iniciarRegistro(area.areaId)}
                   className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-red-500 hover:text-red-400 transition"
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -315,7 +302,7 @@ export default function AvancesPage() {
               )}
             </div>
 
-            {/* Vista de tabla — solo tablet/laptop */}
+            {/* Tabla: tablet y laptop */}
             <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
@@ -331,35 +318,28 @@ export default function AvancesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {avances[proceso].length === 0 && !formularioAbierto && (
+                  {registros.length === 0 && (
                     <tr>
                       <td colSpan={8} className="px-6 py-6 text-center text-slate-600">
                         Sin registros todavía
                       </td>
                     </tr>
                   )}
-
-                  {avances[proceso].map((a) => (
+                  {registros.map((a) => (
                     <tr key={a.id} className="border-b border-slate-800/40 last:border-0 text-slate-300">
-                      <td className="px-6 py-2.5">{a.fecha}</td>
+                      <td className="px-6 py-2.5">{fechaDeISO(a.createdAt)}</td>
                       <td className="px-3 py-2.5">{a.horaInicio}</td>
-                      <td className="px-3 py-2.5">{a.horaTermino}</td>
-                      <td className="px-3 py-2.5 font-semibold text-white">{a.proyecto}</td>
+                      <td className="px-3 py-2.5">{horaDeISO(a.createdAt)}</td>
+                      <td className="px-3 py-2.5 font-semibold text-white">{a.proyectoNombre}</td>
                       <td className="px-3 py-2.5 text-red-400">{a.operacion}</td>
                       <td className="px-3 py-2.5 text-slate-400">{a.descripcion || '—'}</td>
                       <td className="px-3 py-2.5">{a.piezas}</td>
                       <td className="px-3 py-2.5">
-                        <div className="flex items-center justify-end gap-2.5">
+                        <div className="flex items-center justify-end">
                           <button
-                            onClick={() => iniciarEdicion(proceso, a)}
-                            className="text-slate-500 hover:text-amber-400 transition"
-                            title="Editar"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => eliminarAvance(proceso, a.id)}
-                            className="text-slate-500 hover:text-red-500 transition"
+                            onClick={() => borrar(a.id)}
+                            disabled={eliminandoId === a.id}
+                            className="text-slate-500 hover:text-red-500 disabled:opacity-40 transition"
                             title="Eliminar"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -368,98 +348,25 @@ export default function AvancesPage() {
                       </td>
                     </tr>
                   ))}
-
-                  {formularioAbierto && registroEnCurso && (
-                    <tr className="bg-[#08090d]/60">
-                      <td className="px-6 py-2.5 text-slate-500">{registroEnCurso.fecha}</td>
-                      <td className="px-3 py-2.5 text-slate-500">{registroEnCurso.horaInicio}</td>
-                      <td className="px-3 py-2.5 text-slate-600 italic">
-                        {registroEnCurso.editId ? registroEnCurso.horaTermino : 'al guardar'}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <input
-                          type="text"
-                          value={registroEnCurso.proyecto}
-                          onChange={(e) =>
-                            setRegistroEnCurso((r) => (r ? { ...r, proyecto: e.target.value } : r))
-                          }
-                          placeholder="Proyecto"
-                          className="w-full bg-[#08090d] border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700"
-                        />
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <input
-                          type="text"
-                          value={registroEnCurso.operacion}
-                          onChange={(e) =>
-                            setRegistroEnCurso((r) => (r ? { ...r, operacion: e.target.value } : r))
-                          }
-                          placeholder="Operación"
-                          className="w-full bg-[#08090d] border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700"
-                        />
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <input
-                          type="text"
-                          value={registroEnCurso.descripcion}
-                          onChange={(e) =>
-                            setRegistroEnCurso((r) => (r ? { ...r, descripcion: e.target.value } : r))
-                          }
-                          placeholder="Descripción"
-                          className="w-full bg-[#08090d] border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700"
-                        />
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <input
-                          type="number"
-                          value={registroEnCurso.piezas}
-                          onChange={(e) =>
-                            setRegistroEnCurso((r) => (r ? { ...r, piezas: e.target.value } : r))
-                          }
-                          placeholder="0"
-                          className="w-full bg-[#08090d] border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700"
-                        />
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center justify-end gap-2">
-                          <button onClick={guardarAvance} className="text-emerald-500 hover:text-emerald-400 transition" title="Guardar">
-                            <CheckCircle2 className="w-4 h-4" />
-                          </button>
-                          <button onClick={cancelarRegistro} className="text-slate-600 hover:text-slate-400 transition text-[10px] font-bold uppercase">
-                            Cancelar
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
                 </tbody>
               </table>
-              {formularioAbierto && error && (
-                <p className="text-[11px] text-red-500 px-6 pb-3">{error}</p>
-              )}
             </div>
 
-            {/* Vista de tarjetas — solo móvil */}
+            {/* Tarjetas: celular */}
             <div className="md:hidden divide-y divide-slate-800/40">
-              {avances[proceso].length === 0 && !formularioAbierto && (
+              {registros.length === 0 && (
                 <p className="px-6 py-6 text-center text-slate-600 text-xs">Sin registros todavía</p>
               )}
-
-              {avances[proceso].map((a) => (
-                <div key={a.id} className="px-5 py-4 space-y-2">
+              {registros.map((a) => (
+                <div key={a.id} className="px-5 py-4 space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-bold text-white">{a.proyecto}</span>
+                    <span className="text-sm font-bold text-white">{a.proyectoNombre}</span>
                     <div className="flex items-center gap-3">
+                      <span className="text-white font-bold text-xs">{a.piezas} pzs</span>
                       <button
-                        onClick={() => iniciarEdicion(proceso, a)}
-                        className="text-slate-500 hover:text-amber-400 transition"
-                        title="Editar"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => eliminarAvance(proceso, a.id)}
-                        className="text-slate-500 hover:text-red-500 transition"
+                        onClick={() => borrar(a.id)}
+                        disabled={eliminandoId === a.id}
+                        className="text-slate-500 hover:text-red-500 disabled:opacity-40 transition"
                         title="Eliminar"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -468,70 +375,82 @@ export default function AvancesPage() {
                   </div>
                   <p className="text-xs text-red-400 font-semibold">{a.operacion}</p>
                   {a.descripcion && <p className="text-xs text-slate-400">{a.descripcion}</p>}
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1">
-                    <span>{a.fecha} · {a.horaInicio} – {a.horaTermino}</span>
-                    <span className="text-white font-bold">{a.piezas} pzs</span>
-                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    {fechaDeISO(a.createdAt)} · {a.horaInicio} – {horaDeISO(a.createdAt)}
+                  </p>
                 </div>
               ))}
+            </div>
 
-              {formularioAbierto && registroEnCurso && (
-                <div className="px-5 py-4 space-y-3 bg-[#08090d]/60">
+            {formularioAbierto && registro && (
+              <div className="px-6 pb-5 pt-4 space-y-3 bg-[#08090d]/60 border-t border-slate-800/60">
+                <p className="text-[11px] text-slate-500">
+                  Fecha {fechaActual()} · Inicio {registro.horaInicio} · Término: al guardar
+                </p>
+
+                {area.productos.length === 0 ? (
+                  <p className="text-xs text-amber-500">
+                    El administrador todavía no ha cargado proyectos.
+                  </p>
+                ) : (
+                  <select
+                    value={registro.productoId}
+                    onChange={(e) => cambiar('productoId', e.target.value)}
+                    className={inputClass}
+                  >
+                    <option value="">Selecciona el proyecto / producto</option>
+                    {area.productos.map((p) => (
+                      <option key={p.productoId} value={p.productoId}>
+                        {p.proyectoNombre} · {p.productoNombre} ({p.piezasCompletadas}/{p.piezasTotales} pzs)
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <input
                     type="text"
-                    value={registroEnCurso.proyecto}
-                    onChange={(e) =>
-                      setRegistroEnCurso((r) => (r ? { ...r, proyecto: e.target.value } : r))
-                    }
-                    placeholder="Proyecto"
-                    className="w-full bg-[#08090d] border border-slate-800 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700"
-                  />
-                  <input
-                    type="text"
-                    value={registroEnCurso.operacion}
-                    onChange={(e) =>
-                      setRegistroEnCurso((r) => (r ? { ...r, operacion: e.target.value } : r))
-                    }
+                    value={registro.operacion}
+                    onChange={(e) => cambiar('operacion', e.target.value)}
                     placeholder="Operación"
-                    className="w-full bg-[#08090d] border border-slate-800 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700"
+                    className={inputClass}
                   />
-                  <textarea
-                    value={registroEnCurso.descripcion}
-                    onChange={(e) =>
-                      setRegistroEnCurso((r) => (r ? { ...r, descripcion: e.target.value } : r))
-                    }
+                  <input
+                    type="text"
+                    value={registro.descripcion}
+                    onChange={(e) => cambiar('descripcion', e.target.value)}
                     placeholder="Descripción"
-                    rows={2}
-                    className="w-full bg-[#08090d] border border-slate-800 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700 resize-none"
+                    className={inputClass}
                   />
                   <input
                     type="number"
-                    value={registroEnCurso.piezas}
-                    onChange={(e) =>
-                      setRegistroEnCurso((r) => (r ? { ...r, piezas: e.target.value } : r))
-                    }
+                    value={registro.piezas}
+                    onChange={(e) => cambiar('piezas', e.target.value)}
                     placeholder="No. de piezas"
-                    className="w-full bg-[#08090d] border border-slate-800 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-red-700"
+                    className={inputClass}
                   />
-                  {error && <p className="text-[11px] text-red-500">{error}</p>}
-                  <div className="flex items-center gap-3 pt-1">
-                    <button
-                      onClick={guardarAvance}
-                      className="flex-1 flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold uppercase py-2.5 rounded-xl transition"
-                    >
-                      <CheckCircle2 className="w-4 h-4" />
-                      Guardar
-                    </button>
-                    <button
-                      onClick={cancelarRegistro}
-                      className="text-slate-500 hover:text-slate-300 text-xs font-bold uppercase px-3"
-                    >
-                      Cancelar
-                    </button>
-                  </div>
                 </div>
-              )}
-            </div>
+
+                {error && <p className="text-[11px] text-red-500">{error}</p>}
+
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    onClick={guardar}
+                    disabled={guardando || area.productos.length === 0}
+                    className="flex-1 flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-bold uppercase py-2.5 rounded-xl transition"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    {guardando ? 'Guardando...' : 'Guardar'}
+                  </button>
+                  <button
+                    onClick={cancelarRegistro}
+                    className="text-slate-500 hover:text-slate-300 text-xs font-bold uppercase px-3"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )
       })}
