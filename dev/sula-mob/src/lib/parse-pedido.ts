@@ -26,6 +26,8 @@ export interface PedidoData {
   referencia_sucursal: string
   elaborado_por: string
   partidas: Partida[]
+  /** Texto crudo extraído del PDF — para diagnóstico cuando un campo no se detecta */
+  _raw_text?: string
 }
 
 /**

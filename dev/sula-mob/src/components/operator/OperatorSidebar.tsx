@@ -65,7 +65,7 @@ export default function OperatorSidebar() {
       items: [
         { name: 'Dashboard', href: '/operator', icon: LayoutDashboard },
         { name: 'Actividades', href: '/operator/actividades', icon: Factory },
-        { name: 'Notificaciones', href: '/operator/notificaciones', icon: Bell, badge: sinLeer },
+        { name: 'Notificaciones', href: '/operator/avisos', icon: Bell, badge: sinLeer },
       ],
     },
     {
