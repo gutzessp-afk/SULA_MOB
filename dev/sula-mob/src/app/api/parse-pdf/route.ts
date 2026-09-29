@@ -11,6 +11,58 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 /* ═══════════════════════════════════════
+   POLYFILLS — pdfjs-dist necesita DOMMatrix,
+   ImageData y Path2D que no existen en Node.js
+   serverless. Solo extraemos texto, no renderizamos,
+   así que stubs mínimos bastan.
+   ═══════════════════════════════════════ */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const g = globalThis as any
+
+if (typeof g.DOMMatrix === 'undefined') {
+  g.DOMMatrix = class DOMMatrix {
+    a = 1; b = 0; c = 0; d = 1; e = 0; f = 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    constructor(init?: any) {
+      if (Array.isArray(init) && init.length >= 6) {
+        [this.a, this.b, this.c, this.d, this.e, this.f] = init
+      }
+    }
+    isIdentity = true
+    translate() { return new g.DOMMatrix() }
+    scale() { return new g.DOMMatrix() }
+    inverse() { return new g.DOMMatrix() }
+    multiply() { return new g.DOMMatrix() }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    transformPoint(p: any) { return p }
+  }
+}
+if (typeof g.ImageData === 'undefined') {
+  g.ImageData = class ImageData {
+    width: number; height: number; data: Uint8ClampedArray
+    constructor(sw: number | Uint8ClampedArray, sh?: number) {
+      if (typeof sw === 'number') {
+        this.width = sw; this.height = sh || 0
+        this.data = new Uint8ClampedArray(this.width * this.height * 4)
+      } else {
+        this.data = sw; this.width = sh || 0; this.height = 0
+      }
+    }
+  }
+}
+if (typeof g.Path2D === 'undefined') {
+  g.Path2D = class Path2D {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    moveTo(..._a: any[]) {} lineTo(..._a: any[]) {} bezierCurveTo(..._a: any[]) {}
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    quadraticCurveTo(..._a: any[]) {} arc(..._a: any[]) {} closePath() {}
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rect(..._a: any[]) {} ellipse(..._a: any[]) {} addPath(..._a: any[]) {}
+  }
+}
+
+/* ═══════════════════════════════════════
    TIPOS (los mismos que en parse-pedido.ts)
    ═══════════════════════════════════════ */
 
