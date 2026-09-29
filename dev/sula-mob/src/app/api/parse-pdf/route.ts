@@ -2,65 +2,19 @@
  * /api/parse-pdf/route.ts
  * ───────────────────────
  * API Route que recibe un PDF de pedido SULA por FormData,
- * extrae su texto con pdfjs-dist (sin worker, compatible con Vercel),
+ * extrae su texto con unpdf (compatible con Vercel serverless),
  * y devuelve los datos estructurados como JSON.
  *
  * RUTA DEL ARCHIVO: src/app/api/parse-pdf/route.ts
+ *
+ * ¿Por qué unpdf y no pdfjs-dist directo?
+ * pdfjs-dist necesita un "worker" (archivo .mjs separado) que
+ * Vercel serverless no puede resolver. unpdf es un wrapper
+ * hecho por el equipo de Nuxt/Nitro que funciona sin worker
+ * en cualquier entorno serverless.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-
-/* ═══════════════════════════════════════
-   POLYFILLS — pdfjs-dist necesita DOMMatrix,
-   ImageData y Path2D que no existen en Node.js
-   serverless. Solo extraemos texto, no renderizamos,
-   así que stubs mínimos bastan.
-   ═══════════════════════════════════════ */
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const g = globalThis as any
-
-if (typeof g.DOMMatrix === 'undefined') {
-  g.DOMMatrix = class DOMMatrix {
-    a = 1; b = 0; c = 0; d = 1; e = 0; f = 0
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    constructor(init?: any) {
-      if (Array.isArray(init) && init.length >= 6) {
-        [this.a, this.b, this.c, this.d, this.e, this.f] = init
-      }
-    }
-    isIdentity = true
-    translate() { return new g.DOMMatrix() }
-    scale() { return new g.DOMMatrix() }
-    inverse() { return new g.DOMMatrix() }
-    multiply() { return new g.DOMMatrix() }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    transformPoint(p: any) { return p }
-  }
-}
-if (typeof g.ImageData === 'undefined') {
-  g.ImageData = class ImageData {
-    width: number; height: number; data: Uint8ClampedArray
-    constructor(sw: number | Uint8ClampedArray, sh?: number) {
-      if (typeof sw === 'number') {
-        this.width = sw; this.height = sh || 0
-        this.data = new Uint8ClampedArray(this.width * this.height * 4)
-      } else {
-        this.data = sw; this.width = sh || 0; this.height = 0
-      }
-    }
-  }
-}
-if (typeof g.Path2D === 'undefined') {
-  g.Path2D = class Path2D {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    moveTo(..._a: any[]) {} lineTo(..._a: any[]) {} bezierCurveTo(..._a: any[]) {}
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    quadraticCurveTo(..._a: any[]) {} arc(..._a: any[]) {} closePath() {}
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rect(..._a: any[]) {} ellipse(..._a: any[]) {} addPath(..._a: any[]) {}
-  }
-}
 
 /* ═══════════════════════════════════════
    TIPOS (los mismos que en parse-pedido.ts)
@@ -85,34 +39,33 @@ interface PedidoData {
 }
 
 /* ═══════════════════════════════════════
-   EXTRAER TEXTO DEL PDF con pdfjs-dist
+   EXTRAER TEXTO DEL PDF con unpdf
    (sin worker — compatible con Vercel serverless)
+
+   unpdf usa pdf.js internamente pero maneja
+   todo el tema del worker por ti. No necesita
+   polyfills de DOMMatrix ni nada de eso.
    ═══════════════════════════════════════ */
 
 async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
-  // Import dinámico para que Next.js no lo meta en el bundle del cliente
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.mjs')
+  // Import dinámico de unpdf
+  const { extractText } = await import('unpdf')
 
-  // Desactivar worker — en serverless no se puede usar
-  pdfjsLib.GlobalWorkerOptions.workerSrc = ''
+  // extractText regresa { text, totalPages }
+  // Con mergePages: false obtenemos un array con el texto de cada página
+  const { text, totalPages } = await extractText(pdfBytes, { mergePages: false })
 
-  const loadingTask = pdfjsLib.getDocument({
-    data: pdfBytes,
-    useSystemFonts: true,
-    disableFontFace: true,
-  })
-
-  const doc = await loadingTask.promise
+  // Reconstruir el mismo formato que teníamos antes:
+  // texto de cada página separado por marcadores "-- X of Y --"
+  // para que parseText() siga funcionando igual
   const textParts: string[] = []
+  const pages = Array.isArray(text) ? text : [text]
 
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i)
-    const content = await page.getTextContent()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pageText = content.items.map((item: any) => item.str).join(' ')
-    textParts.push(pageText)
-    if (i < doc.numPages) textParts.push(`\n-- ${i} of ${doc.numPages} --\n`)
+  for (let i = 0; i < pages.length; i++) {
+    textParts.push(pages[i])
+    if (i < pages.length - 1) {
+      textParts.push(`\n-- ${i + 1} of ${totalPages} --\n`)
+    }
   }
 
   return textParts.join('\n')
