@@ -51,7 +51,7 @@ interface PedidoData {
 async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
   // pdf-parse espera un Buffer, no un Uint8Array
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const pdfParse = require('pdf-parse/lib/pdf-parse.js')
+    const pdfParse = require('pdf-parse')
   const data = await pdfParse(Buffer.from(pdfBytes))
   return data.text
 }
