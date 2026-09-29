@@ -1,9 +1,24 @@
 // Sistema de notificaciones por email vía Resend (GRATIS: 100 emails/día)
 // Archivo: src/lib/notificar.ts
 
-import { Resend } from 'resend';
+// ── Resend se carga LAZY para que el build no falle si no está instalado ──
+// Cuando instales resend (npm install resend), esto funciona automáticamente.
+// Si no está instalado, las funciones regresan { ok: false } sin tronar.
 
-const resend = new Resend(process.env.RESEND_API_KEY || '');
+let _resend: any = null;
+function getResend() {
+  if (!_resend) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { Resend } = require('resend');
+      _resend = new Resend(process.env.RESEND_API_KEY || '');
+    } catch {
+      console.warn('[notificar] resend no está instalado — emails deshabilitados');
+      return null;
+    }
+  }
+  return _resend;
+}
 
 export interface OpcionesNotificacion {
   asunto: string;
@@ -27,6 +42,11 @@ export async function notificar(
   if (!to) {
     console.error('[notificar] NOTIFICAR_A no configurado');
     return { ok: false, error: 'Correo destino no configurado' };
+  }
+
+  const resend = getResend();
+  if (!resend) {
+    return { ok: false, error: 'resend no está instalado — corre: npm install resend' };
   }
 
   try {
