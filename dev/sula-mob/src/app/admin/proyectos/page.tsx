@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, X, PieChart, Factory, Calendar, User, MapPin, Download, CheckCircle2, Pencil, RotateCcw, Minus } from 'lucide-react';
 import { parsePedidoPdf } from '@/lib/parse-pedido';
@@ -801,10 +800,7 @@ export default function ProyectosPage() {
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4 border-t border-white/10">
-              <div className="relative overflow-hidden rounded-2xl border border-white/10 h-24 w-full sm:w-48 flex-shrink-0">
-                <Image src="/images/instalaciones.png" alt="Planta" fill className="object-cover opacity-60" />
-              </div>
+            <div className="flex flex-col sm:flex-row justify-end items-center gap-4 pt-4 border-t border-white/10">
               <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
                 <button
                   type="button"
