@@ -2,16 +2,17 @@
  * /api/parse-pdf/route.ts
  * ───────────────────────
  * API Route que recibe un PDF de pedido SULA por FormData,
- * extrae su texto con unpdf (compatible con Vercel serverless),
+ * extrae su texto con pdf-parse v1 (compatible con Vercel serverless),
  * y devuelve los datos estructurados como JSON.
  *
  * RUTA DEL ARCHIVO: src/app/api/parse-pdf/route.ts
  *
- * ¿Por qué unpdf y no pdfjs-dist directo?
- * pdfjs-dist necesita un "worker" (archivo .mjs separado) que
- * Vercel serverless no puede resolver. unpdf es un wrapper
- * hecho por el equipo de Nuxt/Nitro que funciona sin worker
- * en cualquier entorno serverless.
+ * ¿Por qué pdf-parse v1 y no pdfjs-dist directo?
+ * pdfjs-dist v5 necesita un "worker" (.mjs separado) que
+ * Vercel serverless no puede resolver. pdf-parse v1.1.1
+ * trae su propio pdf.js integrado que funciona sin worker.
+ * Es la librería más usada para extraer texto de PDFs en
+ * Node.js — lleva años funcionando en serverless sin problemas.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -39,36 +40,20 @@ interface PedidoData {
 }
 
 /* ═══════════════════════════════════════
-   EXTRAER TEXTO DEL PDF con unpdf
+   EXTRAER TEXTO DEL PDF con pdf-parse v1
    (sin worker — compatible con Vercel serverless)
 
-   unpdf usa pdf.js internamente pero maneja
-   todo el tema del worker por ti. No necesita
-   polyfills de DOMMatrix ni nada de eso.
+   pdf-parse v1.1.1 trae su propio pdf.js integrado.
+   No necesita workers, no necesita polyfills,
+   no necesita configuración especial. Solo funciona.
    ═══════════════════════════════════════ */
 
 async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
-  // Import dinámico de unpdf
-  const { extractText } = await import('unpdf')
-
-  // extractText regresa { text, totalPages }
-  // Con mergePages: false obtenemos un array con el texto de cada página
-  const { text, totalPages } = await extractText(pdfBytes, { mergePages: false })
-
-  // Reconstruir el mismo formato que teníamos antes:
-  // texto de cada página separado por marcadores "-- X of Y --"
-  // para que parseText() siga funcionando igual
-  const textParts: string[] = []
-  const pages = Array.isArray(text) ? text : [text]
-
-  for (let i = 0; i < pages.length; i++) {
-    textParts.push(pages[i])
-    if (i < pages.length - 1) {
-      textParts.push(`\n-- ${i + 1} of ${totalPages} --\n`)
-    }
-  }
-
-  return textParts.join('\n')
+  // pdf-parse espera un Buffer, no un Uint8Array
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const pdfParse = require('pdf-parse/lib/pdf-parse.js')
+  const data = await pdfParse(Buffer.from(pdfBytes))
+  return data.text
 }
 
 /* ═══════════════════════════════════════
