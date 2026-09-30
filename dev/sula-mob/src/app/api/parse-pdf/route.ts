@@ -51,7 +51,7 @@ interface PedidoData {
 async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
   // pdf-parse espera un Buffer, no un Uint8Array
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdfParse = require('pdf-parse')
+  const pdfParse = require('pdf-parse')
   const data = await pdfParse(Buffer.from(pdfBytes))
   return data.text
 }
@@ -87,6 +87,23 @@ function parseText(raw: string): PedidoData {
   if (!result.cliente) {
     const c2 = raw.match(/Cliente:?\s*\n?\s*([A-ZÁÉÍÓÚÑ][^\n]{2,})/i)
     if (c2) result.cliente = c2[1].trim()
+  }
+  // Fallback pdf-parse v1: número de pedido y cliente en líneas separadas al inicio
+  if (!result.cliente && result.numero_pedido) {
+    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean)
+    const pedidoIdx = lines.findIndex(l => l.startsWith(result.numero_pedido))
+    if (pedidoIdx >= 0 && pedidoIdx + 1 < lines.length) {
+      const candidate = lines[pedidoIdx + 1]
+      // El cliente es texto (no fecha, no número puro, no keyword)
+      if (
+        candidate.length > 2 &&
+        !/^\d{4}-\d{2}/.test(candidate) &&
+        !/^[\d,.]+$/.test(candidate) &&
+        !/^(Pieza|Juego|Metro|Kg|Litro|Servicio|Subtotal|IVA|Total|Fecha|Elaborado|Referencia|Pedido|Moneda|Condici)/i.test(candidate)
+      ) {
+        result.cliente = candidate
+      }
+    }
   }
 
   // ── Fecha ──
@@ -216,6 +233,47 @@ function parseText(raw: string): PedidoData {
         unidad: m2[3],
         descripcion: m2[4].replace(/\s+/g, ' ').trim(),
       })
+    }
+  }
+
+  // ── Fallback: formato pdf-parse v1 (todo concatenado sin espacios) ──
+  // Ejemplo: "Pieza10,050.003.2532,662.502-1-0009-0005"
+  // Cada número tiene exactamente 2 decimales (.XX), así los separamos.
+  // La descripción viene en la(s) línea(s) siguientes.
+  if (result.partidas.length === 0) {
+    const partidaRegex3 = /^(Pieza|Juego|Metro|Kg|Litro|Servicio)([\d,]+\.\d{2})([\d,]+\.\d{2})([\d,]+\.\d{2})([\d][\d-]+-[\d-]+)$/i
+    const rawLines = raw.split('\n')
+    let idx = 0
+
+    while (idx < rawLines.length) {
+      const line = rawLines[idx].trim()
+      const m3 = line.match(partidaRegex3)
+
+      if (m3) {
+        // Recolectar descripción de las líneas siguientes
+        const descParts: string[] = []
+        idx++
+        while (idx < rawLines.length) {
+          const nextLine = rawLines[idx].trim()
+          // Parar si es otra partida, línea vacía importante, o fin de sección
+          if (
+            !nextLine ||
+            partidaRegex3.test(nextLine) ||
+            /^(Subtotal|IVA|Total|Descuento|Moneda|Condici|Elaborado|Fecha|Referencia|Pedido)/i.test(nextLine)
+          ) break
+          descParts.push(nextLine)
+          idx++
+        }
+
+        result.partidas.push({
+          cantidad: Math.round(parseFloat(m3[2].replace(/,/g, ''))),
+          clave: m3[5],
+          unidad: m3[1],
+          descripcion: descParts.join(' ').replace(/\s+/g, ' ').trim(),
+        })
+      } else {
+        idx++
+      }
     }
   }
 
