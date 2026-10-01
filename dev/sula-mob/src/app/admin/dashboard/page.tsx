@@ -3,20 +3,15 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
+  Clock,
   RefreshCw,
   Search,
   Download,
+  ShieldAlert,
   Layers,
   BarChart3,
   TrendingUp,
-  Cpu,
-  CheckCircle2,
-  AlertTriangle,
-  Clock,
-  ArrowUpRight,
-  ArrowDownRight,
-  ShieldAlert,
-  Flame
+  Cpu
 } from 'lucide-react';
 
 interface Proyecto {
@@ -55,7 +50,6 @@ export default function DashboardPage() {
   const [avances, setAvances] = useState<AvanceEstacion[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [timeMode, setTimeMode] = useState<'Day' | 'Month' | 'Year'>('Month');
 
   const fetchMetrics = useCallback(async () => {
     setLoading(true);
@@ -95,13 +89,13 @@ export default function DashboardPage() {
     );
   }, [proyectos, searchTerm]);
 
-  // Cálculo de Rendimiento de Áreas
+  // Cálculo de Rendimiento Comparativo por Área
   const rendimientoAreas = useMemo(() => {
     if (!areas.length || !avances.length) return [];
 
     return areas.map(area => {
       const avancesArea = avances.filter(a => a.area_id === area.id);
-      if (!avancesArea.length) return { ...area, rendimiento: 0, hechas: 0, total: 0 };
+      if (!avancesArea.length) return { ...area, rendimiento: 0, piezasCompletadas: 0, piezasTotales: 0 };
 
       let totalPiezas = 0;
       let piezasHechas = 0;
@@ -122,44 +116,79 @@ export default function DashboardPage() {
       return {
         ...area,
         rendimiento: promedio,
-        hechas: piezasHechas,
-        total: totalPiezas
+        piezasCompletadas: piezasHechas,
+        piezasTotales: totalPiezas
       };
     });
   }, [areas, avances]);
 
-  // Métricas Críticas del Sistema
-  const metricas = useMemo(() => {
-    let completados = 0;
-    let enProceso = 0;
-    let atrasados = 0;
+  // Detección de Atrasos
+  const metricasAtrasos = useMemo(() => {
+    let proyectosAtrasados = 0;
+    let proyectosRiesgo = 0;
+    let dentroDeTiempo = 0;
 
     proyectos.forEach(p => {
       if (p.progreso === 100) {
-        completados++;
-      } else {
-        let fechaEntrega: Date | null = null;
-        if (p.descripcion && p.descripcion.includes('Entrega:')) {
-          const match = p.descripcion.match(/Entrega:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/);
-          if (match && match[1]) fechaEntrega = new Date(match[1]);
-        }
+        dentroDeTiempo++;
+        return;
+      }
 
-        const hoy = new Date();
-        if (fechaEntrega && fechaEntrega < hoy) {
-          atrasados++;
-        } else {
-          enProceso++;
+      let fechaEntrega: Date | null = null;
+      if (p.descripcion && p.descripcion.includes('Entrega:')) {
+        const match = p.descripcion.match(/Entrega:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/);
+        if (match && match[1]) {
+          fechaEntrega = new Date(match[1]);
         }
+      }
+
+      const hoy = new Date();
+      if (fechaEntrega && fechaEntrega < hoy && p.progreso < 100) {
+        proyectosAtrasados++;
+      } else if (p.progreso < 30 && p.prioridad === 'urgente') {
+        proyectosRiesgo++;
+      } else {
+        dentroDeTiempo++;
       }
     });
 
     const total = proyectos.length || 1;
-    const pctEficiencia = Math.round((completados / total) * 100);
-
-    return { completados, enProceso, atrasados, total: proyectos.length, pctEficiencia };
+    return {
+      atrasados: proyectosAtrasados,
+      riesgo: proyectosRiesgo,
+      aTiempo: dentroDeTiempo,
+      pctAtraso: Math.round((proyectosAtrasados / total) * 100)
+    };
   }, [proyectos]);
 
-  // Exportar CSV
+  // Cronología por Fechas
+  const avancesPorFechas = useMemo(() => {
+    const ordenados = [...proyectos].sort((a, b) => {
+      const fechaA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const fechaB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return fechaB - fechaA;
+    });
+
+    return ordenados.slice(0, 6).map(p => {
+      let fechaTexto = 'Sin fecha';
+      if (p.descripcion && p.descripcion.includes('Entrega:')) {
+        const match = p.descripcion.match(/Entrega:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/);
+        if (match && match[1]) fechaTexto = match[1];
+      } else if (p.created_at) {
+        fechaTexto = new Date(p.created_at).toISOString().split('T')[0];
+      }
+
+      return { ...p, fechaTarget: fechaTexto };
+    });
+  }, [proyectos]);
+
+  // Eficiencia global
+  const eficienciaGlobal = useMemo(() => {
+    if (!proyectos.length) return 0;
+    const sum = proyectos.reduce((acc, p) => acc + p.progreso, 0);
+    return Math.round(sum / proyectos.length);
+  }, [proyectos]);
+
   const exportarReporte = () => {
     const headers = ['Codigo', 'Proyecto', 'Cliente', 'Progreso %'];
     const rows = proyectos.map(p => [p.codigo, `"${p.nombre}"`, `"${p.cliente || 'General'}"`, `${p.progreso}%`]);
@@ -173,21 +202,22 @@ export default function DashboardPage() {
     document.body.removeChild(link);
   };
 
+  /* ── Glass card base ── */
+  const glass = 'backdrop-blur-2xl backdrop-saturate-[1.7] bg-white/[0.04] border border-white/[0.10] rounded-2xl shadow-[0_8px_32px_-8px_rgba(0,0,0,0.6)]';
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12 px-2 sm:px-4 text-white">
-      
-      {/* HEADER LIQUID GLASS CON NAVEGACIÓN Y SINCRONIZACIÓN */}
-      <div 
-        className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] flex flex-col md:flex-row justify-between items-start md:items-center gap-4"
-        style={{ backgroundImage: `linear-gradient(to right, rgba(11,15,23,0.95), rgba(18,24,36,0.8))` }}
-      >
+
+      {/* ═══ HEADER PRINCIPAL ═══ */}
+      <div className={`relative overflow-hidden ${glass} p-5 sm:p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4`}>
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs text-sky-400 font-mono">
-            <span>Inicio</span> / <span className="text-white font-bold">Dashboard SULA MOB</span>
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-bold font-mono">
+            <Cpu className="w-3.5 h-3.5 animate-pulse" /> Telemetría de Planta
           </div>
-          <h1 className="text-2xl font-black text-white tracking-wide flex items-center gap-2">
-            <Cpu className="w-6 h-6 text-sky-400 animate-pulse" /> Control y Monitoreo General
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
+            Control y Monitoreo General
           </h1>
+          <p className="text-xs text-white/50">Monitoreo general de proyectos en planta y rendimiento por área.</p>
         </div>
 
         <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
@@ -198,370 +228,315 @@ export default function DashboardPage() {
               placeholder="Buscar proyecto..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              className="bg-black/40 border border-white/15 rounded-2xl text-xs text-white pl-9 pr-3 py-2.5 outline-none focus:border-sky-400 w-full sm:w-52 transition-all placeholder:text-white/30"
+              className="bg-white/[0.07] border border-white/20 hover:border-white/30 focus:border-blue-400/60 focus:ring-1 focus:ring-blue-500/15 rounded-xl text-xs text-white pl-9 pr-3 py-2.5 outline-none w-full sm:w-52 transition-all placeholder:text-white/30"
             />
           </div>
 
           <button
             onClick={() => void fetchMetrics()}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 font-bold text-xs border border-sky-400/30 backdrop-blur-md transition-all shrink-0 active:scale-95 shadow-lg shadow-sky-950/50"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs border border-blue-500/30 transition-all shrink-0 active:scale-95 shadow-lg shadow-blue-900/40"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Sincronizar
           </button>
         </div>
       </div>
 
-      {/* 1. FILA DE 4 TARJETAS CON EFECTO GLASS + BURBUJAS DE NEÓN + MICRO GRÁFICAS */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        
-        {/* TARJETA 1: PROYECTOS REGISTRADOS (AZUL/VIOLETA) */}
-        <div className="relative overflow-hidden rounded-[24px] border border-white/20 bg-gradient-to-br from-indigo-900/80 via-purple-900/60 to-slate-900/90 p-5 shadow-2xl backdrop-blur-2xl flex flex-col justify-between space-y-4">
-          <div className="absolute -top-10 -right-10 w-28 h-28 bg-indigo-500/20 rounded-full blur-2xl pointer-events-none" />
-          
-          <div className="flex justify-between items-start">
-            <div>
-              <div className="flex items-center gap-1.5 text-lg font-black text-white font-mono">
-                {metricas.total} Proyectos
-                <span className="text-[10px] font-normal text-emerald-400 bg-emerald-500/20 px-1.5 py-0.5 rounded-full border border-emerald-500/30 flex items-center">
-                  <ArrowUpRight className="w-3 h-3" /> 12.4%
-                </span>
-              </div>
-              <p className="text-xs text-white/60 font-medium">Ordenes Totales</p>
+      {/* ═══ STAT CARDS — 4 métricas principales ═══ */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {/* Proyectos */}
+        <div className={`${glass} !bg-blue-500/[0.08] !border-blue-500/20 p-4 sm:p-5 space-y-2`}>
+          <div className="flex items-center justify-between">
+            <span className="text-3xl sm:text-4xl font-black text-blue-400 font-mono">{proyectos.length}</span>
+            <div className="w-10 h-10 rounded-xl bg-blue-500/15 flex items-center justify-center">
+              <BarChart3 className="w-5 h-5 text-blue-400" />
             </div>
-            <BarChart3 className="w-5 h-5 text-indigo-400" />
           </div>
-
-          {/* Micro-gráfica de puntos integrados */}
-          <div className="h-8 w-full flex items-end justify-between gap-1 pt-2 border-t border-white/10">
-            {[30, 45, 25, 60, 40, 75, 90].map((v, idx) => (
-              <div key={idx} className="flex-1 bg-indigo-500/30 rounded-t h-full relative flex items-end">
-                <div className="w-full bg-indigo-400 rounded-t" style={{ height: `${v}%` }} />
-              </div>
-            ))}
-          </div>
+          <p className="text-xs text-white/50 font-semibold">Proyectos</p>
+          <p className="text-[10px] text-white/35">Órdenes Totales</p>
         </div>
 
-        {/* TARJETA 2: ÁREAS EN PLANTA (AZUL CIELO) */}
-        <div className="relative overflow-hidden rounded-[24px] border border-white/20 bg-gradient-to-br from-sky-900/80 via-blue-900/60 to-slate-900/90 p-5 shadow-2xl backdrop-blur-2xl flex flex-col justify-between space-y-4">
-          <div className="absolute -top-10 -right-10 w-28 h-28 bg-sky-500/20 rounded-full blur-2xl pointer-events-none" />
-          
-          <div className="flex justify-between items-start">
-            <div>
-              <div className="flex items-center gap-1.5 text-lg font-black text-white font-mono">
-                {areas.length} Áreas
-                <span className="text-[10px] font-normal text-sky-300 bg-sky-500/20 px-1.5 py-0.5 rounded-full border border-sky-500/30 flex items-center">
-                  <ArrowUpRight className="w-3 h-3" /> 100%
-                </span>
-              </div>
-              <p className="text-xs text-white/60 font-medium">Estaciones Activas</p>
+        {/* Áreas */}
+        <div className={`${glass} !bg-cyan-500/[0.08] !border-cyan-500/20 p-4 sm:p-5 space-y-2`}>
+          <div className="flex items-center justify-between">
+            <span className="text-3xl sm:text-4xl font-black text-cyan-400 font-mono">{areas.filter(a => a.activo).length}</span>
+            <div className="w-10 h-10 rounded-xl bg-cyan-500/15 flex items-center justify-center">
+              <Layers className="w-5 h-5 text-cyan-400" />
             </div>
-            <Layers className="w-5 h-5 text-sky-400" />
           </div>
-
-          {/* Micro-línea de trayectoria */}
-          <div className="h-8 w-full flex items-center pt-2 border-t border-white/10">
-            <svg className="w-full h-full overflow-visible" viewBox="0 0 100 30">
-              <polyline
-                fill="none"
-                stroke="#38bdf8"
-                strokeWidth="2"
-                points="0,20 20,10 40,18 60,8 80,15 100,5"
-              />
-            </svg>
-          </div>
+          <p className="text-xs text-white/50 font-semibold">Áreas</p>
+          <p className="text-[10px] text-white/35">Estaciones Activas</p>
         </div>
 
-        {/* TARJETA 3: EFICIENCIA DE PRODUCCIÓN (ÁMBAR/DORADO) */}
-        <div className="relative overflow-hidden rounded-[24px] border border-white/20 bg-gradient-to-br from-amber-900/80 via-orange-900/60 to-slate-900/90 p-5 shadow-2xl backdrop-blur-2xl flex flex-col justify-between space-y-4">
-          <div className="absolute -top-10 -right-10 w-28 h-28 bg-amber-500/20 rounded-full blur-2xl pointer-events-none" />
-          
-          <div className="flex justify-between items-start">
-            <div>
-              <div className="flex items-center gap-1.5 text-lg font-black text-white font-mono">
-                {metricas.pctEficiencia}%
-                <span className="text-[10px] font-normal text-amber-300 bg-amber-500/20 px-1.5 py-0.5 rounded-full border border-amber-500/30 flex items-center">
-                  <ArrowUpRight className="w-3 h-3" /> Meta
-                </span>
-              </div>
-              <p className="text-xs text-white/60 font-medium">Tasa de Eficiencia</p>
-            </div>
-            <TrendingUp className="w-5 h-5 text-amber-400" />
-          </div>
-
-          <div className="h-8 w-full flex items-center pt-2 border-t border-white/10">
-            <div className="w-full h-2 bg-black/40 rounded-full overflow-hidden border border-white/10 p-0.5">
-              <div className="h-full bg-gradient-to-r from-amber-500 to-orange-400 rounded-full" style={{ width: `${metricas.pctEficiencia}%` }} />
+        {/* Eficiencia */}
+        <div className={`${glass} !bg-emerald-500/[0.08] !border-emerald-500/20 p-4 sm:p-5 space-y-2`}>
+          <div className="flex items-center justify-between">
+            <span className="text-3xl sm:text-4xl font-black text-emerald-400 font-mono">{eficienciaGlobal}%</span>
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center">
+              <TrendingUp className="w-5 h-5 text-emerald-400" />
             </div>
           </div>
+          <p className="text-xs text-white/50 font-semibold">Eficiencia</p>
+          <p className="text-[10px] text-white/35">Tasa de Eficiencia</p>
         </div>
 
-        {/* TARJETA 4: ATRASOS E INCIDENCIAS (ROJO/CORAL) */}
-        <div className="relative overflow-hidden rounded-[24px] border border-white/20 bg-gradient-to-br from-red-950/80 via-rose-900/60 to-slate-900/90 p-5 shadow-2xl backdrop-blur-2xl flex flex-col justify-between space-y-4">
-          <div className="absolute -top-10 -right-10 w-28 h-28 bg-red-500/20 rounded-full blur-2xl pointer-events-none" />
-          
-          <div className="flex justify-between items-start">
-            <div>
-              <div className="flex items-center gap-1.5 text-lg font-black text-white font-mono">
-                {metricas.atrasados}
-                <span className="text-[10px] font-normal text-red-300 bg-red-500/20 px-1.5 py-0.5 rounded-full border border-red-500/30 flex items-center">
-                  <ArrowDownRight className="w-3 h-3" /> Crítico
-                </span>
-              </div>
-              <p className="text-xs text-white/60 font-medium">Órdenes Atrasadas</p>
+        {/* Atrasados */}
+        <div className={`${glass} !bg-red-500/[0.08] !border-red-500/20 p-4 sm:p-5 space-y-2`}>
+          <div className="flex items-center justify-between">
+            <span className="text-3xl sm:text-4xl font-black text-red-400 font-mono">{metricasAtrasos.atrasados}</span>
+            <div className="w-10 h-10 rounded-xl bg-red-500/15 flex items-center justify-center">
+              <ShieldAlert className="w-5 h-5 text-red-400" />
             </div>
-            <ShieldAlert className="w-5 h-5 text-red-400" />
           </div>
-
-          {/* Micro-barras rojas */}
-          <div className="h-8 w-full flex items-end justify-between gap-1 pt-2 border-t border-white/10">
-            {[40, 60, 30, 80, 50, 90, 70].map((v, idx) => (
-              <div key={idx} className="flex-1 bg-red-500/20 rounded-t h-full relative flex items-end">
-                <div className="w-full bg-red-500 rounded-t" style={{ height: `${v}%` }} />
-              </div>
-            ))}
-          </div>
+          <p className="text-xs text-white/50 font-semibold">Atrasados</p>
+          <p className="text-[10px] text-white/35">Órdenes Atrasadas</p>
         </div>
-
       </div>
 
-      {/* 2. GRÁFICA PRINCIPAL "TRAFFIC" / RENDIMIENTO DE PLANTA CON SELECTOR DÍA-MES-AÑO */}
-      <div className="relative overflow-hidden rounded-[30px] border border-white/20 bg-slate-900/80 p-6 shadow-2xl backdrop-blur-2xl space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-white/10 pb-4">
+      {/* ═══ GRÁFICA DE BARRAS — Avance por Proyecto ═══ */}
+      <div className={`${glass} p-5 sm:p-6 space-y-5`}>
+        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-white/10 pb-4">
           <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Flame className="w-5 h-5 text-emerald-400" /> Flujo y Desempeño de Producción
+            <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-blue-400" /> Avance Total por Proyecto
             </h2>
-            <p className="text-xs text-white/50">Análisis comparativo de proyectos y rendimiento por área</p>
+            <p className="text-[11px] text-white/40">Cada barra representa el porcentaje de avance global</p>
           </div>
-
-          <div className="flex items-center gap-3 self-start sm:self-auto">
-            {/* SELECTOR DE RANGO ESTILO COREUI */}
-            <div className="flex items-center bg-black/40 border border-white/15 p-1 rounded-xl text-xs font-bold text-white/70">
-              <button
-                onClick={() => setTimeMode('Day')}
-                className={`px-3 py-1.5 rounded-lg transition-all ${timeMode === 'Day' ? 'bg-sky-500 text-white shadow-md' : 'hover:text-white'}`}
-              >
-                Día
-              </button>
-              <button
-                onClick={() => setTimeMode('Month')}
-                className={`px-3 py-1.5 rounded-lg transition-all ${timeMode === 'Month' ? 'bg-sky-500 text-white shadow-md' : 'hover:text-white'}`}
-              >
-                Mes
-              </button>
-              <button
-                onClick={() => setTimeMode('Year')}
-                className={`px-3 py-1.5 rounded-lg transition-all ${timeMode === 'Year' ? 'bg-sky-500 text-white shadow-md' : 'hover:text-white'}`}
-              >
-                Año
-              </button>
-            </div>
-
-            <button onClick={exportarReporte} className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white transition-colors" title="Exportar CSV">
-              <Download className="w-4 h-4" />
-            </button>
-          </div>
+          <button onClick={exportarReporte} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-bold bg-white/[0.06] border border-white/10 px-3 py-1.5 rounded-xl self-start sm:self-auto transition-colors">
+            <Download className="w-3.5 h-3.5" /> Exportar CSV
+          </button>
         </div>
 
-        {/* SVG CURVAS DE ONDA CONTINUA TIPO COREUI CON GRADIENTES DE CRISTAL */}
-        <div className="relative h-60 w-full pt-2">
-          {rendimientoAreas.length === 0 ? (
-            <p className="text-xs text-white/40 text-center py-20">Sin datos de áreas registrados.</p>
-          ) : (
-            <div className="h-full w-full relative flex flex-col justify-between">
-              <svg className="w-full h-44 overflow-visible" viewBox={`0 0 ${Math.max(100, (rendimientoAreas.length - 1) * 100)} 100`} preserveAspectRatio="none">
-                <defs>
-                  <linearGradient id="glowGreen" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#10b981" stopOpacity="0.4" />
-                    <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
-                  </linearGradient>
-                  <linearGradient id="glowSky" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.3" />
-                    <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
-                  </linearGradient>
-                </defs>
+        {proyectosFiltrados.length === 0 ? (
+          <p className="text-xs text-white/40 text-center py-12">No hay proyectos registrados o que coincidan con la búsqueda.</p>
+        ) : (
+          <div className="pt-6 pb-2">
+            <div className="h-56 sm:h-64 w-full flex items-end justify-between gap-2 sm:gap-4 overflow-x-auto pb-6 px-2 border-b border-white/[0.08] relative">
+              <div className="absolute inset-x-0 top-0 border-b border-dashed border-white/[0.08] text-[9px] font-mono text-white/25 pl-1">100%</div>
+              <div className="absolute inset-x-0 top-1/2 border-b border-dashed border-white/[0.08] text-[9px] font-mono text-white/25 pl-1">50%</div>
 
-                {/* Líneas guía horizontales */}
-                <line x1="0" y1="0" x2="1000" y2="0" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
-                <line x1="0" y1="50" x2="1000" y2="50" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
-                <line x1="0" y1="100" x2="1000" y2="100" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+              {proyectosFiltrados.map((p) => {
+                const alturaPorcentaje = Math.max(5, p.progreso);
+                const esCompletado = p.progreso === 100;
 
-                {/* Área bajo la curva verde */}
-                <polygon
-                  fill="url(#glowGreen)"
-                  points={`0,100 ${rendimientoAreas.map((a, i) => `${i * 100},${100 - a.rendimiento}`).join(' ')} ${(rendimientoAreas.length - 1) * 100},100`}
-                />
+                return (
+                  <div key={p.id} className="flex-1 min-w-[50px] max-w-[85px] h-full flex flex-col justify-end items-center group relative">
 
-                {/* Curva principal verde (Rendimiento por Área) */}
-                <polyline
-                  fill="none"
-                  stroke="#10b981"
-                  strokeWidth="3.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  points={rendimientoAreas.map((a, i) => `${i * 100},${100 - a.rendimiento}`).join(' ')}
-                  className="drop-shadow-[0_0_12px_rgba(16,185,129,0.8)]"
-                />
+                    <div className="absolute -top-12 opacity-0 group-hover:opacity-100 transition-opacity bg-[#0a0c14] border border-white/20 text-[10px] p-2.5 rounded-xl text-center shadow-xl z-20 pointer-events-none whitespace-nowrap">
+                      <p className="font-bold text-white">{p.nombre}</p>
+                      <p className="text-blue-400 font-mono">{p.progreso}% completado</p>
+                    </div>
 
-                {/* Curva secundaria azul sky */}
-                <polyline
-                  fill="none"
-                  stroke="#38bdf8"
-                  strokeWidth="2"
-                  strokeDasharray="5 5"
-                  strokeLinecap="round"
-                  points={rendimientoAreas.map((a, i) => `${i * 100},${100 - Math.max(15, a.rendimiento * 0.65)}`).join(' ')}
-                />
+                    <span className={`text-[10px] font-mono font-bold mb-1.5 group-hover:scale-110 transition-transform ${esCompletado ? 'text-emerald-400' : 'text-blue-400'}`}>
+                      {p.progreso}%
+                    </span>
 
-                {/* Nodos fosforescentes */}
-                {rendimientoAreas.map((a, i) => (
-                  <circle
-                    key={a.id}
-                    cx={i * 100}
-                    cy={100 - a.rendimiento}
-                    r="5"
-                    fill="#10b981"
-                    stroke="#ffffff"
-                    strokeWidth="2"
-                  />
-                ))}
-              </svg>
+                    <div className="w-full bg-white/[0.03] rounded-t-xl p-0.5 border-t border-x border-white/[0.08] h-full flex items-end">
+                      <div
+                        className={`w-full rounded-t-lg transition-all duration-1000 relative ${
+                          esCompletado
+                            ? 'bg-gradient-to-t from-emerald-600 via-emerald-500 to-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.3)]'
+                            : 'bg-gradient-to-t from-blue-700 via-blue-500 to-cyan-400 shadow-[0_0_15px_rgba(59,130,246,0.3)]'
+                        }`}
+                        style={{ height: `${alturaPorcentaje}%` }}
+                      >
+                        <div className="absolute top-0 inset-x-0 h-[2px] bg-white/50" />
+                      </div>
+                    </div>
 
-              {/* Leyenda Eje X */}
-              <div className="flex justify-between items-center text-[10px] text-white/60 font-semibold pt-2 border-t border-white/10">
-                {rendimientoAreas.map(a => (
-                  <div key={a.id} className="text-center truncate px-1" style={{ width: `${100 / rendimientoAreas.length}%` }}>
-                    <span className="block truncate font-bold text-white">{a.nombre}</span>
-                    <span className="text-emerald-400 font-mono">{a.rendimiento}%</span>
+                    <span className="text-[10px] font-mono text-blue-300 font-bold mt-2 truncate w-full text-center" title={p.nombre}>
+                      {p.codigo}
+                    </span>
                   </div>
-                ))}
-              </div>
+                );
+              })}
             </div>
-          )}
+          </div>
+        )}
+      </div>
+
+      {/* ═══ GRÁFICA DE LÍNEAS + INDICADOR DE ATRASOS ═══ */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
+
+        {/* Gráfica de líneas — Desempeño por Área */}
+        <div className={`lg:col-span-2 ${glass} p-5 sm:p-6 space-y-4`}>
+          <div className="border-b border-white/[0.08] pb-3 flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-blue-400" /> Desempeño Comparativo por Área
+              </h3>
+              <p className="text-[11px] text-white/40">Porcentaje promedio de trabajo terminado en cada taller</p>
+            </div>
+            <span className="text-[10px] font-mono text-blue-300 bg-blue-500/10 px-2.5 py-1 rounded-full border border-blue-500/20">
+              Análisis Comparativo
+            </span>
+          </div>
+
+          <div className="relative h-56 w-full pt-4">
+            {rendimientoAreas.length === 0 ? (
+              <p className="text-xs text-white/40 text-center py-16">Sin datos para la comparativa de áreas.</p>
+            ) : (
+              <div className="h-full w-full relative flex flex-col justify-between">
+                <svg className="w-full h-40 overflow-visible" viewBox={`0 0 ${Math.max(100, (rendimientoAreas.length - 1) * 100)} 100`} preserveAspectRatio="none">
+                  {/* Grid lines */}
+                  <line x1="0" y1="0" x2="1000" y2="0" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+                  <line x1="0" y1="50" x2="1000" y2="50" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+                  <line x1="0" y1="100" x2="1000" y2="100" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+
+                  {/* Área bajo la curva */}
+                  <polygon
+                    fill="url(#areaGradient)"
+                    points={`0,100 ${rendimientoAreas.map((a, i) => `${i * 100},${100 - a.rendimiento}`).join(' ')} ${(rendimientoAreas.length - 1) * 100},100`}
+                  />
+                  <defs>
+                    <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.2" />
+                      <stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
+                    </linearGradient>
+                  </defs>
+
+                  {/* Línea principal */}
+                  <polyline
+                    fill="none"
+                    stroke="#3b82f6"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    points={rendimientoAreas.map((a, i) => `${i * 100},${100 - a.rendimiento}`).join(' ')}
+                    className="drop-shadow-[0_4px_10px_rgba(59,130,246,0.5)] transition-all duration-1000"
+                  />
+
+                  {/* Puntos */}
+                  {rendimientoAreas.map((a, i) => (
+                    <g key={a.id}>
+                      <circle
+                        cx={i * 100}
+                        cy={100 - a.rendimiento}
+                        r="5"
+                        fill="#3b82f6"
+                        stroke="#ffffff"
+                        strokeWidth="2"
+                        className="transition-all hover:scale-150 cursor-pointer"
+                      />
+                    </g>
+                  ))}
+                </svg>
+
+                <div className="flex justify-between items-center text-[10px] text-white/50 font-semibold pt-2 border-t border-white/[0.08]">
+                  {rendimientoAreas.map(a => (
+                    <div key={a.id} className="text-center truncate px-1" style={{ width: `${100 / rendimientoAreas.length}%` }}>
+                      <span className="block truncate font-bold text-white/70">{a.nombre}</span>
+                      <span className={`font-mono ${a.rendimiento > 50 ? 'text-emerald-400' : a.rendimiento > 0 ? 'text-amber-400' : 'text-white/30'}`}>
+                        {a.rendimiento}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* 5 CONTADORES EN EL PIE DE LA GRÁFICA TIPO COREUI */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-4 border-t border-white/10 text-center">
-          <div className="p-2.5 rounded-2xl bg-white/[0.03] border border-white/10">
-            <span className="text-[10px] text-white/50 block">Proyectos Totales</span>
-            <strong className="text-sm font-bold text-white font-mono">{metricas.total} Órdenes</strong>
+        {/* Indicador de Atrasos */}
+        <div className={`${glass} p-5 sm:p-6 flex flex-col justify-between space-y-4`}>
+          <div className="flex justify-between items-center border-b border-white/[0.08] pb-3">
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-red-400" /> Indicador de Atrasos
+              </h3>
+              <p className="text-[11px] text-white/40">Cumplimiento de fechas</p>
+            </div>
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-red-500/15 text-red-300 border border-red-500/20">
+              {metricasAtrasos.pctAtraso}% Crítico
+            </span>
           </div>
-          <div className="p-2.5 rounded-2xl bg-white/[0.03] border border-white/10">
-            <span className="text-[10px] text-white/50 block">En Proceso</span>
-            <strong className="text-sm font-bold text-sky-400 font-mono">{metricas.enProceso} Órdenes</strong>
+
+          <div className="space-y-3 my-auto">
+            <div className="bg-emerald-500/[0.08] p-3 rounded-xl border border-emerald-500/15 flex justify-between items-center">
+              <span className="text-xs text-emerald-300 font-bold">A Tiempo / En Regla</span>
+              <span className="text-lg font-black text-emerald-400 font-mono">{metricasAtrasos.aTiempo}</span>
+            </div>
+
+            <div className="bg-amber-500/[0.08] p-3 rounded-xl border border-amber-500/15 flex justify-between items-center">
+              <span className="text-xs text-amber-300 font-bold">En Riesgo</span>
+              <span className="text-lg font-black text-amber-400 font-mono">{metricasAtrasos.riesgo}</span>
+            </div>
+
+            <div className="bg-red-500/[0.08] p-3 rounded-xl border border-red-500/15 flex justify-between items-center">
+              <span className="text-xs text-red-300 font-bold">Órdenes Atrasadas</span>
+              <span className="text-lg font-black text-red-400 font-mono">{metricasAtrasos.atrasados}</span>
+            </div>
           </div>
-          <div className="p-2.5 rounded-2xl bg-white/[0.03] border border-white/10">
-            <span className="text-[10px] text-white/50 block">Finalizados</span>
-            <strong className="text-sm font-bold text-emerald-400 font-mono">{metricas.completados} Órdenes</strong>
+
+          <div className="pt-2 border-t border-white/[0.08] text-[10px] text-white/40 text-center">
+            Total de pedidos en análisis: <strong className="text-white/70">{proyectos.length}</strong>
           </div>
-          <div className="p-2.5 rounded-2xl bg-white/[0.03] border border-white/10">
-            <span className="text-[10px] text-white/50 block">Atrasados</span>
-            <strong className="text-sm font-bold text-red-400 font-mono">{metricas.atrasados} Órdenes</strong>
-          </div>
-          <div className="p-2.5 rounded-2xl bg-white/[0.03] border border-white/10 col-span-2 sm:col-span-1">
-            <span className="text-[10px] text-white/50 block">Eficiencia Global</span>
-            <strong className="text-sm font-bold text-amber-300 font-mono">{metricas.pctEficiencia}%</strong>
-          </div>
+        </div>
+
+      </div>
+
+      {/* ═══ RESUMEN INFERIOR — métricas clave ═══ */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+        <div className={`${glass} p-4 text-center space-y-1`}>
+          <p className="text-[11px] text-white/40 font-medium">Proyectos Totales</p>
+          <p className="text-xl font-black text-white font-mono">{proyectos.length} <span className="text-xs font-normal text-white/40">órdenes</span></p>
+        </div>
+        <div className={`${glass} p-4 text-center space-y-1`}>
+          <p className="text-[11px] text-white/40 font-medium">En Proceso</p>
+          <p className="text-xl font-black text-blue-400 font-mono">{proyectos.filter(p => p.progreso > 0 && p.progreso < 100).length} <span className="text-xs font-normal text-white/40">órdenes</span></p>
+        </div>
+        <div className={`${glass} p-4 text-center space-y-1`}>
+          <p className="text-[11px] text-white/40 font-medium">Finalizados</p>
+          <p className="text-xl font-black text-emerald-400 font-mono">{proyectos.filter(p => p.progreso === 100).length} <span className="text-xs font-normal text-white/40">órdenes</span></p>
+        </div>
+        <div className={`${glass} p-4 text-center space-y-1`}>
+          <p className="text-[11px] text-white/40 font-medium">Atrasados</p>
+          <p className="text-xl font-black text-red-400 font-mono">{metricasAtrasos.atrasados} <span className="text-xs font-normal text-white/40">órdenes</span></p>
+        </div>
+        <div className={`${glass} col-span-2 sm:col-span-1 p-4 text-center space-y-1`}>
+          <p className="text-[11px] text-white/40 font-medium">Eficiencia Global</p>
+          <p className="text-xl font-black text-cyan-400 font-mono">{eficienciaGlobal}%</p>
         </div>
       </div>
 
-      {/* 3. BLOQUE INFERIOR DE TARJETAS HORIZONTALES CON GRADIENTES CROMÁTICOS DE SULA MOB */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        
-        {/* TARJETA CANAL 1: ÓRDENES EN PLANTA */}
-        <div className="relative overflow-hidden rounded-[24px] border border-white/20 bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-900/80 p-5 shadow-xl backdrop-blur-2xl flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs uppercase tracking-wider font-bold text-indigo-300">Órdenes en Planta</span>
-            <h3 className="text-xl font-black text-white font-mono">{metricas.enProceso} Fabricándose</h3>
-            <p className="text-[11px] text-white/50">Monitoreo activo por estaciones</p>
-          </div>
-          <div className="w-12 h-12 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0 text-indigo-400">
-            <Clock className="w-6 h-6" />
-          </div>
-        </div>
-
-        {/* TARJETA CANAL 2: CUMPLIMIENTO */}
-        <div className="relative overflow-hidden rounded-[24px] border border-white/20 bg-gradient-to-r from-emerald-950 via-slate-900 to-emerald-900/80 p-5 shadow-xl backdrop-blur-2xl flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs uppercase tracking-wider font-bold text-emerald-300">Entregas Listas</span>
-            <h3 className="text-xl font-black text-white font-mono">{metricas.completados} Concluidas</h3>
-            <p className="text-[11px] text-white/50">Control de calidad aprobado</p>
-          </div>
-          <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center shrink-0 text-emerald-400">
-            <CheckCircle2 className="w-6 h-6" />
-          </div>
-        </div>
-
-        {/* TARJETA CANAL 3: INCIDENCIAS */}
-        <div className="relative overflow-hidden rounded-[24px] border border-white/20 bg-gradient-to-r from-red-950 via-slate-900 to-red-900/80 p-5 shadow-xl backdrop-blur-2xl flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs uppercase tracking-wider font-bold text-red-300">Nivel de Riesgo</span>
-            <h3 className="text-xl font-black text-white font-mono">{metricas.atrasados} Alertas</h3>
-            <p className="text-[11px] text-white/50">Atención urgente requerida</p>
-          </div>
-          <div className="w-12 h-12 rounded-2xl bg-red-500/20 border border-red-400/30 flex items-center justify-center shrink-0 text-red-400">
-            <AlertTriangle className="w-6 h-6" />
-          </div>
-        </div>
-
-      </div>
-
-      {/* 4. TABLA GENERAL DE PROYECTOS REGISTRADOS */}
-      <div className="relative overflow-hidden rounded-[30px] border border-white/20 bg-slate-900/80 p-6 shadow-2xl backdrop-blur-2xl space-y-4">
-        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-white/10 pb-3">
+      {/* ═══ CRONOLOGÍA DE PROYECTOS ═══ */}
+      <div className={`${glass} p-5 sm:p-6 space-y-5`}>
+        <div className="border-b border-white/[0.08] pb-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
           <div>
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-sky-400" /> Catálogo de Proyectos Activos
+              <Layers className="w-4 h-4 text-blue-400" /> Avances por Fechas y Programación
             </h3>
-            <p className="text-[11px] text-white/50">Desglose de porcentaje y cliente de cada pedido</p>
+            <p className="text-[11px] text-white/40">Progreso registrado según fecha compromiso de entrega</p>
           </div>
-          <span className="text-xs font-mono font-bold text-sky-300 bg-sky-500/10 px-3 py-1 rounded-xl border border-sky-500/20 self-start sm:self-auto">
-            {proyectosFiltrados.length} Registros
+          <span className="text-[10px] font-mono text-white/50 bg-white/[0.06] px-3 py-1 rounded-full border border-white/[0.08]">
+            Línea del Tiempo
           </span>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-white/10 text-white/50 font-bold uppercase text-[10px] tracking-wider">
-                <th className="pb-3">Código</th>
-                <th className="pb-3">Proyecto</th>
-                <th className="pb-3">Cliente</th>
-                <th className="pb-3">Avance</th>
-                <th className="pb-3 text-right">Estatus</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5 text-white/80">
-              {proyectosFiltrados.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-8 text-center text-white/40">
-                    No se encontraron proyectos.
-                  </td>
-                </tr>
-              ) : (
-                proyectosFiltrados.slice(0, 6).map((p) => {
-                  const estaFinalizado = p.progreso === 100;
-                  return (
-                    <tr key={p.id} className="hover:bg-white/[0.03] transition-colors">
-                      <td className="py-3 font-mono font-bold text-sky-400">{p.codigo}</td>
-                      <td className="py-3 font-bold text-white max-w-[180px] truncate">{p.nombre}</td>
-                      <td className="py-3 text-white/60 max-w-[140px] truncate">{p.cliente || 'General'}</td>
-                      <td className="py-3 font-mono font-bold text-emerald-400">{p.progreso}%</td>
-                      <td className="py-3 text-right">
-                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${
-                          estaFinalizado
-                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                            : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                        }`}>
-                          {estaFinalizado ? 'Completado' : 'En Planta'}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+          {avancesPorFechas.map((item) => (
+            <div
+              key={item.id}
+              className={`p-4 rounded-xl ${glass} !border-white/[0.08] hover:!border-blue-500/30 transition-all flex items-center justify-between gap-3`}
+            >
+              <div className="space-y-1 min-w-0">
+                <span className="text-[10px] text-blue-400 font-mono font-bold block">{item.codigo}</span>
+                <h4 className="text-xs font-bold text-white truncate" title={item.nombre}>{item.nombre}</h4>
+                <div className="flex items-center gap-1.5 text-[10px] text-white/40">
+                  <Clock className="w-3 h-3 text-amber-400" />
+                  <span>Entrega: {item.fechaTarget}</span>
+                </div>
+              </div>
+
+              <div className="text-right shrink-0">
+                <div className={`text-base font-black font-mono ${item.progreso === 100 ? 'text-emerald-400' : item.progreso > 50 ? 'text-blue-400' : 'text-amber-400'}`}>
+                  {item.progreso}%
+                </div>
+                <div className="w-12 h-1.5 bg-white/[0.06] rounded-full overflow-hidden border border-white/[0.08] mt-1">
+                  <div className={`h-full rounded-full ${item.progreso === 100 ? 'bg-emerald-400' : item.progreso > 50 ? 'bg-blue-400' : 'bg-amber-400'}`} style={{ width: `${item.progreso}%` }} />
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 

@@ -68,6 +68,11 @@ export default function ProyectosPage() {
   // Valores temporales al editar: { "productoId_areaId_hechas": "50", "productoId_areaId_meta": "753" }
   const [editValues, setEditValues] = useState<Record<string, string>>({});
 
+  // Modal Vista de Pedido (solo lectura — la "hoja" del pedido)
+  const [viewProyecto, setViewProyecto] = useState<Proyecto | null>(null);
+  const [viewProductos, setViewProductos] = useState<ProductoDB[]>([]);
+  const [loadingView, setLoadingView] = useState(false);
+
   const [isParsingPdf, setIsParsingPdf] = useState(false);
   const [pdfSuccess, setPdfSuccess] = useState('');
   const [rawPdfText, setRawPdfText] = useState('');
@@ -210,6 +215,20 @@ export default function ProyectosPage() {
     await fetchProyectos();
     setActiveTab('lista');
   }
+
+  // Abrir modal de VISTA del pedido (hoja de datos, solo lectura)
+  const openVistaPedido = async (prj: Proyecto) => {
+    setViewProyecto(prj);
+    setLoadingView(true);
+
+    const { data: prodData } = await supabase
+      .from('proyecto_productos')
+      .select('*')
+      .eq('proyecto_id', prj.id);
+
+    setViewProductos((prodData || []) as ProductoDB[]);
+    setLoadingView(false);
+  };
 
   const openProyectoDetalle = async (prj: Proyecto) => {
     setSelectedProyecto(prj);
@@ -471,7 +490,7 @@ export default function ProyectosPage() {
             onClick={() => setActiveTab('lista')}
             className={`flex-1 md:flex-initial flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2.5 rounded-lg sm:rounded-xl text-xs font-semibold transition-all ${
               activeTab === 'lista'
-                ? 'bg-red-600 text-white shadow-lg shadow-red-950/50'
+                ? 'bg-blue-600 text-white shadow-lg shadow-blue-950/50'
                 : 'text-white/70 hover:text-white hover:bg-white/10'
             }`}
           >
@@ -482,7 +501,7 @@ export default function ProyectosPage() {
             onClick={() => setActiveTab('crear')}
             className={`flex-1 md:flex-initial flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2.5 rounded-lg sm:rounded-xl text-xs font-semibold transition-all ${
               activeTab === 'crear'
-                ? 'bg-red-600 text-white shadow-lg shadow-red-950/50'
+                ? 'bg-blue-600 text-white shadow-lg shadow-blue-950/50'
                 : 'text-white/70 hover:text-white hover:bg-white/10'
             }`}
           >
@@ -511,7 +530,7 @@ export default function ProyectosPage() {
               <div key={p.id} className="p-4 space-y-3 active:bg-white/[0.04] transition-colors">
                 {/* Fila superior: Código + Prioridad */}
                 <div className="flex items-center justify-between">
-                  <span className="font-mono text-red-400 font-bold text-sm">{p.codigo}</span>
+                  <span className="font-mono text-blue-400 font-bold text-sm">{p.codigo}</span>
                   <span className="px-2.5 py-0.5 rounded-lg border bg-white/10 text-white/60 border-white/10 uppercase text-[10px] font-bold tracking-wider">
                     {p.prioridad}
                   </span>
@@ -541,10 +560,17 @@ export default function ProyectosPage() {
                 {/* Botones de acción */}
                 <div className="flex gap-2 pt-1">
                   <button
+                    onClick={() => openVistaPedido(p)}
+                    className="w-10 h-10 bg-blue-500/15 hover:bg-blue-500/30 text-blue-300 border border-blue-400/30 rounded-xl inline-flex items-center justify-center backdrop-blur-md transition-all"
+                    title="Ver pedido"
+                  >
+                    <Eye className="w-4 h-4" />
+                  </button>
+                  <button
                     onClick={() => openProyectoDetalle(p)}
                     className="flex-1 bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2.5 rounded-xl border border-white/15 inline-flex items-center justify-center gap-1.5 backdrop-blur-md transition-all"
                   >
-                    <Eye className="w-3.5 h-3.5 text-sky-400" /> Capturar Piezas
+                    <Factory className="w-3.5 h-3.5 text-sky-400" /> Capturar Piezas
                   </button>
                   <button
                     onClick={() => handleEliminarProyecto(p)}
@@ -576,7 +602,7 @@ export default function ProyectosPage() {
               <tbody className="divide-y divide-white/10">
                 {filtrados.map(p => (
                   <tr key={p.id} className="hover:bg-white/[0.06] transition-colors">
-                    <td className="p-4 font-mono text-red-400 font-bold">{p.codigo}</td>
+                    <td className="p-4 font-mono text-blue-400 font-bold">{p.codigo}</td>
                     <td className="p-4 font-semibold text-white">{p.nombre}</td>
                     <td className="p-4 text-white/60">{p.cliente || '—'}</td>
                     <td className="p-4 uppercase text-[10px] font-bold">
@@ -598,10 +624,17 @@ export default function ProyectosPage() {
                     <td className="p-4 text-right">
                       <div className="flex justify-end items-center gap-2">
                         <button
+                          onClick={() => openVistaPedido(p)}
+                          className="w-8 h-8 bg-blue-500/15 hover:bg-blue-500/30 text-blue-300 border border-blue-400/30 rounded-lg inline-flex items-center justify-center backdrop-blur-md transition-all"
+                          title="Ver pedido"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button
                           onClick={() => openProyectoDetalle(p)}
                           className="bg-white/10 hover:bg-white/20 text-white text-xs px-3.5 py-1.5 rounded-xl border border-white/15 inline-flex items-center gap-1.5 backdrop-blur-md transition-all"
                         >
-                          <Eye className="w-3.5 h-3.5 text-sky-400" /> Capturar Piezas
+                          <Factory className="w-3.5 h-3.5 text-sky-400" /> Capturar Piezas
                         </button>
                         <button
                           onClick={() => handleEliminarProyecto(p)}
@@ -621,14 +654,14 @@ export default function ProyectosPage() {
         <div className="space-y-6">
           <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7]">
             <div className="flex flex-col sm:flex-row items-center gap-4 p-5 sm:p-6">
-              <div className="w-12 h-12 rounded-2xl bg-red-950/60 border border-red-500/40 flex items-center justify-center text-red-400 flex-shrink-0">
+              <div className="w-12 h-12 rounded-2xl bg-blue-950/60 border border-blue-500/40 flex items-center justify-center text-blue-400 flex-shrink-0">
                 {isParsingPdf ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileText className="w-5 h-5" />}
               </div>
               <div className="text-center sm:text-left flex-1">
                 <h3 className="font-bold text-white text-sm">Cargar Pedido PDF</h3>
                 <p className="text-xs text-white/60 mt-0.5">Sube el PDF del pedido Click Balance para auto-llenar todos los campos.</p>
               </div>
-              <label className="cursor-pointer bg-red-600 hover:bg-red-700 text-white text-xs px-5 py-3 rounded-2xl font-bold inline-flex items-center gap-2 shadow-lg shadow-red-950/50 flex-shrink-0 transition-colors">
+              <label className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white text-xs px-5 py-3 rounded-2xl font-bold inline-flex items-center gap-2 shadow-lg shadow-blue-950/50 flex-shrink-0 transition-colors">
                 <FileUp className="w-4 h-4" /> Cargar Orden PDF
                 <input type="file" accept="application/pdf" onChange={handlePdfUpload} className="hidden" />
               </label>
@@ -1014,6 +1047,126 @@ export default function ProyectosPage() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ MODAL VISTA DE PEDIDO (la "hoja" del pedido, solo lectura) ═══ */}
+      {viewProyecto && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+          <div className="relative w-full max-w-2xl bg-[#0E131F] border border-white/20 rounded-[20px] sm:rounded-[30px] p-5 sm:p-8 space-y-5 shadow-2xl my-4 sm:my-8 max-h-[90vh] overflow-y-auto">
+            {/* Botón cerrar */}
+            <button
+              onClick={() => setViewProyecto(null)}
+              className="absolute top-5 right-5 p-2 rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Encabezado tipo hoja */}
+            <div className="text-center border-b border-white/10 pb-5">
+              <div className="inline-flex items-center gap-2 bg-blue-500/10 border border-blue-400/30 px-4 py-1.5 rounded-full mb-3">
+                <FileText className="w-4 h-4 text-blue-400" />
+                <span className="text-xs font-bold text-blue-300 uppercase tracking-wider">Pedido</span>
+              </div>
+              <h2 className="text-xl sm:text-2xl font-bold text-white">{viewProyecto.nombre}</h2>
+              <p className="text-sm font-mono text-blue-400 mt-1">{viewProyecto.codigo}</p>
+            </div>
+
+            {/* Datos generales */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white/[0.04] border border-white/10 rounded-xl p-3.5">
+                <p className="text-[10px] text-white/40 uppercase font-bold mb-1">Cliente</p>
+                <p className="text-sm text-white font-semibold">{viewProyecto.cliente || '—'}</p>
+              </div>
+              <div className="bg-white/[0.04] border border-white/10 rounded-xl p-3.5">
+                <p className="text-[10px] text-white/40 uppercase font-bold mb-1">Prioridad</p>
+                <p className={`text-sm font-bold uppercase ${
+                  viewProyecto.prioridad === 'urgente' ? 'text-red-400' :
+                  viewProyecto.prioridad === 'alta' ? 'text-amber-400' :
+                  viewProyecto.prioridad === 'media' ? 'text-sky-400' : 'text-white/60'
+                }`}>{viewProyecto.prioridad}</p>
+              </div>
+              <div className="bg-white/[0.04] border border-white/10 rounded-xl p-3.5">
+                <p className="text-[10px] text-white/40 uppercase font-bold mb-1">Progreso Global</p>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 h-2 bg-black/40 rounded-full overflow-hidden border border-white/10">
+                    <div className="h-full bg-gradient-to-r from-sky-500 via-indigo-400 to-emerald-400 transition-all" style={{ width: `${viewProyecto.progreso}%` }} />
+                  </div>
+                  <span className="text-sm font-mono font-bold text-emerald-400">{viewProyecto.progreso}%</span>
+                </div>
+              </div>
+              {/* Parsear la descripcion que contiene fecha, entrega, ref, elaboró */}
+              {viewProyecto.descripcion && (() => {
+                const campos = viewProyecto.descripcion!.split(' | ');
+                return campos.map((campo, i) => {
+                  const [label, ...rest] = campo.split(': ');
+                  const valor = rest.join(': ');
+                  return (
+                    <div key={i} className="bg-white/[0.04] border border-white/10 rounded-xl p-3.5">
+                      <p className="text-[10px] text-white/40 uppercase font-bold mb-1">{label}</p>
+                      <p className="text-sm text-white font-semibold">{valor || '—'}</p>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+
+            {/* Lista de partidas/productos */}
+            <div className="space-y-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-white/60 flex items-center gap-2">
+                <ListFilter className="w-4 h-4 text-blue-400" /> Partidas del Pedido
+              </h3>
+
+              {loadingView ? (
+                <div className="py-8 flex justify-center items-center gap-2 text-white/50">
+                  <Loader2 className="w-5 h-5 animate-spin text-blue-400" /> Cargando partidas...
+                </div>
+              ) : viewProductos.length === 0 ? (
+                <p className="text-sm text-white/40 text-center py-6">No se encontraron partidas para este pedido.</p>
+              ) : (
+                <div className="bg-white/[0.03] border border-white/10 rounded-xl overflow-hidden">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-white/[0.06] text-white/50 uppercase text-[10px] font-bold tracking-wider">
+                      <tr>
+                        <th className="p-3 w-10 text-center">#</th>
+                        <th className="p-3">Producto / Descripción</th>
+                        <th className="p-3 text-center">Cant.</th>
+                        <th className="p-3 text-center">Avance</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {viewProductos.map((prod, idx) => (
+                        <tr key={prod.id} className="text-white/80">
+                          <td className="p-3 text-center font-mono text-white/40 text-xs">{idx + 1}</td>
+                          <td className="p-3 font-semibold text-white text-[13px]">{prod.nombre}</td>
+                          <td className="p-3 text-center font-mono font-bold text-sky-300">{prod.cantidad}</td>
+                          <td className="p-3 text-center">
+                            <span className={`font-mono font-bold text-xs ${
+                              prod.progreso >= 100 ? 'text-emerald-400' :
+                              prod.progreso > 0 ? 'text-sky-400' : 'text-white/30'
+                            }`}>{prod.progreso}%</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Botón para ir a capturar piezas desde aquí */}
+            <div className="flex justify-center pt-2">
+              <button
+                onClick={() => {
+                  setViewProyecto(null);
+                  openProyectoDetalle(viewProyecto);
+                }}
+                className="bg-white/10 hover:bg-white/20 text-white text-xs px-5 py-2.5 rounded-xl border border-white/15 inline-flex items-center gap-2 backdrop-blur-md transition-all"
+              >
+                <Factory className="w-4 h-4 text-sky-400" /> Ir a Capturar Piezas
+              </button>
+            </div>
           </div>
         </div>
       )}
