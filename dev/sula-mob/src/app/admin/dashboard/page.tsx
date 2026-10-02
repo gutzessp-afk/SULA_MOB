@@ -190,16 +190,79 @@ export default function DashboardPage() {
   }, [proyectos]);
 
   const exportarReporte = () => {
-    const headers = ['Codigo', 'Proyecto', 'Cliente', 'Progreso %'];
-    const rows = proyectos.map(p => [p.codigo, `"${p.nombre}"`, `"${p.cliente || 'General'}"`, `${p.progreso}%`]);
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const fecha = new Date();
+    const fechaStr = fecha.toISOString().slice(0, 10);
+    const horaStr = fecha.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+
+    const lines: string[] = [];
+
+    // ═══ ENCABEZADO DEL REPORTE ═══
+    lines.push('REPORTE DE PRODUCCIÓN — SULA MOB');
+    lines.push(`Fecha de generación:,${fechaStr} ${horaStr}`);
+    lines.push(`Total de proyectos:,${proyectos.length}`);
+    lines.push(`Eficiencia global:,${eficienciaGlobal}%`);
+    lines.push('');
+
+    // ═══ SECCIÓN 1: RESUMEN EJECUTIVO ═══
+    lines.push('═══ RESUMEN EJECUTIVO ═══');
+    lines.push('Métrica,Valor');
+    lines.push(`Proyectos totales,${proyectos.length}`);
+    lines.push(`En proceso,${proyectos.filter(p => p.progreso > 0 && p.progreso < 100).length}`);
+    lines.push(`Finalizados,${proyectos.filter(p => p.progreso === 100).length}`);
+    lines.push(`Sin iniciar,${proyectos.filter(p => p.progreso === 0).length}`);
+    lines.push(`Atrasados,${metricasAtrasos.atrasados}`);
+    lines.push(`En riesgo,${metricasAtrasos.riesgo}`);
+    lines.push(`A tiempo,${metricasAtrasos.aTiempo}`);
+    lines.push(`% de atraso,${metricasAtrasos.pctAtraso}%`);
+    lines.push(`Eficiencia global,${eficienciaGlobal}%`);
+    lines.push('');
+
+    // ═══ SECCIÓN 2: DETALLE POR PROYECTO ═══
+    lines.push('═══ DETALLE POR PROYECTO ═══');
+    lines.push('Código,Proyecto,Cliente,Prioridad,Progreso %,Estado,Fecha Entrega');
+    proyectos.forEach(p => {
+      let fechaEntrega = '—';
+      if (p.descripcion && p.descripcion.includes('Entrega:')) {
+        const match = p.descripcion.match(/Entrega:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/);
+        if (match?.[1]) fechaEntrega = match[1];
+      }
+
+      let estado = 'Sin iniciar';
+      if (p.progreso === 100) estado = 'Finalizado';
+      else if (p.progreso > 0) estado = 'En proceso';
+
+      // Verificar atraso
+      if (fechaEntrega !== '—' && p.progreso < 100) {
+        const fEntrega = new Date(fechaEntrega);
+        if (fEntrega < new Date()) estado = '⚠ ATRASADO';
+      }
+
+      lines.push(`${p.codigo},"${p.nombre}","${p.cliente || 'General'}",${(p.prioridad || 'media').toUpperCase()},${p.progreso}%,${estado},${fechaEntrega}`);
+    });
+    lines.push('');
+
+    // ═══ SECCIÓN 3: RENDIMIENTO POR ÁREA ═══
+    lines.push('═══ RENDIMIENTO POR ÁREA / ESTACIÓN ═══');
+    lines.push('Área,Peso %,Rendimiento %,Piezas Completadas,Piezas Totales');
+    rendimientoAreas.forEach(a => {
+      lines.push(`"${a.nombre}",${a.peso || 0}%,${a.rendimiento}%,${a.piezasCompletadas},${a.piezasTotales}`);
+    });
+    lines.push('');
+
+    // ═══ PIE DE REPORTE ═══
+    lines.push('═══ FIN DEL REPORTE ═══');
+    lines.push(`Generado por SULA MOB — ${fechaStr}`);
+
+    const csvContent = '﻿' + lines.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Reporte_Produccion_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.href = url;
+    link.download = `Reporte_Produccion_SULA_${fechaStr}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   /* ── Glass card base ── */
