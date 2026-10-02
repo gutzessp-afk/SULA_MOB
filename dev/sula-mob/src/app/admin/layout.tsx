@@ -18,6 +18,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
+import MobiChat from '@/components/admin/MobiChat';
 
 /* ── Secciones del menú ── */
 
@@ -168,7 +169,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
       <div
         className="fixed inset-0 pointer-events-none opacity-[0.22] bg-cover bg-center z-0"
-        style={{ backgroundImage: "url('/images/fond.png')" }}
+        style={{ backgroundImage: "url('/fondo_dashboard.jpeg')" }}
       />
 
       <div className="fixed -top-32 -left-20 w-[420px] h-[420px] rounded-full bg-blue-600/[0.07] blur-[130px] pointer-events-none z-0" />
@@ -272,6 +273,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           {children}
         </div>
       </main>
+
+      <MobiChat />
     </div>
   );
 }
