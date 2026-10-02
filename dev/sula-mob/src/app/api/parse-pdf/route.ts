@@ -18,6 +18,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 /* ═══════════════════════════════════════
+   POLYFILLS — DOMMatrix, Path2D e ImageData
+   no existen en Node.js serverless. pdf-parse v2
+   (pdfjs-dist) los usa al cargarse aunque solo
+   extraigamos texto, así que bastan clases vacías.
+   Deben definirse ANTES del require('pdf-parse').
+   ═══════════════════════════════════════ */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const g = globalThis as any
+if (typeof g.DOMMatrix === 'undefined') g.DOMMatrix = class DOMMatrix {}
+if (typeof g.Path2D === 'undefined') g.Path2D = class Path2D {}
+if (typeof g.ImageData === 'undefined') g.ImageData = class ImageData {}
+
+/* ═══════════════════════════════════════
    TIPOS (los mismos que en parse-pedido.ts)
    ═══════════════════════════════════════ */
 
@@ -44,14 +58,30 @@ interface PedidoData {
    (sin worker — compatible con Vercel serverless)
 
    pdf-parse v1.1.1 trae su propio pdf.js integrado.
-   No necesita workers, no necesita polyfills,
-   no necesita configuración especial. Solo funciona.
+   No necesita workers ni configuración especial.
+
+   Si la versión instalada es pdf-parse v2 (exporta la
+   clase PDFParse en vez de una función) se usa su API;
+   el texto sale con tabs y marcas "-- 1 of 2 --", que
+   parseText() también entiende.
    ═══════════════════════════════════════ */
 
 async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
-  // pdf-parse espera un Buffer, no un Uint8Array
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const pdfParse = require('pdf-parse')
+
+  // pdf-parse v2
+  if (typeof pdfParse !== 'function' && typeof pdfParse.PDFParse === 'function') {
+    const parser = new pdfParse.PDFParse({ data: pdfBytes })
+    try {
+      const data = await parser.getText()
+      return data.text
+    } finally {
+      await parser.destroy()
+    }
+  }
+
+  // pdf-parse v1 espera un Buffer, no un Uint8Array
   const data = await pdfParse(Buffer.from(pdfBytes))
   return data.text
 }
@@ -162,6 +192,11 @@ function parseText(raw: string): PedidoData {
   // ── Elaborado por ──
   const elabMatch = raw.match(/Elaborado\s+por:?\s*\n\s*\*?\s*\n\s*(?:GRUPO\s+AVANT\s+CIM\s*\n\s*)?([^\n]+)/i)
   if (elabMatch) result.elaborado_por = elabMatch[1].trim()
+  // Sin la línea intermedia ("*" o vacía): "Elaborado por:\nGRUPO AVANT CIM\nNombre"
+  if (!result.elaborado_por) {
+    const el1b = raw.match(/Elaborado\s+por:?[ \t]*\n\s*GRUPO\s+AVANT\s+CIM[ \t]*\n\s*([^\n]+)/i)
+    if (el1b) result.elaborado_por = el1b[1].trim()
+  }
   if (!result.elaborado_por) {
     const el2 = raw.match(/Elaborado\s+por:?\s+([A-ZÁÉÍÓÚÑa-záéíóúñ][^\n]{2,})/i)
     if (el2) result.elaborado_por = el2[1].trim()
@@ -169,6 +204,34 @@ function parseText(raw: string): PedidoData {
   if (!result.elaborado_por) {
     const el3 = raw.match(/Elaborado\s+por:?\s*\n(?:[^\n]*\n){0,4}?\s*([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,4})/i)
     if (el3) result.elaborado_por = el3[1].trim()
+  }
+
+  // ── Formato "hoja de producción" (PDF generado por la app, sin precios) ──
+  // Las 3 etiquetas vienen juntas y los valores debajo, en este orden:
+  //   Elaborado por:\nFecha de Entrega:\nReferencia / Sucursal:\n
+  //   <elaborado>\n<pedido>\n<cliente>\n<fecha>\n<fecha entrega>\n<referencia>
+  // Los regex de arriba asumen "etiqueta → valor", así que aquí se
+  // reasignan los campos por posición.
+  const hojaMatch = raw.match(/Elaborado\s+por:?[ \t]*\n\s*Fecha\s+de\s+Entrega:?[ \t]*\n\s*Referencia\s*\/?\s*Sucursal:?[ \t]*\n([\s\S]*?)(?=\n\s*[\d,]+\.\d{2}\s*\d[\d-]*-[\d-]+|\n\s*--\s*\d+\s+of\s+\d+\s*--|\n\s*GRUPO\s+AVANT\s+CIM\s*\n\s*Elaborado|$)/i)
+  if (hojaMatch) {
+    const hojaFechas = hojaMatch[1].match(/\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4}/g) || []
+    const hojaCampos = hojaMatch[1]
+      .replace(/\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}(?::\d{2})?)?|\d{2}\/\d{2}\/\d{4}/g, '\n')
+      .split(/[\n\t]/)
+      .map(c => c.trim())
+      .filter(Boolean)
+    const numIdx = hojaCampos.findIndex(c => /^\d{4,6}$/.test(c))
+    const antes = numIdx >= 0 ? hojaCampos.slice(0, numIdx) : []
+    const despues = hojaCampos.slice(numIdx + 1)
+
+    if (numIdx >= 0) result.numero_pedido = hojaCampos[numIdx]
+    // Versiones anteriores de la hoja ponían el pedido antes de "elaborado"
+    if (antes.length === 0 && despues.length >= 3) antes.push(despues.shift() as string)
+    result.elaborado_por = antes[0] || ''
+    result.cliente = despues[0] || ''
+    result.referencia_sucursal = despues[1] || ''
+    result.fecha = hojaFechas[0] || ''
+    result.fecha_entrega = hojaFechas[1] || ''
   }
 
   // ── Partidas (tabla de items) ──
@@ -195,6 +258,9 @@ function parseText(raw: string): PedidoData {
       inPageHeader = false
       mergedLines.push(trimmed)
     } else if (inPageHeader) {
+      // El encabezado repetido termina en "Referencia / Sucursal:"; lo que
+      // sigue es la continuación de la descripción cortada por el salto de página
+      if (/^Referencia\s*\/?\s*Sucursal:?$/i.test(trimmed)) inPageHeader = false
       continue
     } else if (
       mergedLines.length > 0 &&
@@ -244,12 +310,14 @@ function parseText(raw: string): PedidoData {
     const partidaRegex3 = /^(Pieza|Juego|Metro|Kg|Litro|Servicio)([\d,]+\.\d{2})([\d,]+\.\d{2})([\d,]+\.\d{2})([\d][\d-]+-[\d-]+)$/i
     const rawLines = raw.split('\n')
     let idx = 0
+    let afterPageHeader = false
 
     while (idx < rawLines.length) {
       const line = rawLines[idx].trim()
       const m3 = line.match(partidaRegex3)
 
       if (m3) {
+        afterPageHeader = false
         // Recolectar descripción de las líneas siguientes
         const descParts: string[] = []
         idx++
@@ -269,6 +337,52 @@ function parseText(raw: string): PedidoData {
           cantidad: Math.round(parseFloat(m3[2].replace(/,/g, ''))),
           clave: m3[5],
           unidad: m3[1],
+          descripcion: descParts.join(' ').replace(/\s+/g, ' ').trim(),
+        })
+      } else {
+        // Descripción cortada por salto de página: continúa después del
+        // encabezado repetido (que termina en "Referencia / Sucursal:")
+        if (afterPageHeader && line && result.partidas.length > 0) {
+          const last = result.partidas[result.partidas.length - 1]
+          last.descripcion = `${last.descripcion} ${line}`.replace(/\s+/g, ' ').trim()
+        }
+        if (/^Referencia\s*\/?\s*Sucursal:?$/i.test(line)) afterPageHeader = true
+        idx++
+      }
+    }
+  }
+
+  // ── Fallback: hoja de producción (sin precios) ──
+  // pdf-parse v1: "3.002-1-0072-0001Pieza" y la descripción en las líneas siguientes
+  // pdf-parse v2: "3.00\t2-1-0072-0001\tPieza\tDESCRIPCIÓN..."
+  // La cantidad siempre tiene 2 decimales (.XX), así se separa de la clave.
+  if (result.partidas.length === 0) {
+    const partidaRegex4 = /^([\d,]+\.\d{2})\s*(\d[\d-]*-[\d-]+)\s*(Pieza|Juego|Metro|Kg|Litro|Servicio)\s*(.*)$/i
+    const rawLines = raw.split('\n')
+    let idx = 0
+
+    while (idx < rawLines.length) {
+      const m4 = rawLines[idx].trim().match(partidaRegex4)
+
+      if (m4) {
+        const descParts: string[] = m4[4] ? [m4[4]] : []
+        idx++
+        while (idx < rawLines.length) {
+          const nextLine = rawLines[idx].trim()
+          if (
+            !nextLine ||
+            partidaRegex4.test(nextLine) ||
+            /^--\s*\d+\s+of\s+\d+\s*--$/.test(nextLine) ||
+            /^(GRUPO\s+AVANT|Subtotal|IVA|Total|Descuento|Moneda|Condici|Elaborado|Fecha|Referencia|Pedido)/i.test(nextLine)
+          ) break
+          descParts.push(nextLine)
+          idx++
+        }
+
+        result.partidas.push({
+          cantidad: Math.round(parseFloat(m4[1].replace(/,/g, ''))),
+          clave: m4[2],
+          unidad: m4[3],
           descripcion: descParts.join(' ').replace(/\s+/g, ' ').trim(),
         })
       } else {
@@ -299,7 +413,6 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer()
     const pdfBytes = new Uint8Array(arrayBuffer)
 
-    // Extraer texto usando pdfjs-dist directo (sin worker)
     const text = await extractTextFromPdf(pdfBytes)
 
     if (!text || text.trim().length < 20) {
