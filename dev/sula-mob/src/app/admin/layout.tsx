@@ -18,6 +18,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
+import MobiChat from '@/components/admin/MobiChat';
 
 /* ── Secciones del menú ── */
 
@@ -71,18 +72,22 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   const renderNav = (onNavigate?: () => void) => (
     <>
-      <div className="flex justify-center pt-7 pb-5">
-        <Image
-          src="/logo-sula.png"
-          alt="SULA MOB"
-          width={84}
-          height={84}
-          className="rounded-2xl drop-shadow-[0_0_20px_rgba(239,68,68,0.25)]"
-        />
+      <div className="group/logo flex justify-center pt-7 pb-5">
+        <div className="relative">
+          {/* Glow pulsante detrás del logo */}
+          <div className="absolute inset-0 rounded-2xl bg-blue-500/20 blur-xl scale-110 animate-pulse" />
+          <Image
+            src="/SULA_MOB_logo_transparente.png"
+            alt="SULA MOB"
+            width={160}
+            height={80}
+            className="relative h-[52px] w-auto object-contain drop-shadow-[0_0_24px_rgba(59,130,246,0.35)] transition-all duration-500 group-hover/logo:drop-shadow-[0_0_32px_rgba(59,130,246,0.55)] group-hover/logo:scale-105"
+          />
+        </div>
       </div>
 
       <div className="mx-4 mb-5 flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white/[0.06] cursor-pointer hover:bg-white/[0.1] transition-colors">
-        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-red-500 to-red-700 flex items-center justify-center text-white text-sm font-bold shadow-md">
+        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-sm font-bold shadow-md">
           A
         </div>
         <div className="flex-1 min-w-0">
@@ -111,16 +116,27 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     href={item.href}
                     onClick={onNavigate}
                     className={`
-                      group flex items-center gap-3 px-3 py-2.5 rounded-xl
-                      text-[13px] font-medium transition-all duration-200
+                      group relative flex items-center gap-3 px-3 py-2.5 rounded-xl
+                      text-[13px] font-medium
+                      transition-all duration-300 ease-out
                       ${isActive
-                        ? 'bg-red-600 text-white shadow-lg shadow-red-600/25'
-                        : 'text-slate-300 hover:text-white hover:bg-white/[0.08]'
+                        ? 'bg-blue-600 text-white shadow-[0_0_20px_rgba(59,130,246,0.4),0_4px_12px_rgba(59,130,246,0.3)]'
+                        : 'text-slate-300 hover:text-white hover:translate-x-1 hover:bg-white/[0.08] hover:shadow-[0_0_15px_rgba(59,130,246,0.15)]'
                       }
                     `}
                   >
-                    <Icon className={`w-[18px] h-[18px] flex-shrink-0 ${isActive ? 'text-white' : 'text-slate-400 group-hover:text-white'}`} />
-                    <span>{item.name}</span>
+                    {/* Glow line izquierda al hover */}
+                    <span className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-full transition-all duration-300 ${
+                      isActive
+                        ? 'h-6 bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.6)]'
+                        : 'h-0 bg-blue-400 group-hover:h-4 group-hover:shadow-[0_0_6px_rgba(96,165,250,0.4)]'
+                    }`} />
+                    <Icon className={`w-[18px] h-[18px] flex-shrink-0 transition-all duration-300 ${
+                      isActive
+                        ? 'text-white drop-shadow-[0_0_6px_rgba(255,255,255,0.4)]'
+                        : 'text-slate-400 group-hover:text-blue-400 group-hover:drop-shadow-[0_0_8px_rgba(96,165,250,0.5)]'
+                    }`} />
+                    <span className="transition-all duration-300">{item.name}</span>
                   </Link>
                 );
               })}
@@ -149,16 +165,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   );
 
   return (
-    <div className="min-h-screen bg-[#060910] text-slate-100 font-sans selection:bg-red-500 selection:text-white">
+    <div className="min-h-screen bg-[#060910] text-slate-100 font-sans selection:bg-blue-500 selection:text-white">
 
       <div
         className="fixed inset-0 pointer-events-none opacity-[0.22] bg-cover bg-center z-0"
-        style={{ backgroundImage: "url('/images/fond.png')" }}
+        style={{ backgroundImage: "url('/fondo_dashboard.jpeg')" }}
       />
 
-      <div className="fixed -top-32 -left-20 w-[420px] h-[420px] rounded-full bg-red-600/[0.06] blur-[130px] pointer-events-none z-0" />
-      <div className="fixed top-1/3 -left-10 w-[320px] h-[320px] rounded-full bg-amber-500/[0.05] blur-[120px] pointer-events-none z-0" />
-      <div className="fixed bottom-0 left-1/4 w-[380px] h-[380px] rounded-full bg-red-500/[0.03] blur-[140px] pointer-events-none z-0" />
+      <div className="fixed -top-32 -left-20 w-[420px] h-[420px] rounded-full bg-blue-600/[0.07] blur-[130px] pointer-events-none z-0" />
+      <div className="fixed top-1/3 -left-10 w-[320px] h-[320px] rounded-full bg-cyan-500/[0.05] blur-[120px] pointer-events-none z-0" />
+      <div className="fixed bottom-0 left-1/4 w-[380px] h-[380px] rounded-full bg-blue-500/[0.04] blur-[140px] pointer-events-none z-0" />
 
       <aside
         className={`
@@ -202,7 +218,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             >
               <Menu className="w-5 h-5" />
             </button>
-            <Image src="/logo-sula.png" alt="SULA MOB" width={30} height={30} className="rounded-lg" />
+            <Image src="/SULA_MOB_logo_transparente.png" alt="SULA MOB" width={100} height={30} className="h-[26px] w-auto object-contain" />
           </div>
           <button
             onClick={handleLogout}
@@ -257,6 +273,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           {children}
         </div>
       </main>
+
+      <MobiChat />
     </div>
   );
 }

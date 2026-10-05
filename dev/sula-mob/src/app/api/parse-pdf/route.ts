@@ -2,89 +2,34 @@
  * /api/parse-pdf/route.ts
  * ───────────────────────
  * API Route que recibe un PDF de pedido SULA por FormData,
- * extrae su texto con pdf-parse v2 (Node.js), y devuelve
- * los datos estructurados como JSON.
- *
- * INSTALACIÓN REQUERIDA:
- *   npm install pdf-parse @napi-rs/canvas
+ * extrae su texto con pdf-parse v1 (compatible con Vercel serverless),
+ * y devuelve los datos estructurados como JSON.
  *
  * RUTA DEL ARCHIVO: src/app/api/parse-pdf/route.ts
+ *
+ * ¿Por qué pdf-parse v1 y no pdfjs-dist directo?
+ * pdfjs-dist v5 necesita un "worker" (.mjs separado) que
+ * Vercel serverless no puede resolver. pdf-parse v1.1.1
+ * trae su propio pdf.js integrado que funciona sin worker.
+ * Es la librería más usada para extraer texto de PDFs en
+ * Node.js — lleva años funcionando en serverless sin problemas.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 
 /* ═══════════════════════════════════════
-   CANVAS POLYFILLS — pdf-parse v2 usa pdfjs
-   que requiere DOMMatrix/ImageData/Path2D.
-   @napi-rs/canvas los provee de forma nativa,
-   pero si falla, usamos stubs mínimos ya que
-   solo extraemos texto, no renderizamos.
+   POLYFILLS — DOMMatrix, Path2D e ImageData
+   no existen en Node.js serverless. pdf-parse v2
+   (pdfjs-dist) los usa al cargarse aunque solo
+   extraigamos texto, así que bastan clases vacías.
+   Deben definirse ANTES del require('pdf-parse').
    ═══════════════════════════════════════ */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const g = globalThis as any
-
-try {
-  // Intenta cargar el polyfill nativo
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  require('@napi-rs/canvas')
-} catch {
-  // Si no se puede cargar, usamos stubs mínimos
-}
-
-// Asegurarnos de que existen (por si @napi-rs/canvas no los puso)
-if (typeof g.DOMMatrix === 'undefined') {
-  g.DOMMatrix = class DOMMatrix {
-    a = 1; b = 0; c = 0; d = 1; e = 0; f = 0
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    constructor(init?: any) {
-      if (Array.isArray(init) && init.length >= 6) {
-        [this.a, this.b, this.c, this.d, this.e, this.f] = init
-      }
-    }
-    isIdentity = true
-    translate() { return new g.DOMMatrix() }
-    scale() { return new g.DOMMatrix() }
-    inverse() { return new g.DOMMatrix() }
-    multiply() { return new g.DOMMatrix() }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    transformPoint(p: any) { return p }
-  }
-}
-if (typeof g.ImageData === 'undefined') {
-  g.ImageData = class ImageData {
-    width: number; height: number; data: Uint8ClampedArray
-    constructor(sw: number | Uint8ClampedArray, sh?: number) {
-      if (typeof sw === 'number') {
-        this.width = sw; this.height = sh || 0
-        this.data = new Uint8ClampedArray(this.width * this.height * 4)
-      } else {
-        this.data = sw; this.width = sh || 0; this.height = 0
-      }
-    }
-  }
-}
-if (typeof g.Path2D === 'undefined') {
-  g.Path2D = class Path2D {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    moveTo(..._a: any[]) {} lineTo(..._a: any[]) {} bezierCurveTo(..._a: any[]) {}
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    quadraticCurveTo(..._a: any[]) {} arc(..._a: any[]) {} closePath() {}
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rect(..._a: any[]) {} ellipse(..._a: any[]) {} addPath(..._a: any[]) {}
-  }
-}
-
-/* ═══════════════════════════════════════
-   Cargar pdf-parse DESPUÉS de los polyfills
-   ═══════════════════════════════════════ */
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
-const pdfParseModule = require('pdf-parse') as any
-const PDFParse = pdfParseModule.PDFParse as new (opts: { data: Uint8Array }) => {
-  load: () => Promise<void>
-  getText: () => Promise<{ text: string }>
-}
+if (typeof g.DOMMatrix === 'undefined') g.DOMMatrix = class DOMMatrix {}
+if (typeof g.Path2D === 'undefined') g.Path2D = class Path2D {}
+if (typeof g.ImageData === 'undefined') g.ImageData = class ImageData {}
 
 /* ═══════════════════════════════════════
    TIPOS (los mismos que en parse-pedido.ts)
@@ -109,7 +54,41 @@ interface PedidoData {
 }
 
 /* ═══════════════════════════════════════
+   EXTRAER TEXTO DEL PDF con pdf-parse v1
+   (sin worker — compatible con Vercel serverless)
+
+   pdf-parse v1.1.1 trae su propio pdf.js integrado.
+   No necesita workers ni configuración especial.
+
+   Si la versión instalada es pdf-parse v2 (exporta la
+   clase PDFParse en vez de una función) se usa su API;
+   el texto sale con tabs y marcas "-- 1 of 2 --", que
+   parseText() también entiende.
+   ═══════════════════════════════════════ */
+
+async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const pdfParse = require('pdf-parse')
+
+  // pdf-parse v2
+  if (typeof pdfParse !== 'function' && typeof pdfParse.PDFParse === 'function') {
+    const parser = new pdfParse.PDFParse({ data: pdfBytes })
+    try {
+      const data = await parser.getText()
+      return data.text
+    } finally {
+      await parser.destroy()
+    }
+  }
+
+  // pdf-parse v1 espera un Buffer, no un Uint8Array
+  const data = await pdfParse(Buffer.from(pdfBytes))
+  return data.text
+}
+
+/* ═══════════════════════════════════════
    UTILIDADES DE PARSEO
+   (exactamente la misma lógica de siempre)
    ═══════════════════════════════════════ */
 
 function parseText(raw: string): PedidoData {
@@ -125,54 +104,61 @@ function parseText(raw: string): PedidoData {
   }
 
   // ── Número de pedido ──
-  // Patrón 1: número solo al inicio de línea
   const pedidoMatch = raw.match(/^(\d{4,6})\s/m)
   if (pedidoMatch) result.numero_pedido = pedidoMatch[1]
-  // Patrón 2: "Pedido:" o "No. Pedido:" seguido del número
   if (!result.numero_pedido) {
     const p2 = raw.match(/(?:No\.?\s*)?Pedido:?\s*(\d{4,6})/i)
     if (p2) result.numero_pedido = p2[1]
   }
 
   // ── Cliente ──
-  // Patrón 1: línea después del número de pedido
   const clienteMatch = raw.match(/^\d{4,6}\n(.+)/m)
   if (clienteMatch) result.cliente = clienteMatch[1].trim()
-  // Patrón 2: "Cliente:" seguido del nombre
   if (!result.cliente) {
     const c2 = raw.match(/Cliente:?\s*\n?\s*([A-ZÁÉÍÓÚÑ][^\n]{2,})/i)
     if (c2) result.cliente = c2[1].trim()
   }
+  // Fallback pdf-parse v1: número de pedido y cliente en líneas separadas al inicio
+  if (!result.cliente && result.numero_pedido) {
+    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean)
+    const pedidoIdx = lines.findIndex(l => l.startsWith(result.numero_pedido))
+    if (pedidoIdx >= 0 && pedidoIdx + 1 < lines.length) {
+      const candidate = lines[pedidoIdx + 1]
+      // El cliente es texto (no fecha, no número puro, no keyword)
+      if (
+        candidate.length > 2 &&
+        !/^\d{4}-\d{2}/.test(candidate) &&
+        !/^[\d,.]+$/.test(candidate) &&
+        !/^(Pieza|Juego|Metro|Kg|Litro|Servicio|Subtotal|IVA|Total|Fecha|Elaborado|Referencia|Pedido|Moneda|Condici)/i.test(candidate)
+      ) {
+        result.cliente = candidate
+      }
+    }
+  }
 
-  // ── Fecha (YYYY-MM-DD o DD/MM/YYYY o MM/DD/YYYY) ──
+  // ── Fecha ──
   const fechaMatch = raw.match(/(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}/)
   if (fechaMatch) result.fecha = fechaMatch[1]
-  // Fallback: cualquier fecha YYYY-MM-DD en el documento
   if (!result.fecha) {
     const f2 = raw.match(/(\d{4}-\d{2}-\d{2})/)
     if (f2) result.fecha = f2[1]
   }
-  // Fallback: fecha DD/MM/YYYY
   if (!result.fecha) {
     const f3 = raw.match(/Fecha:?\s*\n?\s*(\d{2}\/\d{2}\/\d{4})/i)
     if (f3) result.fecha = f3[1]
   }
 
   // ── Fecha de entrega ──
-  // Patrón 1: "Fecha de Entrega:" + YYYY-MM-DD
   const entregaMatch = raw.match(/Fecha\s+de\s+Entrega:?\s*\n?\s*(\d{4}-\d{2}-\d{2})/i)
   if (entregaMatch) result.fecha_entrega = entregaMatch[1]
-  // Patrón 2: "Fecha de Entrega:" + DD/MM/YYYY
   if (!result.fecha_entrega) {
     const e2 = raw.match(/Fecha\s+de\s+Entrega:?\s*\n?\s*(\d{2}\/\d{2}\/\d{4})/i)
     if (e2) result.fecha_entrega = e2[1]
   }
-  // Patrón 3: "Entrega:" seguido de fecha
   if (!result.fecha_entrega) {
     const e3 = raw.match(/Entrega:?\s*\n?\s*(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4})/i)
     if (e3) result.fecha_entrega = e3[1]
   }
-  // Patrón 4: segunda fecha YYYY-MM-DD en el documento (la primera es fecha del pedido)
   if (!result.fecha_entrega && result.fecha) {
     const allDates = raw.match(/\d{4}-\d{2}-\d{2}/g)
     if (allDates && allDates.length >= 2) {
@@ -182,24 +168,20 @@ function parseText(raw: string): PedidoData {
   }
 
   // ── Referencia / Sucursal ──
-  // Patrón 1: texto entre "Fecha de Entrega" y "Referencia"
   const refMatch = raw.match(/Fecha\s+de\s+Entrega:?\s*\n([^\n]+)\nReferencia/i)
   if (refMatch) {
     result.referencia_sucursal = refMatch[1].trim()
   }
-  // Patrón 2: texto antes de "Referencia / Sucursal:"
   if (!result.referencia_sucursal) {
     const fbRef = raw.match(/\n([A-ZÁÉÍÓÚÑ&][A-ZÁÉÍÓÚÑ&\s]*)\nReferencia\s*\/?\s*Sucursal:?/i)
     if (fbRef) result.referencia_sucursal = fbRef[1].trim()
   }
-  // Patrón 3: "Referencia / Sucursal:" seguido del valor
   if (!result.referencia_sucursal) {
     const r3 = raw.match(/Referencia\s*\/?\s*Sucursal:?\s*\n?\s*([^\n]+)/i)
     if (r3 && !/Fecha|Elaborado|Pedido|Subtotal/i.test(r3[1])) {
       result.referencia_sucursal = r3[1].trim()
     }
   }
-  // Patrón 4: "Referencia:" solo
   if (!result.referencia_sucursal) {
     const r4 = raw.match(/Referencia:?\s*\n?\s*([A-ZÁÉÍÓÚÑ&][^\n]{1,})/i)
     if (r4 && !/Fecha|Elaborado|Pedido|Subtotal/i.test(r4[1])) {
@@ -208,18 +190,48 @@ function parseText(raw: string): PedidoData {
   }
 
   // ── Elaborado por ──
-  // Patrón 1: original (varias líneas intermedias)
   const elabMatch = raw.match(/Elaborado\s+por:?\s*\n\s*\*?\s*\n\s*(?:GRUPO\s+AVANT\s+CIM\s*\n\s*)?([^\n]+)/i)
   if (elabMatch) result.elaborado_por = elabMatch[1].trim()
-  // Patrón 2: "Elaborado por:" directo en la misma línea o siguiente
+  // Sin la línea intermedia ("*" o vacía): "Elaborado por:\nGRUPO AVANT CIM\nNombre"
+  if (!result.elaborado_por) {
+    const el1b = raw.match(/Elaborado\s+por:?[ \t]*\n\s*GRUPO\s+AVANT\s+CIM[ \t]*\n\s*([^\n]+)/i)
+    if (el1b) result.elaborado_por = el1b[1].trim()
+  }
   if (!result.elaborado_por) {
     const el2 = raw.match(/Elaborado\s+por:?\s+([A-ZÁÉÍÓÚÑa-záéíóúñ][^\n]{2,})/i)
     if (el2) result.elaborado_por = el2[1].trim()
   }
-  // Patrón 3: buscar nombre propio después de "Elaborado por:" con saltos de línea flexibles
   if (!result.elaborado_por) {
     const el3 = raw.match(/Elaborado\s+por:?\s*\n(?:[^\n]*\n){0,4}?\s*([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,4})/i)
     if (el3) result.elaborado_por = el3[1].trim()
+  }
+
+  // ── Formato "hoja de producción" (PDF generado por la app, sin precios) ──
+  // Las 3 etiquetas vienen juntas y los valores debajo, en este orden:
+  //   Elaborado por:\nFecha de Entrega:\nReferencia / Sucursal:\n
+  //   <elaborado>\n<pedido>\n<cliente>\n<fecha>\n<fecha entrega>\n<referencia>
+  // Los regex de arriba asumen "etiqueta → valor", así que aquí se
+  // reasignan los campos por posición.
+  const hojaMatch = raw.match(/Elaborado\s+por:?[ \t]*\n\s*Fecha\s+de\s+Entrega:?[ \t]*\n\s*Referencia\s*\/?\s*Sucursal:?[ \t]*\n([\s\S]*?)(?=\n\s*[\d,]+\.\d{2}\s*\d[\d-]*-[\d-]+|\n\s*--\s*\d+\s+of\s+\d+\s*--|\n\s*GRUPO\s+AVANT\s+CIM\s*\n\s*Elaborado|$)/i)
+  if (hojaMatch) {
+    const hojaFechas = hojaMatch[1].match(/\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4}/g) || []
+    const hojaCampos = hojaMatch[1]
+      .replace(/\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}(?::\d{2})?)?|\d{2}\/\d{2}\/\d{4}/g, '\n')
+      .split(/[\n\t]/)
+      .map(c => c.trim())
+      .filter(Boolean)
+    const numIdx = hojaCampos.findIndex(c => /^\d{4,6}$/.test(c))
+    const antes = numIdx >= 0 ? hojaCampos.slice(0, numIdx) : []
+    const despues = hojaCampos.slice(numIdx + 1)
+
+    if (numIdx >= 0) result.numero_pedido = hojaCampos[numIdx]
+    // Versiones anteriores de la hoja ponían el pedido antes de "elaborado"
+    if (antes.length === 0 && despues.length >= 3) antes.push(despues.shift() as string)
+    result.elaborado_por = antes[0] || ''
+    result.cliente = despues[0] || ''
+    result.referencia_sucursal = despues[1] || ''
+    result.fecha = hojaFechas[0] || ''
+    result.fecha_entrega = hojaFechas[1] || ''
   }
 
   // ── Partidas (tabla de items) ──
@@ -239,15 +251,16 @@ function parseText(raw: string): PedidoData {
       continue
     }
 
-    // Formato 1: línea empieza con unidad (Pieza\t...)
     if (/^(Pieza|Juego|Metro|Kg|Litro|Servicio)\t/i.test(trimmed)) {
       inPageHeader = false
       mergedLines.push(trimmed)
-    // Formato 2: línea empieza con cantidad y contiene unidad + clave
     } else if (/^[\d,]+\.\d{2}\s/.test(trimmed) && /\b(Pieza|Juego|Metro|Kg|Litro|Servicio)\b/i.test(trimmed) && /\d[\d-]+-[\d-]+/.test(trimmed)) {
       inPageHeader = false
       mergedLines.push(trimmed)
     } else if (inPageHeader) {
+      // El encabezado repetido termina en "Referencia / Sucursal:"; lo que
+      // sigue es la continuación de la descripción cortada por el salto de página
+      if (/^Referencia\s*\/?\s*Sucursal:?$/i.test(trimmed)) inPageHeader = false
       continue
     } else if (
       mergedLines.length > 0 &&
@@ -264,9 +277,7 @@ function parseText(raw: string): PedidoData {
     }
   }
 
-  // Formato 1: Unidad\tCantidad Precio Total\tClave Descripcion
   const partidaRegex1 = /^(Pieza|Juego|Metro|Kg|Litro|Servicio)\t([\d,]+(?:\.\d+)?)\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}\t([\d][\d-]+-[\d-]+)\s+(.+)/i
-  // Formato 2: Cantidad Clave Unidad Descripcion Precio Total
   const partidaRegex2 = /^([\d,]+(?:\.\d+)?)\s+([\d][\d-]+-[\d-]+)\s+(Pieza|Juego|Metro|Kg|Litro|Servicio)\s+(.+?)\s+[\d,]+\.\d{2}\s+[\d,]+\.\d{2}$/i
 
   for (const line of mergedLines) {
@@ -288,6 +299,95 @@ function parseText(raw: string): PedidoData {
         unidad: m2[3],
         descripcion: m2[4].replace(/\s+/g, ' ').trim(),
       })
+    }
+  }
+
+  // ── Fallback: formato pdf-parse v1 (todo concatenado sin espacios) ──
+  // Ejemplo: "Pieza10,050.003.2532,662.502-1-0009-0005"
+  // Cada número tiene exactamente 2 decimales (.XX), así los separamos.
+  // La descripción viene en la(s) línea(s) siguientes.
+  if (result.partidas.length === 0) {
+    const partidaRegex3 = /^(Pieza|Juego|Metro|Kg|Litro|Servicio)([\d,]+\.\d{2})([\d,]+\.\d{2})([\d,]+\.\d{2})([\d][\d-]+-[\d-]+)$/i
+    const rawLines = raw.split('\n')
+    let idx = 0
+    let afterPageHeader = false
+
+    while (idx < rawLines.length) {
+      const line = rawLines[idx].trim()
+      const m3 = line.match(partidaRegex3)
+
+      if (m3) {
+        afterPageHeader = false
+        // Recolectar descripción de las líneas siguientes
+        const descParts: string[] = []
+        idx++
+        while (idx < rawLines.length) {
+          const nextLine = rawLines[idx].trim()
+          // Parar si es otra partida, línea vacía importante, o fin de sección
+          if (
+            !nextLine ||
+            partidaRegex3.test(nextLine) ||
+            /^(Subtotal|IVA|Total|Descuento|Moneda|Condici|Elaborado|Fecha|Referencia|Pedido)/i.test(nextLine)
+          ) break
+          descParts.push(nextLine)
+          idx++
+        }
+
+        result.partidas.push({
+          cantidad: Math.round(parseFloat(m3[2].replace(/,/g, ''))),
+          clave: m3[5],
+          unidad: m3[1],
+          descripcion: descParts.join(' ').replace(/\s+/g, ' ').trim(),
+        })
+      } else {
+        // Descripción cortada por salto de página: continúa después del
+        // encabezado repetido (que termina en "Referencia / Sucursal:")
+        if (afterPageHeader && line && result.partidas.length > 0) {
+          const last = result.partidas[result.partidas.length - 1]
+          last.descripcion = `${last.descripcion} ${line}`.replace(/\s+/g, ' ').trim()
+        }
+        if (/^Referencia\s*\/?\s*Sucursal:?$/i.test(line)) afterPageHeader = true
+        idx++
+      }
+    }
+  }
+
+  // ── Fallback: hoja de producción (sin precios) ──
+  // pdf-parse v1: "3.002-1-0072-0001Pieza" y la descripción en las líneas siguientes
+  // pdf-parse v2: "3.00\t2-1-0072-0001\tPieza\tDESCRIPCIÓN..."
+  // La cantidad siempre tiene 2 decimales (.XX), así se separa de la clave.
+  if (result.partidas.length === 0) {
+    const partidaRegex4 = /^([\d,]+\.\d{2})\s*(\d[\d-]*-[\d-]+)\s*(Pieza|Juego|Metro|Kg|Litro|Servicio)\s*(.*)$/i
+    const rawLines = raw.split('\n')
+    let idx = 0
+
+    while (idx < rawLines.length) {
+      const m4 = rawLines[idx].trim().match(partidaRegex4)
+
+      if (m4) {
+        const descParts: string[] = m4[4] ? [m4[4]] : []
+        idx++
+        while (idx < rawLines.length) {
+          const nextLine = rawLines[idx].trim()
+          if (
+            !nextLine ||
+            partidaRegex4.test(nextLine) ||
+            /^--\s*\d+\s+of\s+\d+\s*--$/.test(nextLine) ||
+            /^(GRUPO\s+AVANT|Subtotal|IVA|Total|Descuento|Moneda|Condici|Elaborado|Fecha|Referencia|Pedido)/i.test(nextLine)
+          ) break
+          descParts.push(nextLine)
+          idx++
+        }
+
+        result.partidas.push({
+          cantidad: Math.round(parseFloat(m4[1].replace(/,/g, ''))),
+          clave: m4[2],
+          unidad: m4[3],
+          descripcion: descParts.join(' ').replace(/\s+/g, ' ').trim(),
+        })
+      } else {
+        idx++
+      }
     }
   }
 
@@ -313,10 +413,7 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer()
     const pdfBytes = new Uint8Array(arrayBuffer)
 
-    const parser = new PDFParse({ data: pdfBytes })
-    await parser.load()
-    const pdfResult = await parser.getText()
-    const text = pdfResult.text
+    const text = await extractTextFromPdf(pdfBytes)
 
     if (!text || text.trim().length < 20) {
       return NextResponse.json(

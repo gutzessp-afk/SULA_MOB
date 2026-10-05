@@ -15,15 +15,56 @@ interface Area {
   usuarios?: Usuario | null;
 }
 
+// DICCIONARIO COMPLETO DE IMÁGENES TÉCNICAS
 const defaultAreaImages: Record<string, string> = {
   'corte de tubo': '/images/corte_tubo.png',
+  'corte tubo': '/images/corte_tubo.png',
   'doblez': '/images/dobles.png',
+  'dobles': '/images/dobles.png',
+  'corte de lamina': '/images/corte_lamina.png',
   'corte de lámina': '/images/corte_lamina.png',
-  'soldadura': '/images/soldaduraa.png',
+  'corte lamina': '/images/corte_lamina.png',
+  'corte de laser': '/images/cortelaser.png',
+  'corte de láser': '/images/cortelaser.png',
+  'corte laser': '/images/cortelaser.png',
+  'soldadura': '/images/soldadura.png',
+  'soldadura y pulido': '/images/soldadura.png',
+  'soldaduraa': '/images/soldadura.png',
+  'punteado': '/images/punteado .png',
   'alambrón': '/images/alambron.png',
+  'alambron': '/images/alambron.png',
+  'troquel': '/images/troquel.png',
+  'troquelado': '/images/troquel.png',
   'pintura': '/images/pintura.png',
   'empaque': '/images/empaque.png',
-  'corte de madera': '/images/corte_madera.png',
+  'corte de madera': '/images/corte_madera2.png',
+  'corte madera': '/images/corte_madera2.png',
+  'madera': '/images/corte_madera2.png',
+  'instalaciones': '/images/instalaciones.png',
+};
+
+// HELPER CON FALLBACK INTELIGENTE
+const getAreaImage = (nombreArea: string): string => {
+  if (!nombreArea) return '/images/nueva.png';
+  const normalized = nombreArea.trim().toLowerCase();
+
+  if (defaultAreaImages[normalized]) {
+    return defaultAreaImages[normalized];
+  }
+
+  if (normalized.includes('laser') || normalized.includes('láser')) return '/images/cortelaser.png';
+  if (normalized.includes('puntead')) return '/images/punteado .png';
+  if (normalized.includes('troquel')) return '/images/troquel.png';
+  if (normalized.includes('madera')) return '/images/corte_madera2.png';
+  if (normalized.includes('tubo')) return '/images/corte_tubo.png';
+  if (normalized.includes('lamina') || normalized.includes('lámina')) return '/images/corte_lamina.png';
+  if (normalized.includes('soldad') || normalized.includes('pulid')) return '/images/soldadura.png';
+  if (normalized.includes('doble')) return '/images/dobles.png';
+  if (normalized.includes('pintur')) return '/images/pintura.png';
+  if (normalized.includes('empaq')) return '/images/empaque.png';
+  if (normalized.includes('alambr')) return '/images/alambron.png';
+
+  return '/images/nueva.png';
 };
 
 export default function ActividadesPage() {
@@ -59,7 +100,7 @@ export default function ActividadesPage() {
       } else {
         setAreas((areasData || []) as Area[]);
       }
-   } catch (err) {
+    } catch (err) {
       const error = err as Error;
       setErrorMsg('Error al consultar las áreas: ' + error.message);
     } finally {
@@ -134,15 +175,10 @@ export default function ActividadesPage() {
     }
   }
 
-  const getAreaImage = (nombreArea: string) => {
-    const normalized = nombreArea.trim().toLowerCase();
-    return defaultAreaImages[normalized] || '/images/nueva.png';
-  };
-
   const totalPeso = areas.reduce((acc, curr) => acc + (Number(curr.peso) || 0), 0);
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
+    <div className="space-y-6 max-w-7xl mx-auto pb-8">
       <div 
         className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 sm:p-8 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-cover bg-center"
         style={{ backgroundImage: `linear-gradient(to right, rgba(11,15,23,0.95), rgba(18,24,36,0.8)), url('/images/nuevap.png')` }}
@@ -234,7 +270,7 @@ export default function ActividadesPage() {
         </div>
       </form>
 
-      {/* LISTADO DE ÁREAS */}
+      {/* LISTADO DE ÁREAS CON SUS RESPECTIVAS IMÁGENES */}
       {loading ? (
         <div className="flex justify-center items-center py-20 text-white/50 gap-3">
           <Loader2 className="w-6 h-6 animate-spin text-red-500" />
