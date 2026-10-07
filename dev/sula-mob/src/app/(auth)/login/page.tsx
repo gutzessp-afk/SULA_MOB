@@ -101,7 +101,7 @@ export default function LoginPage() {
                       setRole(id)
                       setError(null)
                     }}
-                    className={`flex h-[38px] cursor-pointer items-center justify-center gap-2 rounded-xl text-[13px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 ${
+                    className={`max-sm:min-h-[44px] flex h-[38px] cursor-pointer items-center justify-center gap-2 rounded-xl text-[13px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 ${
                       activo
                         ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/40'
                         : 'text-white/55 hover:text-white'
@@ -141,7 +141,7 @@ export default function LoginPage() {
                 required
                 autoComplete="username"
                 placeholder="tu.correo@empresa.com"
-                className={`${inputClass} pl-12 pr-4`}
+                className={`max-sm:text-base max-sm:min-h-[44px] ${inputClass} pl-12 pr-4`}
               />
             </div>
           </div>
@@ -160,13 +160,13 @@ export default function LoginPage() {
                 required
                 autoComplete="current-password"
                 placeholder="••••••••"
-                className={`${inputClass} pl-12 pr-14`}
+                className={`max-sm:text-base max-sm:min-h-[44px] ${inputClass} pl-12 pr-14`}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-                className="absolute right-3 flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl text-white/55 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+                className="max-sm:min-h-[44px] absolute right-3 flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl text-white/55 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
               >
                 {showPassword ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}
               </button>
@@ -175,7 +175,7 @@ export default function LoginPage() {
 
           {/* Recordar + recuperar */}
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-            <label className="group flex cursor-pointer select-none items-center gap-2.5">
+            <label className="max-sm:min-h-[44px] group flex cursor-pointer select-none items-center gap-2.5">
               <span className="relative flex h-[18px] w-[18px] items-center justify-center">
                 <input
                   type="checkbox"
@@ -205,7 +205,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="group mt-1 flex h-[46px] w-full cursor-pointer items-center justify-center gap-2 rounded-2xl bg-blue-600 text-[15px] font-semibold text-white shadow-lg shadow-blue-950/40 transition hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-400/30 disabled:cursor-not-allowed disabled:opacity-60 sm:h-[48px]"
+            className="max-sm:min-h-[44px] group mt-1 flex h-[46px] w-full cursor-pointer items-center justify-center gap-2 rounded-2xl bg-blue-600 text-[15px] font-semibold text-white shadow-lg shadow-blue-950/40 transition hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-400/30 disabled:cursor-not-allowed disabled:opacity-60 sm:h-[48px]"
           >
             {loading ? (
               <>

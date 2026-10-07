@@ -18,7 +18,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
-import MobiChat from '@/components/admin/MobiChat';
 
 /* ── Secciones del menú ── */
 
@@ -167,10 +166,18 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <div className="min-h-screen bg-[#060910] text-slate-100 font-sans selection:bg-blue-500 selection:text-white">
 
-      <div
-        className="fixed inset-0 pointer-events-none opacity-[0.22] bg-cover bg-center z-0"
-        style={{ backgroundImage: "url('/fondo_dashboard.jpeg')" }}
-      />
+      {/* Fondo global: <Image> lo sirve en AVIF/WebP al tamaño de la pantalla */}
+      <div className="fixed inset-0 pointer-events-none opacity-[0.22] z-0">
+        <Image
+          src="/fondo_dashboard.jpeg"
+          alt=""
+          fill
+          priority
+          quality={75}
+          sizes="100vw"
+          className="object-cover object-center"
+        />
+      </div>
 
       <div className="fixed -top-32 -left-20 w-[420px] h-[420px] rounded-full bg-blue-600/[0.07] blur-[130px] pointer-events-none z-0" />
       <div className="fixed top-1/3 -left-10 w-[320px] h-[320px] rounded-full bg-cyan-500/[0.05] blur-[120px] pointer-events-none z-0" />
@@ -209,12 +216,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         }
       </button>
 
-      <header className="lg:hidden sticky top-0 z-50">
+      <header className="lg:hidden sticky top-0 z-50 pt-[env(safe-area-inset-top)]">
         <div className="mx-3 mt-3 backdrop-blur-[50px] backdrop-saturate-[2.2] bg-white/[0.06] border border-white/[0.08] rounded-2xl px-4 py-3 shadow-lg flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setMobileOpen(true)}
-              className="p-2 rounded-lg text-slate-300 hover:text-white transition-colors"
+              className="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg text-slate-300 hover:text-white active:bg-white/10 transition-colors"
             >
               <Menu className="w-5 h-5" />
             </button>
@@ -222,7 +229,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </div>
           <button
             onClick={handleLogout}
-            className="p-2 rounded-lg text-slate-400 hover:text-red-400 transition-colors"
+            className="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg text-slate-400 hover:text-red-400 active:bg-white/10 transition-colors"
           >
             <LogOut className="w-4 h-4" />
           </button>
@@ -265,7 +272,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         className={`
           relative z-10 min-h-screen
           transition-all duration-400 ease-[cubic-bezier(0.4,0,0.2,1)]
-          px-4 sm:px-6 pt-6 pb-12
+          px-4 sm:px-6 pt-6
+          pb-[calc(3rem+env(safe-area-inset-bottom))]
+          pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]
+          sm:pl-[max(1.5rem,env(safe-area-inset-left))] sm:pr-[max(1.5rem,env(safe-area-inset-right))]
           ${sidebarOpen ? 'lg:ml-[260px]' : 'lg:ml-0'}
         `}
       >
@@ -274,7 +284,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </div>
       </main>
 
-      <MobiChat />
     </div>
   );
 }

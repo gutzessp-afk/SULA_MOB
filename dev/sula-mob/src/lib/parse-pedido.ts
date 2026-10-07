@@ -15,6 +15,8 @@ export interface Partida {
   clave: string
   unidad: string
   descripcion: string
+  /** Precio unitario (opcional — el PDF no lo trae, se captura a mano) */
+  precio?: number
 }
 
 /** Todos los datos extraídos del PDF */

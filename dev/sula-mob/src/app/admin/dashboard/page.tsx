@@ -291,13 +291,13 @@ export default function DashboardPage() {
               placeholder="Buscar proyecto..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              className="bg-white/[0.07] border border-white/20 hover:border-white/30 focus:border-blue-400/60 focus:ring-1 focus:ring-blue-500/15 rounded-xl text-xs text-white pl-9 pr-3 py-2.5 outline-none w-full sm:w-52 transition-all placeholder:text-white/30"
+              className="max-sm:text-base max-sm:min-h-[44px] bg-white/[0.07] border border-white/20 hover:border-white/30 focus:border-blue-400/60 focus:ring-1 focus:ring-blue-500/15 rounded-xl text-xs text-white pl-9 pr-3 py-2.5 outline-none w-full sm:w-52 transition-all placeholder:text-white/30"
             />
           </div>
 
           <button
             onClick={() => void fetchMetrics()}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs border border-blue-500/30 transition-all shrink-0 active:scale-95 shadow-lg shadow-blue-900/40"
+            className="max-sm:min-h-[44px] flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs border border-blue-500/30 transition-all shrink-0 active:scale-95 shadow-lg shadow-blue-900/40"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Sincronizar
           </button>
@@ -364,7 +364,7 @@ export default function DashboardPage() {
             </h2>
             <p className="text-[11px] text-white/40">Cada barra representa el porcentaje de avance global</p>
           </div>
-          <button onClick={exportarReporte} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-bold bg-white/[0.06] border border-white/10 px-3 py-1.5 rounded-xl self-start sm:self-auto transition-colors">
+          <button onClick={exportarReporte} className="max-sm:min-h-[44px] text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-bold bg-white/[0.06] border border-white/10 px-3 py-1.5 rounded-xl self-start sm:self-auto transition-colors">
             <Download className="w-3.5 h-3.5" /> Exportar CSV
           </button>
         </div>
