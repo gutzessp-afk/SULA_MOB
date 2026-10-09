@@ -1,6 +1,7 @@
 
 'use client'
 
+import MobiChat from '@/components/MobiChat'
 import OperatorSidebar from '@/components/operator/OperatorSidebar'
 
 export default function OperatorLayout({
@@ -38,6 +39,8 @@ export default function OperatorLayout({
           </main>
         </div>
       </div>
+
+      <MobiChat />
     </div>
   )
 }

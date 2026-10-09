@@ -18,6 +18,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
+import MobiChat from '@/components/MobiChat';
 
 /* ── Secciones del menú ── */
 
@@ -284,6 +285,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </div>
       </main>
 
+      <MobiChat />
     </div>
   );
 }

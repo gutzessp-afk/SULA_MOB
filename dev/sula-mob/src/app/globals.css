@@ -129,3 +129,18 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
 }
+/* ── Mobi (chatbot) ── */
+@keyframes mobi-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.mobi-float {
+  animation: mobi-float 3s ease-in-out infinite;
+}
+.mobi-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mobi-float { animation: none; }
+}
