@@ -48,7 +48,7 @@ export default function NotificacionesPage() {
 
       <div
         className="relative overflow-hidden rounded-[20px] sm:rounded-[26px] border border-white/20 bg-white/[0.05] p-4 sm:p-6 md:p-8 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-cover bg-center"
-        style={{ backgroundImage: "linear-gradient(to right, rgba(11,15,23,0.95), rgba(18,24,36,0.8)), url('/images/corte_madera.png')" }}
+        style={{ backgroundImage: "linear-gradient(to right, rgba(11,15,23,0.95), rgba(18,24,36,0.8)), url('/images/corte_madera2.webp')" }}
       >
         <div>
           <h1 className="text-lg sm:text-2xl font-bold text-white tracking-wide flex items-center gap-3">
@@ -129,7 +129,7 @@ export default function NotificacionesPage() {
         </div>
 
         <div className="relative overflow-hidden rounded-[20px] sm:rounded-[26px] border border-white/20 bg-white/[0.05] p-4 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] h-80 flex flex-col justify-end">
-          <Image src="/images/nueva.png" alt="Planta SULA MOB" fill className="object-cover rounded-2xl opacity-75" />
+          <Image src="/images/nueva.webp" alt="Planta SULA MOB" fill className="object-cover rounded-2xl opacity-75" />
           <div className="absolute inset-0 bg-gradient-to-t from-[#0B0F17] via-transparent to-transparent rounded-2xl" />
           <div className="relative z-10 p-2 space-y-1">
             <span className="text-[10px] uppercase tracking-wider font-bold text-red-400 bg-black/60 px-2.5 py-1 rounded-full border border-white/10 backdrop-blur-md inline-block">

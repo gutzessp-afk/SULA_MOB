@@ -1,4 +1,5 @@
 import './globals.css'
+import './movil.css'
 import type { Metadata, Viewport } from 'next'
 import { Geist } from 'next/font/google'
 import { RegistrarServiceWorker } from '@/components/InstallPWA'

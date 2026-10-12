@@ -118,7 +118,7 @@ export default function OperatorSidebar() {
         <div className="flex items-center justify-between px-5 pt-6 pb-4">
           <div className="flex-1 flex justify-center">
             <Image
-              src="/logo-sula.png"
+              src="/SULA_MOB_logo_transparente.png"
               alt="SULA MOB"
               width={150}
               height={56}

@@ -15,7 +15,7 @@ export default function OperatorLayout({
       <OperatorSidebar />
 
       <div className="flex-1 md:ml-64 flex flex-col min-h-screen bg-[#07080b]">
-        <header className="h-16 border-b border-slate-800/60 bg-[#0e1017]/50 backdrop-blur-md px-4 md:px-8 flex items-center justify-end md:justify-between sticky top-0 z-30">
+        <header className="h-16 border-b border-slate-800/60 bg-[#0e1017]/95 md:bg-[#0e1017]/50 md:backdrop-blur-md px-4 md:px-8 flex items-center justify-end md:justify-between sticky top-0 z-30">
           <div className="hidden md:flex items-center gap-3">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
             <span className="text-xs font-mono text-slate-400 uppercase tracking-wider">

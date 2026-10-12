@@ -17,54 +17,54 @@ interface Area {
 
 // DICCIONARIO COMPLETO DE IMÁGENES TÉCNICAS
 const defaultAreaImages: Record<string, string> = {
-  'corte de tubo': '/images/corte_tubo.png',
-  'corte tubo': '/images/corte_tubo.png',
-  'doblez': '/images/dobles.png',
-  'dobles': '/images/dobles.png',
-  'corte de lamina': '/images/corte_lamina.png',
-  'corte de lámina': '/images/corte_lamina.png',
-  'corte lamina': '/images/corte_lamina.png',
-  'corte de laser': '/images/cortelaser.png',
-  'corte de láser': '/images/cortelaser.png',
-  'corte laser': '/images/cortelaser.png',
-  'soldadura': '/images/soldadura.png',
-  'soldadura y pulido': '/images/soldadura.png',
-  'soldaduraa': '/images/soldadura.png',
-  'punteado': '/images/punteado .png',
-  'alambrón': '/images/alambron.png',
-  'alambron': '/images/alambron.png',
-  'troquel': '/images/troquel.png',
-  'troquelado': '/images/troquel.png',
-  'pintura': '/images/pintura.png',
-  'empaque': '/images/empaque.png',
-  'corte de madera': '/images/corte_madera2.png',
-  'corte madera': '/images/corte_madera2.png',
-  'madera': '/images/corte_madera2.png',
-  'instalaciones': '/images/instalaciones.png',
+  'corte de tubo': '/images/corte_tubo.webp',
+  'corte tubo': '/images/corte_tubo.webp',
+  'doblez': '/images/dobles.webp',
+  'dobles': '/images/dobles.webp',
+  'corte de lamina': '/images/corte_lamina.webp',
+  'corte de lámina': '/images/corte_lamina.webp',
+  'corte lamina': '/images/corte_lamina.webp',
+  'corte de laser': '/images/cortelaser.webp',
+  'corte de láser': '/images/cortelaser.webp',
+  'corte laser': '/images/cortelaser.webp',
+  'soldadura': '/images/soldadura.webp',
+  'soldadura y pulido': '/images/soldadura.webp',
+  'soldaduraa': '/images/soldadura.webp',
+  'punteado': '/images/punteado.webp',
+  'alambrón': '/images/alambron.webp',
+  'alambron': '/images/alambron.webp',
+  'troquel': '/images/troquel.webp',
+  'troquelado': '/images/troquel.webp',
+  'pintura': '/images/pintura.webp',
+  'empaque': '/images/empaque.webp',
+  'corte de madera': '/images/corte_madera2.webp',
+  'corte madera': '/images/corte_madera2.webp',
+  'madera': '/images/corte_madera2.webp',
+  'instalaciones': '/images/instalaciones.webp',
 };
 
 // HELPER CON FALLBACK INTELIGENTE
 const getAreaImage = (nombreArea: string): string => {
-  if (!nombreArea) return '/images/nueva.png';
+  if (!nombreArea) return '/images/nueva.webp';
   const normalized = nombreArea.trim().toLowerCase();
 
   if (defaultAreaImages[normalized]) {
     return defaultAreaImages[normalized];
   }
 
-  if (normalized.includes('laser') || normalized.includes('láser')) return '/images/cortelaser.png';
-  if (normalized.includes('puntead')) return '/images/punteado .png';
-  if (normalized.includes('troquel')) return '/images/troquel.png';
-  if (normalized.includes('madera')) return '/images/corte_madera2.png';
-  if (normalized.includes('tubo')) return '/images/corte_tubo.png';
-  if (normalized.includes('lamina') || normalized.includes('lámina')) return '/images/corte_lamina.png';
-  if (normalized.includes('soldad') || normalized.includes('pulid')) return '/images/soldadura.png';
-  if (normalized.includes('doble')) return '/images/dobles.png';
-  if (normalized.includes('pintur')) return '/images/pintura.png';
-  if (normalized.includes('empaq')) return '/images/empaque.png';
-  if (normalized.includes('alambr')) return '/images/alambron.png';
+  if (normalized.includes('laser') || normalized.includes('láser')) return '/images/cortelaser.webp';
+  if (normalized.includes('puntead')) return '/images/punteado.webp';
+  if (normalized.includes('troquel')) return '/images/troquel.webp';
+  if (normalized.includes('madera')) return '/images/corte_madera2.webp';
+  if (normalized.includes('tubo')) return '/images/corte_tubo.webp';
+  if (normalized.includes('lamina') || normalized.includes('lámina')) return '/images/corte_lamina.webp';
+  if (normalized.includes('soldad') || normalized.includes('pulid')) return '/images/soldadura.webp';
+  if (normalized.includes('doble')) return '/images/dobles.webp';
+  if (normalized.includes('pintur')) return '/images/pintura.webp';
+  if (normalized.includes('empaq')) return '/images/empaque.webp';
+  if (normalized.includes('alambr')) return '/images/alambron.webp';
 
-  return '/images/nueva.png';
+  return '/images/nueva.webp';
 };
 
 export default function ActividadesPage() {
@@ -181,7 +181,7 @@ export default function ActividadesPage() {
     <div className="space-y-6 max-w-7xl mx-auto pb-8">
       <div 
         className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 sm:p-8 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-cover bg-center"
-        style={{ backgroundImage: `linear-gradient(to right, rgba(11,15,23,0.95), rgba(18,24,36,0.8)), url('/images/nuevap.png')` }}
+        style={{ backgroundImage: `linear-gradient(to right, rgba(11,15,23,0.95), rgba(18,24,36,0.8)), url('/images/nuevap.webp')` }}
       >
         <div>
           <h1 className="text-2xl font-bold text-white tracking-wide">Configuración de Áreas y Ponderación</h1>
