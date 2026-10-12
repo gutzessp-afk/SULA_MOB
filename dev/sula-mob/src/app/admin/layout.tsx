@@ -18,6 +18,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
+import InstallPWA from '@/components/InstallPWA';
 import MobiChat from '@/components/MobiChat';
 
 /* ── Secciones del menú ── */
@@ -286,6 +287,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </main>
 
       <MobiChat />
+      <InstallPWA />
     </div>
   );
 }

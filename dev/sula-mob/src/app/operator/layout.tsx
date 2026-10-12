@@ -1,6 +1,7 @@
 
 'use client'
 
+import InstallPWA from '@/components/InstallPWA'
 import MobiChat from '@/components/MobiChat'
 import OperatorSidebar from '@/components/operator/OperatorSidebar'
 
@@ -41,6 +42,7 @@ export default function OperatorLayout({
       </div>
 
       <MobiChat />
+      <InstallPWA />
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import './globals.css'
 import type { Metadata, Viewport } from 'next'
 import { Geist } from 'next/font/google'
+import { RegistrarServiceWorker } from '@/components/InstallPWA'
 import { cn } from '@/lib/utils'
 
 const geist = Geist({ subsets: ['latin'], variable: '--font-sans' })
@@ -8,10 +9,12 @@ const geist = Geist({ subsets: ['latin'], variable: '--font-sans' })
 export const metadata: Metadata = {
   title: 'SULA MOB',
   description: 'Sistema de Mantenimiento y Operaciones',
+  icons: { apple: '/icons/apple-touch-icon.png' },
   other: {
     'mobile-web-app-capable': 'yes',
     'apple-mobile-web-app-capable': 'yes',
     'apple-mobile-web-app-status-bar-style': 'black-translucent',
+    'apple-mobile-web-app-title': 'SULA MOB',
   },
 }
 
@@ -34,6 +37,7 @@ export default function RootLayout({
     <html lang="es" className={cn('dark', 'font-sans', geist.variable)}>
       <body className="bg-[#0b0c10] text-slate-100 antialiased selection:bg-red-500 selection:text-white">
         {children}
+        <RegistrarServiceWorker />
       </body>
     </html>
   )

@@ -12,6 +12,15 @@ const nextConfig: NextConfig = {
     imageSizes: [16, 32, 48, 64, 96, 128, 256],
     qualities: [75],
   },
+  // El service worker no se guarda en caché del navegador: así las actualizaciones llegan de inmediato
+  async headers() {
+    return [
+      {
+        source: '/sw.js',
+        headers: [{ key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' }],
+      },
+    ]
+  },
 };
 
 export default nextConfig;
