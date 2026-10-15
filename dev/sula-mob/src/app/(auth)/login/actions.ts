@@ -8,10 +8,15 @@ interface RoleData {
   nombre: string
 }
 
+const SIETE_DIAS = 60 * 60 * 24 * 7
+
 export async function loginAction(prevState: unknown, formData: FormData) {
   const identifier = (formData.get('identifier') as string)?.trim()
   const password = formData.get('password') as string
   const selectedRole = (formData.get('role') as string)?.trim().toLowerCase() // 'admin' u 'operador'
+  // "Mantener sesión iniciada": marcado, la cookie dura 7 días; sin marcar no lleva duración
+  // y el navegador la borra al cerrarse
+  const duracion = formData.get('remember') !== null ? { maxAge: SIETE_DIAS } : {}
 
   if (!identifier || !password) {
     return { error: 'Por favor, ingresa tu usuario/correo y contraseña.' }
@@ -60,7 +65,7 @@ export async function loginAction(prevState: unknown, formData: FormData) {
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         path: '/',
-        maxAge: 60 * 60 * 24 * 7,
+        ...duracion,
       })
 
       return { success: true, redirectUrl: '/admin/dashboard' }
@@ -117,7 +122,7 @@ export async function loginAction(prevState: unknown, formData: FormData) {
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
           path: '/',
-          maxAge: 60 * 60 * 24 * 7,
+          ...duracion,
         })
 
         const destination = userRole === 'admin' ? '/admin/dashboard' : '/operator'
@@ -129,4 +134,32 @@ export async function loginAction(prevState: unknown, formData: FormData) {
   }
 
   return { error: 'Credenciales incorrectas. Verifica tu usuario y contraseña.' }
+}
+
+/** Cierra la sesión: borra la cookie (es httpOnly, el navegador no puede borrarla) y sale de Supabase Auth */
+export async function logoutAction() {
+  const cookieStore = await cookies()
+  cookieStore.delete('sula_session')
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
+        },
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options)
+            )
+          } catch {}
+        },
+      },
+    }
+  )
+  try {
+    await supabase.auth.signOut()
+  } catch {}
 }

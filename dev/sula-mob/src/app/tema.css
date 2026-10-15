@@ -1,0 +1,56 @@
+/*
+ * tema.css
+ * ────────
+ * Animación de entrada de las secciones y el tema azul.
+ * Va fuera de las capas de Tailwind, así que gana a las utilidades sin !important.
+ * El tema se elige con data-theme en <html> (src/components/TemaToggle.tsx).
+ */
+
+/* ── Entrada escalonada: cada sección sube y aparece; el retraso va en style ── */
+@keyframes sula-entrada {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+.sula-entrada {
+  animation: sula-entrada 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+/* Latido corto cuando un contador llega a su número */
+@keyframes sula-latido {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+.sula-latido {
+  display: inline-block;
+  animation: sula-latido 0.3s ease-out;
+}
+
+/* ── Tema azul: fondo azul marino, paneles con tinte azul y halos más intensos ── */
+html[data-theme='azul'] body,
+html[data-theme='azul'] .sula-fondo {
+  background-color: #0d1f40;
+}
+html[data-theme='azul'] .sula-panel {
+  background-color: rgb(23 37 84 / 0.55);
+  border-color: rgb(96 165 250 / 0.14);
+}
+html[data-theme='azul'] .sula-orbe {
+  filter: brightness(2.2);
+}
+
+/* El cambio de tema se ve suave, no de golpe */
+body,
+.sula-fondo,
+.sula-panel {
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+/* Carriles de proyectos: la barra crece de izquierda a derecha */
+@keyframes sula-llenado-x {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.sula-llenado-x {
+  transform-origin: left;
+  animation: sula-llenado-x 1s cubic-bezier(0.22, 1, 0.36, 1) both;
+}

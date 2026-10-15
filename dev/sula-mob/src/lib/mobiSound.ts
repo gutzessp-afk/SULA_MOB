@@ -92,6 +92,14 @@ export function playMobiDing(): void {
   void tocar([{ frecuencia: 1047, inicio: 0, duracion: 0.08, volumen: 0.06 }])
 }
 
+/** "Ding-dong" amigable (La5 → Re6) cuando llega una notificación nueva */
+export function playNotificacion(): void {
+  void tocar([
+    { frecuencia: 880, inicio: 0, duracion: 0.12, volumen: 0.18 },
+    { frecuencia: 1174.66, inicio: 0.1, duracion: 0.32, volumen: 0.16 },
+  ])
+}
+
 /* ═══════════════════════════════════════
    VOZ (Web Speech API)
    ═══════════════════════════════════════ */

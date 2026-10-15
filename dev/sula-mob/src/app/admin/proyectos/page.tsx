@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { cargarProyectos, useDatos } from '@/lib/cache-datos';
+import { eliminarProyecto } from '@/lib/eliminar-proyecto';
 import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, X, Calendar, User, MapPin, Download, Layers } from 'lucide-react';
 import { parsePedidoPdf } from '@/lib/parse-pedido';
-import { generarPdfPedido } from '@/lib/generar-pdf-pedido';
 import { useDebounce } from '@/hooks/useDebounce';
 
 interface PartidaItem {
@@ -38,8 +39,15 @@ interface Proyecto {
 export default function ProyectosPage() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<'lista' | 'crear'>('lista');
-  const [proyectos, setProyectos] = useState<Proyecto[]>([]);
-  const [areasDisponibles, setAreasDisponibles] = useState<Area[]>([]);
+  // Proyectos y áreas se piden a la vez y se muestran al instante si ya se habían cargado
+  const { datos: listaProyectos, cargando: cargandoProyectos, recargar: fetchProyectos } = useDatos('proyectos', () => cargarProyectos<Proyecto>());
+  const { datos: listaAreas } = useDatos('areas-activas', async () => {
+    const { data, error } = await supabase.from('areas').select('id, nombre, peso').eq('activo', true);
+    if (error) throw new Error(error.message);
+    return (data ?? []) as Area[];
+  });
+  const proyectos = useMemo(() => listaProyectos ?? [], [listaProyectos]);
+  const areasDisponibles = listaAreas ?? [];
 
   // Formulario — campos del Pedido Data
   const [codigo, setCodigo] = useState('');
@@ -64,30 +72,6 @@ export default function ProyectosPage() {
   const [rawPdfText, setRawPdfText] = useState('');
   const [showRawText, setShowRawText] = useState(false);
 
-  const loadDependencies = useCallback(async () => {
-    const { data: aData } = await supabase.from('areas').select('id, nombre, peso').eq('activo', true);
-    if (aData) setAreasDisponibles(aData as Area[]);
-  }, []);
-
-  const fetchProyectos = useCallback(async () => {
-    const { data } = await supabase
-      .from('proyectos')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (data) setProyectos(data as Proyecto[]);
-  }, []);
-
-  useEffect(() => {
-    let isMounted = true;
-    async function init() {
-      await loadDependencies();
-      if (isMounted) await fetchProyectos();
-    }
-    void init();
-    return () => { isMounted = false; };
-  }, [loadDependencies, fetchProyectos]);
-
   const addPartida = () => {
     setPartidas([...partidas, { cantidad: 1, clave: '', unidad: 'Pieza', descripcion: '', precio: 0 }]);
   };
@@ -109,24 +93,15 @@ export default function ProyectosPage() {
 
   const handleEliminarProyecto = async (proyecto: Proyecto) => {
     const confirmacion = window.confirm(
-      `¿Estás seguro de que deseas dar de baja o eliminar el proyecto "${proyecto.nombre}" (${proyecto.codigo})?\n\nEsta acción eliminará todos los registros y avances asociados.`
+      `¿Estás seguro de eliminar "${proyecto.nombre}" (${proyecto.codigo})?\n\nSe borrarán también sus productos, partidas, avances, retrasos y notificaciones. Esta acción NO se puede deshacer.`
     );
-
     if (!confirmacion) return;
 
-    try {
-      const { error } = await supabase.from('proyectos').delete().eq('id', proyecto.id);
-
-      if (error) {
-        alert('Error al eliminar el proyecto: ' + error.message);
-      } else {
-        alert('El proyecto se ha dado de baja correctamente.');
-        await fetchProyectos();
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Error desconocido';
-      alert('Ocurrió un error inesperado: ' + msg);
-    }
+    // Borra primero lo que depende del proyecto y comprueba que de verdad desapareció
+    const resultado = await eliminarProyecto(supabase, proyecto.id);
+    await fetchProyectos();
+    if (resultado.ok) alert(`El proyecto ${proyecto.codigo} se eliminó con todos sus registros.`);
+    else alert('No se pudo eliminar el proyecto: ' + resultado.error);
   };
 
   async function handleCrearProyecto(e: React.FormEvent) {
@@ -137,10 +112,18 @@ export default function ProyectosPage() {
       return;
     }
 
+    // El código es único en la base: se avisa antes de intentar crearlo
+    const codigoLimpio = codigo.trim();
+    const { data: existente } = await supabase.from('proyectos').select('id').eq('codigo', codigoLimpio).maybeSingle();
+    if (existente) {
+      alert(`Ya existe un proyecto con el código "${codigoLimpio}". Usa otro código o abre el proyecto existente desde la lista.`);
+      return;
+    }
+
     const { data: projectData, error } = await supabase
       .from('proyectos')
       .insert([{
-        codigo,
+        codigo: codigoLimpio,
         nombre,
         cliente,
         prioridad,
@@ -156,7 +139,10 @@ export default function ProyectosPage() {
       .single();
 
     if (error || !projectData) {
-      alert('Error al crear proyecto: ' + error?.message);
+      // Por si otro usuario lo creó entre la revisión y el alta
+      alert(error?.code === '23505' || error?.message?.includes('proyectos_codigo_key')
+        ? `Ya existe un proyecto con el código "${codigoLimpio}".`
+        : 'Error al crear proyecto: ' + (error?.message || 'desconocido'));
       return;
     }
 
@@ -301,7 +287,8 @@ export default function ProyectosPage() {
     setShowRawText(false);
   };
 
-  const handleDescargarPdf = () => {
+  // pdf-lib pesa ~450 KB: se descarga solo cuando alguien pide el PDF, no al abrir la página
+  const handleDescargarPdf = async () => {
     const pedido = {
       numero_pedido: codigo.replace(/^PED-/, ''),
       cliente,
@@ -311,7 +298,8 @@ export default function ProyectosPage() {
       elaborado_por: elaboradoPor,
       partidas,
     };
-    generarPdfPedido(pedido, partidas);
+    const { generarPdfPedido } = await import('@/lib/generar-pdf-pedido');
+    await generarPdfPedido(pedido, partidas);
   };
 
   // El filtro espera 300 ms sin teclear y solo se recalcula si cambian la lista o la búsqueda
@@ -432,7 +420,7 @@ export default function ProyectosPage() {
               </div>
             ))}
             {filtrados.length === 0 && (
-              <div className="p-8 text-center text-white/40 text-sm">No se encontraron órdenes.</div>
+              <div className="p-8 text-center text-white/40 text-sm">{cargandoProyectos ? 'Cargando pedidos...' : 'No se encontraron órdenes.'}</div>
             )}
           </div>
 
@@ -496,6 +484,11 @@ export default function ProyectosPage() {
                     </td>
                   </tr>
                 ))}
+                {filtrados.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="p-8 text-center text-white/40 text-sm">{cargandoProyectos ? 'Cargando pedidos...' : 'No se encontraron órdenes.'}</td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

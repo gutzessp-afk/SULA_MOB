@@ -1,14 +1,33 @@
-
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
-export function middleware(request: NextRequest) {
-  const sessionCookie = request.cookies.get('sula_session')
-  const { pathname } = request.url ? new URL(request.url) : { pathname: request.nextUrl.pathname }
+/** Rol guardado en la cookie de sesión, o null si no hay sesión válida */
+function rolDeSesion(request: NextRequest): string | null {
+  const valor = request.cookies.get('sula_session')?.value
+  if (!valor) return null
+  for (const texto of [valor, decodeURIComponent(valor)]) {
+    try {
+      const sesion = JSON.parse(texto)
+      if (sesion && typeof sesion === 'object') return String(sesion.rol || 'operador').toLowerCase()
+    } catch {
+      // Se intenta con la otra forma de leerla
+    }
+  }
+  return null
+}
 
-  // Si intenta entrar a admin u operator sin la cookie de sesión, mandar al login
-  if ((pathname.startsWith('/admin') || pathname.startsWith('/operator')) && !sessionCookie) {
+export function proxy(request: NextRequest) {
+  const { pathname } = request.nextUrl
+  const rol = rolDeSesion(request)
+
+  // Sin sesión (o con la cookie dañada) no se entra a admin ni a operator
+  if (!rol) {
     return NextResponse.redirect(new URL('/login', request.url))
+  }
+
+  // Un operador no entra al panel de administración
+  if (pathname.startsWith('/admin') && rol !== 'admin') {
+    return NextResponse.redirect(new URL('/operator', request.url))
   }
 
   return NextResponse.next()

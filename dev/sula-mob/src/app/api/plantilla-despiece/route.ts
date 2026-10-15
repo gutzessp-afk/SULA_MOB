@@ -7,6 +7,7 @@
  *   GET    /api/plantilla-despiece?clave=X          → una plantilla completa con su bom
  *   GET    /api/plantilla-despiece?claves=X,Y       → { existentes: { X: true, Y: false } }
  *   GET    /api/plantilla-despiece?claves=X,Y&detalle=1 → { plantillas: { X: {...con bom} } }
+ *   PATCH  /api/plantilla-despiece  { clave, bom }  → guarda el despiece corregido a mano
  *   DELETE /api/plantilla-despiece?clave=X          → elimina esa plantilla
  *
  * Solo administradores.
@@ -16,6 +17,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { esAdmin, supabaseServidor } from '@/lib/admin-api'
+import type { PlantillaBOM } from '@/lib/types'
 
 const noAutorizado = () =>
   NextResponse.json({ error: 'Solo los administradores pueden consultar las plantillas.' }, { status: 403 })
@@ -75,5 +77,48 @@ export async function DELETE(request: NextRequest) {
 
   const { error } = await supabaseServidor().from('plantilla_despiece').delete().eq('clave', clave)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ ok: true })
+}
+
+/** Revisión mínima de la forma del despiece antes de guardarlo */
+function esBOM(bom: unknown): bom is PlantillaBOM {
+  if (!bom || typeof bom !== 'object') return false
+  const { subensambles, herrajes } = bom as Record<string, unknown>
+  return (
+    Array.isArray(subensambles) &&
+    Array.isArray(herrajes) &&
+    subensambles.every(
+      (s) =>
+        s && typeof s === 'object' && typeof s.nombre === 'string' && typeof s.cantidad === 'number' &&
+        Array.isArray(s.componentes) &&
+        s.componentes.every(
+          (c: unknown) =>
+            !!c && typeof c === 'object' &&
+            typeof (c as ComponenteCrudo).descripcion === 'string' &&
+            typeof (c as ComponenteCrudo).material === 'string' &&
+            typeof (c as ComponenteCrudo).cantidad === 'number' &&
+            ((c as ComponenteCrudo).largo_mm === null || typeof (c as ComponenteCrudo).largo_mm === 'number') &&
+            typeof (c as ComponenteCrudo).ancho === 'string'
+        )
+    )
+  )
+}
+type ComponenteCrudo = { descripcion: unknown; material: unknown; cantidad: unknown; largo_mm: unknown; ancho: unknown }
+
+export async function PATCH(request: NextRequest) {
+  if (!(await esAdmin())) return noAutorizado()
+  const body = await request.json().catch(() => null)
+  const clave = typeof body?.clave === 'string' ? body.clave.trim() : ''
+  if (!clave) return NextResponse.json({ error: 'Falta la clave.' }, { status: 400 })
+  if (!esBOM(body?.bom)) return NextResponse.json({ error: 'El despiece no tiene el formato esperado.' }, { status: 400 })
+
+  const { data, error } = await supabaseServidor()
+    .from('plantilla_despiece')
+    .update({ bom: body.bom, updated_at: new Date().toISOString() })
+    .eq('clave', clave)
+    .select('clave')
+    .maybeSingle()
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (!data) return NextResponse.json({ error: `No hay plantilla para la clave ${clave}.` }, { status: 404 })
   return NextResponse.json({ ok: true })
 }

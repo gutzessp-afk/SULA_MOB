@@ -22,6 +22,7 @@ import { AlertTriangle, Box, CheckCircle2, ChevronDown, ChevronRight, ClipboardL
 import { AreaBadge } from './AreaBadge'
 import { EtiquetaCalidad } from './CalidadPlano'
 import { DespieceView, medidas } from './DespieceView'
+import { RevisarBOM } from './RevisarBOM'
 import { construirMatriz } from '@/lib/matriz-corte'
 import type { PlantillaBOM } from '@/lib/types'
 
@@ -55,12 +56,15 @@ interface Props {
   onArchivo: (file: File) => void
   onAnalizar: () => void
   onEliminar: () => void
+  /** El despiece se corrigió a mano y ya se guardó en la plantilla */
+  onCorregido: (bom: PlantillaBOM) => void
 }
 
 const ORIGEN: Record<string, string> = { cache: 'Plantilla guardada', pdf: 'Leído del plano', ia: 'Analizado con IA' }
 
-export function PartidaCard({ clave, descripcion, cantidad, cliente, proyecto, estado, ocupado, onArchivo, onAnalizar, onEliminar }: Props) {
+export function PartidaCard({ clave, descripcion, cantidad, cliente, proyecto, estado, ocupado, onArchivo, onAnalizar, onEliminar, onCorregido }: Props) {
   const [abierta, setAbierta] = useState(false)
+  const [corrigiendo, setCorrigiendo] = useState(false)
   const [pestana, setPestana] = useState<'despiece' | '3d'>('despiece')
   const [seleccion, setSeleccion] = useState<string | null>(null)
   // Sube cada vez que se elige una pieza en la lista: el visor acerca la cámara a ella
@@ -190,7 +194,16 @@ export function PartidaCard({ clave, descripcion, cantidad, cliente, proyecto, e
               )}
 
               {pestana === 'despiece' ? (
-                <DespieceView bom={bom} cantidadPedido={cantidad} />
+                corrigiendo ? (
+                  <RevisarBOM
+                    clave={clave}
+                    bom={bom}
+                    onCerrar={() => setCorrigiendo(false)}
+                    onGuardado={nuevo => { setCorrigiendo(false); onCorregido(nuevo) }}
+                  />
+                ) : (
+                  <DespieceView bom={bom} cantidadPedido={cantidad} onCorregir={ocupado ? undefined : () => setCorrigiendo(true)} />
+                )
               ) : (
                 <div className="grid gap-4 lg:grid-cols-3">
                   <div className="lg:col-span-2 min-w-0">

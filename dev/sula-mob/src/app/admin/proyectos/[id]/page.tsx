@@ -5,9 +5,10 @@
  * ──────────────────────────────────────────────
  * Despiece y vista 3D de cada partida del pedido, a partir del plano técnico:
  *   1. Encabezado con los datos del proyecto.
- *   2. Acciones: subir varios planos a la vez, analizar los pendientes y
+ *   2. Seguimiento: avance por área, línea de tiempo e incidencias.
+ *   3. Acciones: subir varios planos a la vez, analizar los pendientes y
  *      descargar la Matriz de Corte.
- *   3. Una tarjeta por partida (PartidaCard) con su despiece y su vista 3D.
+ *   4. Una tarjeta por partida (PartidaCard) con su despiece y su vista 3D.
  *
  * Cada plano se analiza una sola vez por clave: el resultado se guarda como
  * plantilla (tabla plantilla_despiece) y la próxima vez que se pida esa clave,
@@ -22,6 +23,7 @@ import { useParams } from 'next/navigation';
 import { ArrowLeft, Calendar, FileSpreadsheet, Layers, Loader2, Package, Paperclip, Ruler, Search, User } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { PartidaCard, type EstadoPartida } from '@/components/PartidaCard';
+import TimelineProyecto from '@/components/TimelineProyecto';
 import type { PlantillaBOM } from '@/lib/types';
 
 interface Proyecto {
@@ -291,6 +293,9 @@ export default function DetalleProyectoPage() {
         </div>
       ) : proyecto && (
         <>
+          {/* ═══ SEGUIMIENTO ═══ */}
+          <TimelineProyecto proyectoId={proyecto.id} />
+
           {/* ═══ BARRA DE ACCIONES ═══ */}
           <div className="space-y-3">
             <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3">
@@ -363,6 +368,7 @@ export default function DetalleProyectoPage() {
                   onArchivo={archivo => elegirPlano(p, archivo)}
                   onAnalizar={() => { const archivo = estados[p.clave]?.archivo; if (archivo) void analizar(p, archivo, false); }}
                   onEliminar={() => eliminarPlantilla(p.clave)}
+                  onCorregido={bom => actualizar(p.clave, e => ({ ...e, bom, advertencias: undefined }))}
                 />
               ))}
             </div>

@@ -4,6 +4,7 @@
  * DespieceView.tsx
  * ────────────────
  * Especificaciones del plano de una partida, en tres bloques:
+ *   0. Revisión automática (src/lib/validar-bom.ts) y el botón para corregir piezas.
  *   1. Ficha del producto: modelo, revisión, dimensiones, acabado, materiales.
  *   2. Totales: subensambles, componentes, piezas a fabricar, piezas por revisar.
  *   3. Lista de piezas, agrupada "Por subensamble" (como el plano) o
@@ -17,9 +18,10 @@
  */
 
 import { useMemo, useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
+import { AlertOctagon, AlertTriangle, ChevronDown, ChevronRight, PencilLine } from 'lucide-react'
 import { CalidadPlano } from './CalidadPlano'
 import { colorArea, construirMatriz, type FilaMatriz } from '@/lib/matriz-corte'
+import { validarBOM } from '@/lib/validar-bom'
 import type { PlantillaBOM } from '@/lib/types'
 
 /** "1508mm × 900mm", o el perfil si es tubo */
@@ -47,8 +49,11 @@ const Revisar = () => (
 
 interface Grupo { id: string; titulo: string; detalle: string; color?: string; filas: FilaMatriz[] }
 
-export function DespieceView({ bom, cantidadPedido }: { bom: PlantillaBOM; cantidadPedido: number }) {
+export function DespieceView({ bom, cantidadPedido, onCorregir }: { bom: PlantillaBOM; cantidadPedido: number; onCorregir?: () => void }) {
   const [vista, setVista] = useState<'subensamble' | 'area'>('subensamble')
+  const [verHallazgos, setVerHallazgos] = useState(false)
+  const hallazgos = useMemo(() => validarBOM(bom), [bom])
+  const errores = hallazgos.filter(h => h.gravedad === 'error').length
   const [cerrados, setCerrados] = useState<Record<string, boolean>>({})
 
   const m = useMemo(
@@ -91,6 +96,34 @@ export function DespieceView({ bom, cantidadPedido }: { bom: PlantillaBOM; canti
     <div className="space-y-4">
       {/* Revisión de calidad del plano: lo primero que hay que leer */}
       <CalidadPlano calidad={bom.calidad} />
+
+      {/* Revisión automática del despiece leído: reglas sin IA */}
+      <div className={`rounded-xl border p-3 sm:px-4 ${errores ? 'border-red-400/30 bg-red-500/[0.07]' : hallazgos.length ? 'border-amber-400/25 bg-amber-500/[0.06]' : 'border-emerald-400/20 bg-emerald-500/[0.05]'}`}>
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="flex-1 min-w-0 text-xs text-white/80">
+            <span className="font-semibold text-white">Revisión automática:</span>{' '}
+            {hallazgos.length ? `${errores} error(es) y ${hallazgos.length - errores} aviso(s) en el despiece.` : 'sin observaciones en medidas, calibres ni áreas.'}
+            {hallazgos.length > 0 && (
+              <button type="button" onClick={() => setVerHallazgos(v => !v)} className="ml-2 text-blue-300 underline hover:text-blue-200">{verHallazgos ? 'Ocultar' : 'Ver detalle'}</button>
+            )}
+          </p>
+          {onCorregir && (
+            <button type="button" onClick={onCorregir} className="inline-flex items-center gap-2 rounded-lg bg-white/[0.08] px-3 py-2 min-h-[40px] text-xs font-semibold text-white hover:bg-white/[0.14]">
+              <PencilLine className="h-4 w-4" /> Corregir piezas
+            </button>
+          )}
+        </div>
+        {verHallazgos && (
+          <ul className="mt-2 space-y-1">
+            {hallazgos.map((h, i) => (
+              <li key={i} className={`flex items-start gap-1.5 text-xs ${h.gravedad === 'error' ? 'text-red-300' : 'text-amber-200'}`}>
+                {h.gravedad === 'error' ? <AlertOctagon className="mt-px h-3.5 w-3.5 shrink-0" /> : <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />}
+                <span><span className="font-semibold">{h.pieza}</span>{h.sub !== null && h.comp !== null ? ` (${bom.subensambles[h.sub]?.nombre})` : ''}: {h.mensaje}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       {/* 1. Ficha del producto */}
       <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2 bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">

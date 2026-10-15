@@ -15,6 +15,7 @@
  *   - Explosión: cada capa separada (exterior, interior, base, accesorios)
  *
  * Clic en una pieza = se pone amarilla y las demás se atenúan.
+ * Vistas fijas (frente, lado, arriba, 3D) y captura del visor en PNG.
  * Arrastrar = rotar · rueda o pellizco = zoom · clic derecho = mover.
  *
  * RUTA: src/components/Visor3D.tsx
@@ -25,7 +26,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import { Vector3 } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
-import { RotateCcw } from 'lucide-react'
+import { Camera, RotateCcw } from 'lucide-react'
 import { areaDePieza } from '@/lib/matriz-corte'
 import { medidas } from './DespieceView'
 import { Pieza3D, type AparienciaPieza } from './Pieza3D'
@@ -33,6 +34,7 @@ import { ensamblar, type PiezaArmada } from '@/lib/ensamble-3d'
 import type { Capa3D, PlantillaBOM } from '@/lib/types'
 
 type ModoVista = 'exterior' | 'interior' | 'explosion'
+type VistaFija = 'frente' | 'lado' | 'arriba' | 'iso'
 type ColorPor = 'acabado' | 'area'
 
 const MM = 0.001
@@ -223,7 +225,27 @@ export default function Visor3D({ bom, seleccion, onSeleccion, enfoque }: Props)
     const direccion = inicio.posicion.clone().sub(inicio.objetivo)
     return { objetivo: inicio.objetivo, posicion: inicio.objetivo.clone().add(direccion.multiplyScalar(1 + separacion * 0.75)) }
   }, [modo, inicio, separacion])
-  const cambiarModo = (m: ModoVista) => { setModo(m); setReinicio(n => n + 1) }
+  // Vista fija elegida en la barra; null = la vista del modo actual
+  const [vistaFija, setVistaFija] = useState<VistaFija | null>(null)
+  const destino = useMemo<Vista>(() => {
+    if (!vistaFija || vistaFija === 'iso') return vistaModo
+    const distancia = vistaModo.posicion.distanceTo(vistaModo.objetivo)
+    const direccion = { frente: new Vector3(0, 0, 1), lado: new Vector3(1, 0, 0), arriba: new Vector3(0, 1, 0.0001) }[vistaFija]
+    return { objetivo: vistaModo.objetivo, posicion: vistaModo.objetivo.clone().add(direccion.multiplyScalar(distancia)) }
+  }, [vistaFija, vistaModo])
+  const irA = (v: VistaFija) => { setVistaFija(v); setReinicio(n => n + 1) }
+  const cambiarModo = (m: ModoVista) => { setModo(m); setVistaFija(null); setReinicio(n => n + 1) }
+
+  /** Descarga lo que muestra el visor como imagen PNG */
+  const lienzo = useRef<HTMLCanvasElement>(null)
+  const capturar = () => {
+    const url = lienzo.current?.toDataURL('image/png')
+    if (!url) return
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${[bom.modelo || 'producto', 'vista-3d', new Date().toISOString().slice(0, 10)].join('_').replace(/[^\w.-]+/g, '_')}.png`
+    a.click()
+  }
 
   // Leyenda: qué significa cada color en el modo activo
   const leyenda = (() => {
@@ -276,13 +298,25 @@ export default function Visor3D({ bom, seleccion, onSeleccion, enfoque }: Props)
             />
           </label>
         )}
-        <button
-          type="button"
-          onClick={() => { onSeleccion(null); setReinicio(n => n + 1) }}
-          className={`${boton(false)} ml-auto inline-flex items-center gap-1.5`}
-        >
-          <RotateCcw className="w-3.5 h-3.5" /> Reiniciar
-        </button>
+        <div className="flex gap-1 ml-auto">
+          <button type="button" onClick={capturar} className={`${boton(false)} inline-flex items-center gap-1.5`} title="Descargar la vista como imagen PNG">
+            <Camera className="w-3.5 h-3.5" /> Captura
+          </button>
+          <button
+            type="button"
+            onClick={() => { onSeleccion(null); setVistaFija(null); setReinicio(n => n + 1) }}
+            className={`${boton(false)} inline-flex items-center gap-1.5`}
+          >
+            <RotateCcw className="w-3.5 h-3.5" /> Reiniciar
+          </button>
+        </div>
+      </div>
+
+      {/* Vistas fijas */}
+      <div className="flex gap-1" role="group" aria-label="Vista de la cámara">
+        {([['frente', 'Frente'], ['lado', 'Lado'], ['arriba', 'Arriba'], ['iso', '3D']] as const).map(([id, texto]) => (
+          <button key={id} type="button" onClick={() => irA(id)} aria-pressed={vistaFija === id} className={boton(vistaFija === id)}>{texto}</button>
+        ))}
       </div>
 
       {/* Acabado del plano: es lo que define el color de las piezas */}
@@ -295,6 +329,9 @@ export default function Visor3D({ bom, seleccion, onSeleccion, enfoque }: Props)
         <Canvas
           camera={{ position: inicio.posicion.toArray(), fov: 50, near: 0.01, far: 200 }}
           dpr={[1, 2]}
+          // Sin esto el lienzo se borra después de cada cuadro y la captura sale en negro
+          gl={{ preserveDrawingBuffer: true }}
+          ref={lienzo}
           onCreated={({ camera }) => camera.lookAt(inicio.objetivo)}
           onPointerMissed={() => onSeleccion(null)}
         >
@@ -316,7 +353,7 @@ export default function Visor3D({ bom, seleccion, onSeleccion, enfoque }: Props)
             />
           ))}
 
-          <ControlCamara controles={controles} enfoque={enfoque} vistaEnfoque={vistaEnfoque} reinicio={reinicio} inicio={vistaModo} />
+          <ControlCamara controles={controles} enfoque={enfoque} vistaEnfoque={vistaEnfoque} reinicio={reinicio} inicio={destino} />
           <ObjetivoInicial controles={controles} objetivo={inicio.objetivo} />
         </Canvas>
 

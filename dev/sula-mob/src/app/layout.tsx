@@ -1,8 +1,10 @@
 import './globals.css'
 import './movil.css'
+import './tema.css'
 import type { Metadata, Viewport } from 'next'
 import { Geist } from 'next/font/google'
 import { RegistrarServiceWorker } from '@/components/InstallPWA'
+import { SCRIPT_TEMA } from '@/components/TemaToggle'
 import { cn } from '@/lib/utils'
 
 const geist = Geist({ subsets: ['latin'], variable: '--font-sans' })
@@ -35,7 +37,11 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="es" className={cn('dark', 'font-sans', geist.variable)}>
+    // El script del tema cambia data-theme antes de que React cargue: por eso suppressHydrationWarning
+    <html lang="es" className={cn('dark', 'font-sans', geist.variable)} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: SCRIPT_TEMA }} />
+      </head>
       <body className="bg-[#0b0c10] text-slate-100 antialiased selection:bg-red-500 selection:text-white">
         {children}
         <RegistrarServiceWorker />

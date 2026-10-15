@@ -9,6 +9,7 @@ import {
   Briefcase,
   Warehouse,
   Bell,
+  CalendarDays,
   BarChart3,
   Users,
   LogOut,
@@ -18,6 +19,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
+import { logoutAction } from '@/app/(auth)/login/actions';
+import { limpiarCache } from '@/lib/cache-datos';
 import InstallPWA from '@/components/InstallPWA';
 import MobiChat from '@/components/MobiChat';
 
@@ -29,6 +32,7 @@ const menuSections = [
     items: [
       { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutGrid },
       { name: 'Proyectos', href: '/admin/proyectos', icon: Briefcase },
+      { name: 'Calendario', href: '/admin/calendario', icon: CalendarDays },
       { name: 'Áreas', href: '/admin/actividades', icon: Warehouse },
       { name: 'Notificaciones', href: '/admin/notificaciones', icon: Bell },
     ],
@@ -60,12 +64,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     return () => window.removeEventListener('resize', fn);
   }, []);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     localStorage.removeItem('sula_user');
+    limpiarCache();
+    await logoutAction();
     router.push('/login');
   };
 
   const glassPanel = `
+    sula-panel
     backdrop-blur-[50px] backdrop-saturate-[2.2]
     bg-white/[0.05]
     border-r border-white/[0.08]
@@ -166,7 +173,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   );
 
   return (
-    <div className="min-h-screen bg-[#060910] text-slate-100 font-sans selection:bg-blue-500 selection:text-white">
+    <div className="sula-fondo min-h-screen bg-[#060910] text-slate-100 font-sans selection:bg-blue-500 selection:text-white">
 
       {/* Fondo global: <Image> lo sirve en AVIF/WebP al tamaño de la pantalla */}
       <div className="fixed inset-0 pointer-events-none opacity-[0.22] z-0">
@@ -181,9 +188,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         />
       </div>
 
-      <div className="hidden lg:block fixed -top-32 -left-20 w-[420px] h-[420px] rounded-full bg-blue-600/[0.07] blur-[130px] pointer-events-none z-0" />
-      <div className="hidden lg:block fixed top-1/3 -left-10 w-[320px] h-[320px] rounded-full bg-cyan-500/[0.05] blur-[120px] pointer-events-none z-0" />
-      <div className="hidden lg:block fixed bottom-0 left-1/4 w-[380px] h-[380px] rounded-full bg-blue-500/[0.04] blur-[140px] pointer-events-none z-0" />
+      <div className="sula-orbe hidden lg:block fixed -top-32 -left-20 w-[420px] h-[420px] rounded-full bg-blue-600/[0.07] blur-[130px] pointer-events-none z-0" />
+      <div className="sula-orbe hidden lg:block fixed top-1/3 -left-10 w-[320px] h-[320px] rounded-full bg-cyan-500/[0.05] blur-[120px] pointer-events-none z-0" />
+      <div className="sula-orbe hidden lg:block fixed bottom-0 left-1/4 w-[380px] h-[380px] rounded-full bg-blue-500/[0.04] blur-[140px] pointer-events-none z-0" />
 
       <aside
         className={`
@@ -219,7 +226,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </button>
 
       <header className="lg:hidden sticky top-0 z-50 pt-[env(safe-area-inset-top)]">
-        <div className="mx-3 mt-3 backdrop-blur-md bg-[#0b0f17]/90 border border-white/[0.08] rounded-2xl px-4 py-3 shadow-lg flex items-center justify-between">
+        <div className="sula-panel mx-3 mt-3 backdrop-blur-md bg-[#0b0f17]/90 border border-white/[0.08] rounded-2xl px-4 py-3 shadow-lg flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setMobileOpen(true)}
@@ -252,7 +259,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         className={`
           lg:hidden fixed top-0 left-0 h-full w-[260px] z-50
           flex flex-col
-          bg-[#0b0f17]
+          sula-panel bg-[#0b0f17]
           border-r border-white/[0.08]
           shadow-2xl shadow-black/50
           transition-transform duration-400 ease-[cubic-bezier(0.4,0,0.2,1)]

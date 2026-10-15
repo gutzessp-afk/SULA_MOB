@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
+import { logoutAction } from '@/app/(auth)/login/actions'
 import {
   LayoutDashboard,
   Factory,
@@ -77,8 +78,8 @@ export default function OperatorSidebar() {
     },
   ]
 
-  const handleLogout = () => {
-    document.cookie = 'sula_session=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;'
+  const handleLogout = async () => {
+    await logoutAction()
     router.push('/login')
   }
 
