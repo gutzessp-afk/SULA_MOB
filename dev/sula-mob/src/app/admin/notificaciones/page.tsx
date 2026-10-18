@@ -1,47 +1,75 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+/**
+ * Centro de notificaciones del admin — /admin/notificaciones
+ * Un mismo aviso se guarda una vez por destinatario: aquí se agrupa y se dice
+ * a cuántos les llegó y cuántos ya lo leyeron. "Leída" es de cada destinatario,
+ * así que el admin no la cambia.
+ *
+ * RUTA: src/app/admin/notificaciones/page.tsx
+ */
+
+import { useEffect, useState } from 'react';
 import Image from 'next/image';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { Bell, MessageSquare, CheckCircle, AlertTriangle, Clock, Loader2, User } from 'lucide-react';
 
-interface Notificacion {
+type Persona = { nombre: string | null; apellidos?: string | null } | null;
+
+interface Fila {
   id: string;
-  mensaje: string;
-  tipo: string;
-  leido: boolean;
+  mensaje: string | null;
+  tipo: string | null;
+  leida: boolean | null;
+  proyecto_id: string | null;
   created_at: string;
-  usuarios?: { nombre: string; apellidos?: string; };
-  areas?: { nombre: string; };
+  remitente: Persona;
+  destinatario: Persona;
+  proyectos: { codigo: string | null } | null;
+}
+
+interface Aviso extends Fila { para: string[]; leidas: number }
+
+const LIMITE = 300;
+const nombre = (p: Persona) => (p ? `${p.nombre ?? ''} ${p.apellidos ?? ''}`.trim() : '');
+const esAlerta = (n: Fila) => /retras|atras|urgent|incidenc|falla|falta|alerta/i.test(`${n.tipo} ${n.mensaje}`);
+
+/** Junta las copias del mismo aviso (mismo mensaje, proyecto y minuto) */
+function agrupar(filas: Fila[]): Aviso[] {
+  const grupos = new Map<string, Aviso>();
+  for (const n of filas) {
+    const clave = `${n.mensaje}|${n.proyecto_id}|${n.created_at.slice(0, 16)}`;
+    const g = grupos.get(clave) ?? { ...n, para: [], leidas: 0 };
+    const quien = nombre(n.destinatario);
+    if (quien) g.para.push(quien);
+    if (n.leida) g.leidas++;
+    grupos.set(clave, g);
+  }
+  return [...grupos.values()];
 }
 
 export default function NotificacionesPage() {
-  const [notificaciones, setNotificaciones] = useState<Notificacion[]>([]);
+  const [notificaciones, setNotificaciones] = useState<Aviso[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const fetchNotificaciones = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('notificaciones')
-      .select('*, usuarios (nombre, apellidos), areas (nombre)')
-      .order('created_at', { ascending: false });
-    if (!error && data) setNotificaciones(data as Notificacion[]);
-  }, []);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    let isMounted = true;
-    async function loadData() {
-      setLoading(true);
-      await fetchNotificaciones();
-      if (isMounted) setLoading(false);
-    }
-    void loadData();
-    return () => { isMounted = false; };
-  }, [fetchNotificaciones]);
-
-  const marcarComoLeida = async (id: string) => {
-    const { error } = await supabase.from('notificaciones').update({ leido: true }).eq('id', id);
-    if (!error) void fetchNotificaciones();
-  };
+    let vigente = true;
+    // notificaciones tiene dos llaves hacia usuarios: hay que decir cuál es cuál
+    supabase
+      .from('notificaciones')
+      .select('id, mensaje, tipo, leida, proyecto_id, created_at, remitente:usuarios!notificaciones_remitente_id_fkey (nombre, apellidos), destinatario:usuarios!notificaciones_destinatario_id_fkey (nombre, apellidos), proyectos (codigo)')
+      .order('created_at', { ascending: false })
+      .limit(LIMITE)
+      .then(({ data, error: err }) => {
+        if (!vigente) return;
+        if (err) setError('No se pudieron cargar las notificaciones: ' + err.message);
+        else setNotificaciones(agrupar((data ?? []) as unknown as Fila[]));
+        setLoading(false);
+      });
+    return () => { vigente = false; };
+  }, []);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto px-2 sm:px-0">
@@ -67,64 +95,58 @@ export default function NotificacionesPage() {
               <Loader2 className="w-6 h-6 animate-spin text-red-500" />
               <span>Cargando avisos de operadores...</span>
             </div>
+          ) : error ? (
+            <p className="text-xs text-red-300 font-semibold bg-red-500/10 border border-red-500/25 rounded-xl px-4 py-3">{error}</p>
           ) : notificaciones.length === 0 ? (
             <div className="relative overflow-hidden rounded-[20px] sm:rounded-[26px] border border-white/20 bg-white/[0.05] p-12 text-center shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] space-y-3">
               <MessageSquare className="w-10 h-10 text-white/30 mx-auto" />
-              <h3 className="text-base font-bold text-white">Sin mensajes pendientes</h3>
-              <p className="text-xs text-white/50">No hay notificaciones no leidas en el sistema.</p>
+              <h3 className="text-base font-bold text-white">Sin notificaciones</h3>
+              <p className="text-xs text-white/50">Todavía no hay avisos en el sistema.</p>
             </div>
           ) : (
-            notificaciones.map((n) => (
-              <div
-                key={n.id}
-                className={`relative overflow-hidden rounded-[20px] sm:rounded-[26px] border border-white/20 p-4 sm:p-5 flex flex-col sm:flex-row items-start justify-between gap-3 sm:gap-4 transition-all shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] ${
-                  n.leido ? 'bg-white/[0.03] opacity-60' : 'bg-red-950/20 border-red-500/40'
-                }`}
-              >
-                <div className="flex items-start gap-3 sm:gap-4 w-full sm:w-auto">
+            notificaciones.map((n) => {
+              const alerta = esAlerta(n);
+              const todasLeidas = n.para.length > 0 && n.leidas >= n.para.length;
+              const codigo = n.proyectos?.codigo;
+              return (
+                <div
+                  key={n.id}
+                  className={`relative overflow-hidden rounded-[20px] sm:rounded-[26px] border p-4 sm:p-5 flex items-start gap-3 sm:gap-4 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl ${
+                    alerta ? 'bg-red-950/20 border-red-500/40' : 'bg-white/[0.04] border-white/15'
+                  }`}
+                >
                   <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center shrink-0 border ${
-                    n.tipo === 'alerta' ? 'bg-red-950/80 text-red-400 border-red-500/50'
-                    : n.tipo === 'incidencia' ? 'bg-orange-950/80 text-orange-400 border-orange-500/50'
-                    : 'bg-white/10 text-white border-white/15'
+                    alerta ? 'bg-red-950/80 text-red-400 border-red-500/50' : 'bg-white/10 text-white border-white/15'
                   }`}>
-                    {n.tipo === 'alerta' ? <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5" /> : <MessageSquare className="w-4 h-4 sm:w-5 sm:h-5" />}
+                    {alerta ? <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5" /> : <MessageSquare className="w-4 h-4 sm:w-5 sm:h-5" />}
                   </div>
-                  <div className="space-y-1 min-w-0 flex-1">
+                  <div className="space-y-1.5 min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-xs font-bold text-white flex items-center gap-1">
                         <User className="w-3.5 h-3.5 text-white/50" />
-                        {n.usuarios ? `${n.usuarios.nombre} ${n.usuarios.apellidos || ''}` : 'Operador'}
+                        {nombre(n.remitente) || 'Sistema'}
                       </span>
-                      {n.areas && (
-                        <span className="text-[10px] bg-white/10 text-white/80 px-2 py-0.5 rounded-full font-semibold border border-white/10">
-                          Area: {n.areas.nombre}
-                        </span>
+                      {n.tipo && (
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${alerta ? 'bg-red-500/20 text-red-400' : 'bg-teal-500/20 text-teal-400'}`}>{n.tipo}</span>
                       )}
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${
-                        n.tipo === 'alerta' ? 'bg-red-500/20 text-red-400'
-                        : n.tipo === 'incidencia' ? 'bg-orange-500/20 text-orange-400'
-                        : 'bg-teal-500/20 text-teal-400'
-                      }`}>{n.tipo}</span>
+                      {codigo && n.proyecto_id && (
+                        <Link href={`/admin/proyectos/${n.proyecto_id}`} className="-my-1.5 py-1.5 text-[10px] font-mono font-bold text-blue-400 hover:underline">{codigo}</Link>
+                      )}
                     </div>
                     <p className="text-sm text-white/90 leading-relaxed break-words">{n.mensaje}</p>
-                    <div className="flex items-center gap-1 text-[11px] text-white/50 pt-1">
-                      <Clock className="w-3 h-3" />
-                      {new Date(n.created_at).toLocaleString('es-MX')}
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-white/50 pt-0.5">
+                      <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{new Date(n.created_at).toLocaleString('es-MX')}</span>
+                      {n.para.length > 0 && (
+                        <span title={n.para.join(', ')} className={`flex items-center gap-1 ${todasLeidas ? 'text-emerald-400' : ''}`}>
+                          <CheckCircle className="w-3 h-3" />
+                          {n.para.length === 1 ? `Para ${n.para[0]} · ${n.leidas ? 'leída' : 'sin leer'}` : `Para ${n.para.length} personas · ${n.leidas} la leyeron`}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
-                {!n.leido && (
-                  <button
-                    type="button"
-                    onClick={() => marcarComoLeida(n.id)}
-                    className="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-xl flex items-center gap-1 transition-colors shrink-0 border border-white/15 w-full sm:w-auto justify-center sm:justify-start"
-                  >
-                    <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                    Marcar leido
-                  </button>
-                )}
-              </div>
-            ))
+              );
+            })
           )}
         </div>
 

@@ -31,23 +31,15 @@ import { areaDePieza } from '@/lib/matriz-corte'
 import { medidas } from './DespieceView'
 import { Pieza3D, type AparienciaPieza } from './Pieza3D'
 import { ensamblar, type PiezaArmada } from '@/lib/ensamble-3d'
-import type { Capa3D, PlantillaBOM } from '@/lib/types'
+import type { PlantillaBOM } from '@/lib/types'
 
 type ModoVista = 'exterior' | 'interior' | 'explosion'
 type VistaFija = 'frente' | 'lado' | 'arriba' | 'iso'
-type ColorPor = 'acabado' | 'area'
+/** Plano: gris de dibujo técnico · Acabado: colores reales del plano · Área: color de cada área de producción */
+type ColorPor = 'plano' | 'acabado' | 'area'
 
 const MM = 0.001
 const AMARILLO = '#FFD700'
-
-/** Gris metálico de cada capa */
-const BASE_CAPA: Record<Capa3D, { color: string; metalness: number; roughness: number }> = {
-  estructura: { color: '#8a8f9c', metalness: 0.6, roughness: 0.35 },
-  exterior: { color: '#767b88', metalness: 0.5, roughness: 0.45 },
-  interior: { color: '#9a9fac', metalness: 0.4, roughness: 0.5 },
-  base: { color: '#80848f', metalness: 0.55, roughness: 0.4 },
-  accesorio: { color: '#a8adb9', metalness: 0.7, roughness: 0.25 },
-}
 
 /** Color de cada área en el 3D (tonos vivos para distinguirlos sobre el fondo) */
 const COLOR_3D: Record<string, string> = {
@@ -84,10 +76,19 @@ function tapa(p: PiezaArmada, dims: { ancho: number; alto: number; fondo: number
 
 /** Color de una pintura o de un tablero, leído de su descripción en el plano */
 const COLORES: [RegExp, string][] = [
-  [/negr/i, '#2b2c31'], [/blanc/i, '#e6e6e3'], [/gris|plata|alumin/i, '#9a9ea8'], [/roj/i, '#b3312c'],
+  // Colores base
+  [/negr/i, '#2b2c31'], [/blanc/i, '#e6e6e3'], [/gris|plata|silver/i, '#9a9ea8'], [/roj/i, '#b3312c'],
   [/azul/i, '#2f5fa8'], [/verde/i, '#2f7d52'], [/amarill/i, '#d4b02a'], [/naranja/i, '#d0702a'],
+  // Maderas y tableros
   [/cafe|café|chocolate|nogal|wengu/i, '#5a3d2b'], [/maple|encino|roble|haya|natural/i, '#c2a171'],
-  [/galvan|zinc|cromo|inox/i, '#b9bec8'],
+  [/cerezo|cherry/i, '#8b4226'], [/\bpino\b/i, '#d4b87a'], [/cenizo|ceniza|\bash\b/i, '#b5a998'], [/caoba|mahogan/i, '#6e3630'],
+  // Metales y acabados industriales
+  [/galvan|zinc|cromo|inox/i, '#b9bec8'], [/alumin/i, '#c5c9d0'],
+  [/dorado|\boro\b|gold|bronce|lat[oó]n/i, '#b8860b'], [/cobre|copper/i, '#b87333'], [/[oó]xido|rust|corten/i, '#8b4513'],
+  // Pinturas especiales
+  [/beige|arena|crema|cream/i, '#d4c5a9'], [/vino|borgoña|guinda|tinto/i, '#722f37'], [/oliv/i, '#556b2f'],
+  [/humo|smoke|grafito/i, '#696969'], [/terracota|salm[oó]n/i, '#cc6644'], [/marfil|ivory|perla|pearl/i, '#f0ece0'],
+  [/turquesa|teal|aqua/i, '#2a8a8a'], [/rosa|pink/i, '#c96b8b'], [/morado|p[uú]rpura|violeta/i, '#6a3d7d'],
 ]
 const colorDe = (texto: string) => COLORES.find(([re]) => re.test(texto))?.[1]
 
@@ -112,7 +113,14 @@ function superficie(p: PiezaArmada, acabadoGeneral: string): Superficie {
   if (!p.acabado && /inox|galvan|crom|satinad|zinc/i.test(p.material)) return { color: '#c3c7cf', metalness: 0.85, roughness: 0.3, opacity: 1 }
   const pintura = colorDe(p.acabado || acabadoGeneral)
   if (pintura) return { color: pintura, metalness: 0.15, roughness: /mate/i.test(p.acabado || acabadoGeneral) ? 0.85 : 0.5, opacity: 1 }
-  return { ...BASE_CAPA[p.capa], opacity: 1 }
+  // Sin acabado detectado: acero industrial; la estructura más oscura y brillante, los accesorios más claros
+  const estructura = p.capa === 'estructura'
+  return {
+    color: estructura ? '#6b717e' : p.capa === 'accesorio' ? '#a0a5b0' : '#8a8f9c',
+    metalness: estructura ? 0.6 : 0.4,
+    roughness: estructura ? 0.35 : 0.55,
+    opacity: 1,
+  }
 }
 
 /** Luminosidad 0-1 de un color "#rrggbb" */
@@ -121,6 +129,15 @@ const luz = (hex: string) => (parseInt(hex.slice(1, 3), 16) * 0.299 + parseInt(h
 function apariencia(p: PiezaArmada, modo: ModoVista, colorPor: ColorPor, acabado: string, seleccion: string | null, dims: { ancho: number; alto: number; fondo: number }): AparienciaPieza {
   if (seleccion === p.compKey) {
     return { color: AMARILLO, opacity: 1, metalness: 0.4, roughness: 0.4, emissive: AMARILLO, emissiveIntensity: 0.3, borde: '#fff7c2' }
+  }
+
+  // Plano técnico: todo en gris claro uniforme con aristas marcadas, como un dibujo
+  if (colorPor === 'plano') {
+    let opacity = 1
+    if (modo === 'interior' && tapa(p, dims)) opacity = 0.07
+    if (seleccion !== null) opacity = Math.min(opacity, 0.3)
+    // Mate y difuso, como una maqueta, con las aristas bien marcadas
+    return { color: '#b8bcc6', opacity, metalness: 0.15, roughness: 0.7, emissive: '#b8bcc6', emissiveIntensity: 0.04, borde: opacity < 0.5 ? '#8a93a3' : '#5a5f6e' }
   }
 
   let { color, metalness, roughness, opacity } = superficie(p, acabado)
@@ -279,14 +296,17 @@ export default function Visor3D({ bom, seleccion, onSeleccion, enfoque }: Props)
     <div className="space-y-2">
       {/* Barra de herramientas */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex gap-1" role="group" aria-label="Modo de vista">
+        <div className="grid w-full grid-cols-3 gap-1 sm:flex sm:w-auto" role="group" aria-label="Modo de vista">
           {([['exterior', 'Exterior'], ['interior', 'Interior'], ['explosion', 'Explosión']] as const).map(([id, texto]) => (
             <button key={id} type="button" onClick={() => cambiarModo(id)} aria-pressed={modo === id} className={boton(modo === id)}>{texto}</button>
           ))}
         </div>
-        <div className="flex gap-1 sm:ml-2" role="group" aria-label="Color de las piezas">
-          <button type="button" onClick={() => setColorPor('acabado')} aria-pressed={colorPor === 'acabado'} className={boton(colorPor === 'acabado')}>Acabado</button>
-          <button type="button" onClick={() => setColorPor('area')} aria-pressed={colorPor === 'area'} className={boton(colorPor === 'area')}>Color por área</button>
+        <div className="grid w-full grid-cols-3 gap-1 sm:ml-2 sm:flex sm:w-auto" role="group" aria-label="Color de las piezas">
+          {([['plano', '📐', 'Plano'], ['acabado', '🎨', 'Acabado Final'], ['area', '📊', 'Por Área']] as const).map(([id, emoji, texto]) => (
+            <button key={id} type="button" onClick={() => setColorPor(id)} aria-pressed={colorPor === id} className={boton(colorPor === id)}>
+              <span className="mr-1" aria-hidden="true">{emoji}</span>{id === 'acabado' ? <><span className="sm:hidden">Acabado</span><span className="hidden sm:inline">{texto}</span></> : texto}
+            </button>
+          ))}
         </div>
         {modo === 'explosion' && (
           <label className="flex items-center gap-2 text-[11px] text-white/60">
@@ -313,19 +333,27 @@ export default function Visor3D({ bom, seleccion, onSeleccion, enfoque }: Props)
       </div>
 
       {/* Vistas fijas */}
-      <div className="flex gap-1" role="group" aria-label="Vista de la cámara">
+      <div className="grid grid-cols-4 gap-1 sm:flex" role="group" aria-label="Vista de la cámara">
         {([['frente', 'Frente'], ['lado', 'Lado'], ['arriba', 'Arriba'], ['iso', '3D']] as const).map(([id, texto]) => (
           <button key={id} type="button" onClick={() => irA(id)} aria-pressed={vistaFija === id} className={boton(vistaFija === id)}>{texto}</button>
         ))}
       </div>
 
-      {/* Acabado del plano: es lo que define el color de las piezas */}
+      {/* Qué se está viendo: en Acabado Final, el acabado del plano es lo que define el color */}
       <p className="text-[11px] text-white/55 leading-snug">
-        <span className="text-white/35">Acabado del plano:</span>{' '}
-        {acabados.length ? acabados.join(' · ') : <span className="text-amber-300/80">no se encontró; vuelve a analizar el plano o captúralo</span>}
+        {colorPor === 'plano' && <><span className="text-white/35">📐 Vista técnica:</span> estructura sin color, todas las piezas en gris uniforme</>}
+        {colorPor === 'acabado' && (
+          <>
+            <span className="text-white/35">🎨 Acabado final:</span>{' '}
+            {acabados.length
+              ? <>colores según el plano del producto: {acabados.join(' · ')}</>
+              : <span className="text-amber-300/80">no se encontró acabado; vuelve a analizar el plano o captúralo</span>}
+          </>
+        )}
+        {colorPor === 'area' && <><span className="text-white/35">📊 Color por área:</span> cada pieza coloreada según su área de producción</>}
       </p>
 
-      <div className="relative w-full aspect-[4/3] lg:aspect-auto lg:h-[500px] rounded-xl overflow-hidden bg-[#3a404c] border border-white/[0.08] touch-none">
+      <div className={`relative w-full aspect-square sm:aspect-[4/3] lg:aspect-auto lg:h-[500px] rounded-xl overflow-hidden ${colorPor === 'acabado' ? 'bg-[#2a2e38]' : 'bg-[#3a404c]'} border border-white/[0.08] touch-none`}>
         <Canvas
           camera={{ position: inicio.posicion.toArray(), fov: 50, near: 0.01, far: 200 }}
           dpr={[1, 2]}
@@ -335,11 +363,26 @@ export default function Visor3D({ bom, seleccion, onSeleccion, enfoque }: Props)
           onCreated={({ camera }) => camera.lookAt(inicio.objetivo)}
           onPointerMissed={() => onSeleccion(null)}
         >
-          <color attach="background" args={['#3a404c']} />
-          <ambientLight intensity={1.1} />
-          <hemisphereLight args={['#ffffff', '#30343f', 0.9]} />
-          <directionalLight position={[10, 10, 5]} intensity={2.2} />
-          <directionalLight position={[-5, 5, -5]} intensity={1.0} />
+          <color attach="background" args={[colorPor === 'acabado' ? '#2a2e38' : '#3a404c']} />
+          {colorPor === 'acabado' ? (
+            // Acabado: estudio de fotografía de producto. Poca luz ambiental para que haya
+            // contraste; principal cálida, relleno frío, contraluz que separa del fondo y rebote del piso
+            <>
+              <ambientLight intensity={0.35} />
+              <hemisphereLight args={['#ffeedd', '#1a1d25', 0.5]} />
+              <directionalLight position={[5, 8, 4]} intensity={2.5} color="#fff5e6" />
+              <directionalLight position={[-4, 4, -3]} intensity={0.8} color="#e0e8ff" />
+              <directionalLight position={[0, 3, -6]} intensity={0.6} color="#ffffff" />
+              <pointLight position={[0, -1, 0]} intensity={0.2} color="#ffd4a0" distance={5} />
+            </>
+          ) : (
+            <>
+              <ambientLight intensity={1.1} />
+              <hemisphereLight args={['#ffffff', '#30343f', 0.9]} />
+              <directionalLight position={[10, 10, 5]} intensity={2.2} />
+              <directionalLight position={[-5, 5, -5]} intensity={1.0} />
+            </>
+          )}
 
           <gridHelper args={[Math.max(dims.ancho * MM * 3, 2), 20, '#566070', '#474e5c']} />
 
@@ -385,15 +428,15 @@ export default function Visor3D({ bom, seleccion, onSeleccion, enfoque }: Props)
         </p>
       </div>
 
-      {/* Leyenda de colores del modo activo */}
-      <ul className="flex flex-wrap gap-x-4 gap-y-1.5 pt-1" aria-label={colorPor === 'area' ? 'Colores por área' : 'Acabados y materiales'}>
+      {/* Leyenda de colores del modo activo (en plano técnico todo es gris) */}
+      {colorPor !== 'plano' && <ul className="flex flex-wrap gap-x-4 gap-y-1.5 pt-1" aria-label={colorPor === 'area' ? 'Colores por área' : 'Acabados y materiales'}>
         {leyenda.map(([etiqueta, g]) => (
           <li key={etiqueta} className="inline-flex items-center gap-1.5 text-[11px] text-white/65">
             <span className="w-3 h-3 rounded-sm border border-white/25 flex-shrink-0" style={{ backgroundColor: g.color }} />
             {etiqueta} <span className="text-white/35 font-mono">{g.piezas}</span>
           </li>
         ))}
-      </ul>
+      </ul>}
     </div>
   )
 }

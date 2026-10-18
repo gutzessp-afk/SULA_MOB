@@ -24,6 +24,7 @@ import {
   ArrowLeft, Check, ChevronDown, ChevronRight, Cog, Layers, Loader2, Package, Plus, Wrench, X,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import IncidenciasProyecto from '@/components/IncidenciasProyecto';
 
 /* ═══════════════════════════════════════
    TIPOS (columnas reales de cada tabla)
@@ -208,7 +209,7 @@ function PlanoDespiece({ partida, subs, compsDe, progresoComp, horizontal }: {
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto -mx-2 px-2 sm:mx-0 sm:px-0">
       <svg
         viewBox={`0 0 ${ancho} ${alto}`}
         width={horizontal ? ancho : undefined}
@@ -529,7 +530,7 @@ export default function DespiecePage() {
       ) : proyecto && partidaPlano ? (
         <>
           {/* ═══ SECCIÓN 1: PLANO 2D ═══ */}
-          <div className={`${TARJETA} p-4 sm:p-6 space-y-4`}>
+          <div className={`${TARJETA} p-3 sm:p-6 space-y-4`}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <h2 className="text-xs font-bold uppercase tracking-wider text-white/60 flex items-center gap-2">
                 <Layers className="w-4 h-4 text-cyan-400" /> Plano de Ensamble
@@ -588,27 +589,27 @@ export default function DespiecePage() {
                   <button
                     type="button"
                     onClick={() => toggleNodo(partida.id)}
-                    className="max-sm:min-h-[44px] w-full text-left p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3 hover:bg-white/[0.03] transition-colors"
+                    aria-expanded={abierta}
+                    className="max-sm:min-h-[44px] w-full text-left p-3 sm:p-5 flex flex-col gap-2 hover:bg-white/[0.03] transition-colors"
                   >
-                    <div className="flex items-start gap-3 flex-1 min-w-0">
-                      {abierta ? <ChevronDown className="w-4 h-4 text-white/50 mt-1 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-white/50 mt-1 flex-shrink-0" />}
-                      <Package className="w-5 h-5 text-cyan-400 mt-0.5 flex-shrink-0" />
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-mono text-xs font-bold text-cyan-300 bg-cyan-500/10 border border-cyan-400/25 px-2.5 py-0.5 rounded-lg">{partida.clave}</span>
-                          <span className="text-[11px] text-white/50">Cant: <strong className="text-sky-300 font-mono">{partida.cantidad}</strong></span>
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-white/50">
-                            {subsPartida.length} subensamble{subsPartida.length === 1 ? '' : 's'}
-                          </span>
-                        </div>
-                        <p className="text-sm font-semibold text-white mt-1.5 leading-snug">{partida.descripcion}</p>
-                      </div>
+                    {/* Fila 1: flecha, clave, cantidad y cuántos subensambles */}
+                    <div className="flex items-center gap-2 min-w-0">
+                      {abierta ? <ChevronDown className="w-4 h-4 text-white/50 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-white/50 flex-shrink-0" />}
+                      <Package className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 flex-shrink-0" />
+                      <span className="font-mono text-xs font-bold text-cyan-300 bg-cyan-500/10 border border-cyan-400/25 px-2 py-0.5 rounded-lg truncate">{partida.clave}</span>
+                      <span className="text-[11px] text-white/50 flex-shrink-0">×<strong className="text-sky-300 font-mono">{partida.cantidad}</strong></span>
+                      <span className="text-[10px] font-bold uppercase text-white/40 ml-auto flex-shrink-0">
+                        {subsPartida.length} sub{subsPartida.length === 1 ? '' : 's'}
+                      </span>
                     </div>
-                    <BarraProgreso valor={pct(partida.progreso)} className="sm:w-52 pl-12 sm:pl-0" />
+                    {/* Fila 2: descripción */}
+                    <p className="text-sm font-semibold text-white leading-snug pl-6 sm:pl-11">{partida.descripcion}</p>
+                    {/* Fila 3: avance */}
+                    <BarraProgreso valor={pct(partida.progreso)} className="pl-6 sm:pl-11" />
                   </button>
 
                   {abierta && (
-                    <div className="border-t border-white/10 px-3 sm:px-5 py-4 space-y-3">
+                    <div className="border-t border-white/10 px-2 sm:px-5 py-3 sm:py-4 space-y-2 sm:space-y-3">
                       {subsPartida.map(sub => {
                         const subAbierto = !colapsado[sub.id];
                         const compsSub = compsDe(sub.id);
@@ -619,52 +620,54 @@ export default function DespiecePage() {
                             <button
                               type="button"
                               onClick={() => toggleNodo(sub.id)}
-                              className="max-sm:min-h-[44px] w-full text-left px-3 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 hover:bg-white/[0.03] rounded-2xl transition-colors"
+                              aria-expanded={subAbierto}
+                              className="max-sm:min-h-[44px] w-full text-left px-3 py-2.5 sm:px-4 sm:py-3 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2 hover:bg-white/[0.03] rounded-2xl transition-colors"
                             >
-                              <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                                {subAbierto ? <ChevronDown className="w-4 h-4 text-white/40 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-white/40 flex-shrink-0" />}
-                                <Wrench className="w-4 h-4 text-sky-400 flex-shrink-0" />
-                                <span className="text-sm font-bold text-white truncate">{sub.nombre}</span>
-                                <span className="text-[10px] text-white/40 font-bold uppercase flex-shrink-0">
-                                  {compsSub.length} pieza{compsSub.length === 1 ? '' : 's'}
+                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                                {subAbierto ? <ChevronDown className="w-3.5 h-3.5 text-white/40 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-white/40 flex-shrink-0" />}
+                                <Wrench className="w-3.5 h-3.5 text-sky-400 flex-shrink-0" />
+                                <span className="text-[13px] font-bold text-white truncate">{sub.nombre}</span>
+                                <span className="text-[10px] text-white/40 font-bold flex-shrink-0">
+                                  {compsSub.length} pza{compsSub.length === 1 ? '' : 's'}
                                 </span>
                               </div>
-                              <BarraProgreso valor={pct(sub.progreso)} className="sm:w-44 pl-11 sm:pl-0" />
+                              <BarraProgreso valor={pct(sub.progreso)} className="sm:w-40 pl-6 sm:pl-0" />
                             </button>
 
                             {subAbierto && (
-                              <div className="px-3 sm:px-4 pb-3 space-y-2">
+                              <div className="px-2 sm:px-4 pb-2 sm:pb-3 space-y-2">
                                 {/* Nivel 3: Componentes */}
                                 {compsSub.map(comp => {
                                   const p = progresoComp(comp);
                                   const ruta = comp.areas_ruta || [];
                                   return (
-                                    <div key={comp.id} className="rounded-xl border border-white/10 bg-black/20 p-3 space-y-2.5">
-                                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                                        <Cog className="w-4 h-4 text-white/50 flex-shrink-0" />
-                                        <span className="text-[13px] font-semibold text-white">{comp.nombre}</span>
-                                        {comp.material && <span className="text-xs text-white/55">{comp.material}</span>}
-                                        {comp.dimensiones && <span className="text-xs text-white/55 font-mono">{comp.dimensiones}</span>}
+                                    <div key={comp.id} className="rounded-xl border border-white/10 bg-black/20 p-2.5 sm:p-3 space-y-2">
+                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                        <Cog className="w-3.5 h-3.5 text-white/50 flex-shrink-0" />
+                                        <span className="text-[13px] font-semibold text-white break-words min-w-0">{comp.nombre}</span>
+                                        {/* Material y medidas solo en pantallas medianas en adelante */}
+                                        {comp.material && <span className="text-[11px] text-white/55 hidden sm:inline">{comp.material}</span>}
+                                        {comp.dimensiones && <span className="text-[11px] text-white/55 font-mono hidden sm:inline">{comp.dimensiones}</span>}
                                         {/* Total a fabricar = piezas por mueble × muebles pedidos en la partida */}
                                         <span
-                                          className="text-xs font-mono font-bold text-sky-300 bg-sky-500/10 border border-sky-400/25 px-2 py-0.5 rounded-lg"
+                                          className="text-[11px] font-mono font-bold text-sky-300 bg-sky-500/10 border border-sky-400/25 px-1.5 py-0.5 rounded"
                                           title={`${comp.cantidad || 1} por mueble × ${partida.cantidad} mueble${partida.cantidad === 1 ? '' : 's'} pedidos`}
                                         >
                                           {(comp.cantidad || 1) * partida.cantidad} pzas
                                         </span>
                                         {partida.cantidad > 1 && (
-                                          <span className="text-[11px] text-white/45">({comp.cantidad || 1} por mueble × {partida.cantidad})</span>
+                                          <span className="text-[11px] text-white/45 hidden sm:inline">({comp.cantidad || 1} por mueble × {partida.cantidad})</span>
                                         )}
-                                        <span className={`ml-auto text-xs font-mono font-bold ${colorEstado(p).text}`}>
-                                          {p >= 100 ? 'Completado' : `${p}%`}
+                                        <span className={`ml-auto text-[11px] font-mono font-bold ${colorEstado(p).text}`} title={p >= 100 ? 'Completado' : undefined}>
+                                          {p >= 100 ? '✓' : `${p}%`}
                                         </span>
                                       </div>
 
                                       {/* Ruta de áreas: clic en un chip = marcar o desmarcar esa área */}
                                       {ruta.length === 0 ? (
-                                        <p className="text-[11px] text-white/35 pl-7">Sin ruta de áreas asignada.</p>
+                                        <p className="text-[11px] text-white/35 pl-5 sm:pl-6">Sin ruta de áreas asignada.</p>
                                       ) : (
-                                        <div className="flex flex-wrap gap-1.5 pl-7">
+                                        <div className="flex flex-wrap gap-1 sm:gap-1.5 pl-5 sm:pl-6">
                                           {ruta.map(areaId => {
                                             const hecho = estaCompleto(comp.id, areaId);
                                             const ocupado = chipGuardando === `${comp.id}_${areaId}`;
@@ -676,7 +679,7 @@ export default function DespiecePage() {
                                                 disabled={chipGuardando !== ''}
                                                 aria-pressed={hecho}
                                                 title={hecho ? 'Clic para desmarcar' : 'Clic para marcar como completado'}
-                                                className={`max-sm:min-h-[44px] px-2.5 py-1.5 rounded-lg text-[11px] font-bold border inline-flex items-center gap-1.5 transition-all disabled:cursor-wait ${
+                                                className={`min-h-[36px] sm:min-h-0 px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-lg text-[10px] sm:text-[11px] font-bold border inline-flex items-center gap-1 sm:gap-1.5 transition-all disabled:cursor-wait ${
                                                   hecho
                                                     ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/40 hover:bg-emerald-500/25'
                                                     : 'bg-white/[0.06] text-white/60 border-white/15 hover:bg-white/[0.12] hover:text-white'
@@ -816,6 +819,9 @@ export default function DespiecePage() {
               );
             })}
           </div>
+
+          {/* ═══ SECCIÓN 3: INCIDENCIAS ═══ */}
+          <IncidenciasProyecto proyectoId={proyecto.id} />
         </>
       ) : null}
     </div>

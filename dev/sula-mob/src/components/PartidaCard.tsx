@@ -148,7 +148,7 @@ export function PartidaCard({ clave, descripcion, cantidad, cliente, proyecto, e
             {descripcion}
           </p>
         </div>
-        <div className="flex items-center gap-3 pl-6 sm:pl-0 flex-shrink-0">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 pl-6 sm:pl-0 sm:flex-nowrap flex-shrink-0 [&>*]:whitespace-nowrap">
           <span className="text-xs font-mono font-bold text-white/80 bg-white/10 rounded-md px-2 py-0.5">×{cantidad}</span>
           <EtiquetaCalidad calidad={bom?.calidad} />
           {resumen}

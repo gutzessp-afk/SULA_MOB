@@ -265,7 +265,7 @@ export default function DetalleProyectoPage() {
       </Link>
 
       {/* ═══ HEADER DEL PROYECTO ═══ */}
-      <div className={`${TARJETA} p-5 sm:p-6 space-y-5`}>
+      <div className={`${TARJETA} p-4 sm:p-6 space-y-4 sm:space-y-5`}>
         <div>
           <p className="text-sm font-mono text-white/40">{proyecto?.codigo || (loading ? 'Cargando…' : '—')}</p>
           <h1 className="text-xl sm:text-2xl font-bold text-white leading-tight">
@@ -275,10 +275,10 @@ export default function DetalleProyectoPage() {
         {proyecto && (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {stats.map(({ icono: Icono, label, valor }) => (
-              <div key={label} className="bg-white/[0.05] rounded-xl p-4 min-w-0">
+              <div key={label} className="bg-white/[0.05] rounded-xl p-3 min-w-0">
                 <Icono className="w-4 h-4 text-white/40" />
-                <p className="text-xs text-white/40 uppercase tracking-wider mt-2">{label}</p>
-                <p className="text-base sm:text-lg font-semibold text-white truncate">{valor}</p>
+                <p className="text-[11px] text-white/40 uppercase tracking-wider mt-1.5">{label}</p>
+                <p className="text-base sm:text-lg font-semibold leading-tight text-white line-clamp-2 sm:line-clamp-none sm:truncate">{valor}</p>
               </div>
             ))}
           </div>
@@ -298,15 +298,16 @@ export default function DetalleProyectoPage() {
 
           {/* ═══ BARRA DE ACCIONES ═══ */}
           <div className="space-y-3">
-            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3">
-              <button type="button" onClick={() => inputPlanos.current?.click()} disabled={ocupado} className={`${boton} bg-white/[0.08] hover:bg-white/[0.12] text-white/80`}>
-                <Paperclip className="w-4 h-4" /> Subir planos
+            {/* Celular: dos filas de dos botones · sm en adelante: todos en una fila */}
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:gap-3">
+              <button type="button" onClick={() => inputPlanos.current?.click()} disabled={ocupado} className={`${boton} bg-white/[0.08] hover:bg-white/[0.12] text-white/80 max-sm:text-xs max-sm:px-2`}>
+                <Paperclip className="w-4 h-4 shrink-0" /> Subir planos
               </button>
               <input ref={inputPlanos} type="file" accept=".pdf,application/pdf" multiple className="hidden" onChange={e => { repartirPlanos(e.target.files); e.target.value = ''; }} />
 
-              <button type="button" onClick={analizarPendientes} disabled={ocupado || pendientes.length === 0} className={`${boton} bg-blue-600 hover:bg-blue-500 text-white`}>
-                {ocupado ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                Analizar pendientes ({pendientes.length})
+              <button type="button" onClick={analizarPendientes} disabled={ocupado || pendientes.length === 0} className={`${boton} bg-blue-600 hover:bg-blue-500 text-white max-sm:text-xs max-sm:px-2`}>
+                {ocupado ? <Loader2 className="w-4 h-4 shrink-0 animate-spin" /> : <Search className="w-4 h-4 shrink-0" />}
+                Analizar<span className="hidden sm:inline"> pendientes</span> ({pendientes.length})
               </button>
 
               <button
@@ -314,14 +315,14 @@ export default function DetalleProyectoPage() {
                 onClick={descargarMatriz}
                 disabled={generandoMatriz || ocupado || partidas.length === 0 || listas < partidas.length}
                 title={listas < partidas.length ? `Faltan ${partidas.length - listas} plano(s) por analizar` : 'Descargar la Matriz de Corte en Excel'}
-                className={`${boton} bg-white/[0.08] hover:bg-white/[0.12] text-white/80`}
+                className={`${boton} bg-white/[0.08] hover:bg-white/[0.12] text-white/80 max-sm:text-xs max-sm:px-2`}
               >
-                {generandoMatriz ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
-                Descargar Matriz de Corte
+                {generandoMatriz ? <Loader2 className="w-4 h-4 shrink-0 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 shrink-0" />}
+                <span className="sm:hidden">Matriz</span><span className="hidden sm:inline">Descargar Matriz de Corte</span>
               </button>
 
-              <Link href={`/admin/proyectos/${proyecto.id}/despiece`} className={`${boton} sm:ml-auto border border-white/15 hover:bg-white/[0.08] text-white/60`}>
-                <Layers className="w-4 h-4" /> Avance por áreas
+              <Link href={`/admin/proyectos/${proyecto.id}/despiece`} className={`${boton} sm:ml-auto border border-white/15 hover:bg-white/[0.08] text-white/60 max-sm:text-xs max-sm:px-2`}>
+                <Layers className="w-4 h-4 shrink-0" /> <span className="sm:hidden">Avance</span><span className="hidden sm:inline">Avance por áreas</span>
               </Link>
             </div>
 

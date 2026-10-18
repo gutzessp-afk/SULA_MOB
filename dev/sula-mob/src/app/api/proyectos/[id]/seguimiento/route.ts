@@ -31,7 +31,8 @@ export type TipoEvento = 'creacion' | 'avance' | 'completado' | 'incidencia'
 export interface Seguimiento {
   proyecto: { progreso: number; estado: string; entrega: string; creado: string }
   areas: { id: string; nombre: string; hechas: number; totales: number; pct: number }[]
-  eventos: { id: string; fecha: string; tipo: TipoEvento; texto: string }[]
+  /** titulo = área (o "Proyecto creado"), texto = quién hizo qué, detalle = producto */
+  eventos: { id: string; fecha: string; tipo: TipoEvento; titulo: string; texto: string; detalle?: string }[]
   incidencias: { id: string; fecha: string; area: string; motivo: string; descripcion: string; horas: number | null; operador: string }[]
 }
 
@@ -106,7 +107,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       if (!filas.length) return null
       const pcts = filas.map(porcentajeDe)
       const pct = Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length)
-      const hechas = filas.reduce((suma, f) => suma + (f.piezas_completadas || 0), 0)
+      // Topadas al total de cada producto: a veces se capturan piezas de más
+      const hechas = filas.reduce((suma, f) => suma + Math.min(f.piezas_completadas || 0, f.piezas_totales || f.piezas_completadas || 0), 0)
       const totales = filas.reduce((suma, f) => suma + (f.piezas_totales || 0), 0)
 
       // El área terminó cuando se registró su último avance (vienen del más reciente al más viejo)
@@ -117,7 +119,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
           id: `completado-${area.id}`,
           fecha: ultima,
           tipo: 'completado',
-          texto: `${area.nombre} terminó todas sus piezas${totales ? ` (${totales})` : ''}`,
+          titulo: area.nombre as string,
+          texto: `Terminó todas sus piezas${totales ? ` (${totales})` : ''}`,
         })
       }
       return { id: area.id as string, nombre: area.nombre as string, hechas, totales, pct }
@@ -125,13 +128,15 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     .filter((a) => a !== null)
 
   for (const a of avancesRes.data ?? []) {
-    const area = relacion(a.areas as { nombre: string } | { nombre: string }[] | null)?.nombre || 'un área'
+    const area = relacion(a.areas as { nombre: string } | { nombre: string }[] | null)?.nombre || 'Área sin nombre'
     const producto = relacion(a.proyecto_productos as { nombre: string } | { nombre: string }[] | null)?.nombre
     eventos.push({
       id: `avance-${a.id}`,
       fecha: a.created_at as string,
       tipo: 'avance',
-      texto: `${operador(a.operador_id)} registró ${a.piezas ?? 0} pza(s) en ${area}${producto ? ` — ${producto}` : ''}`,
+      titulo: area,
+      texto: `${operador(a.operador_id)} registró ${a.piezas ?? 0} pza${a.piezas === 1 ? '' : 's'}`,
+      detalle: producto || undefined,
     })
   }
 
@@ -145,10 +150,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     operador: operador(r.operador_id),
   }))
   for (const i of incidencias) {
-    eventos.push({ id: `incidencia-${i.id}`, fecha: i.fecha, tipo: 'incidencia', texto: `${i.operador} reportó un retraso en ${i.area}: ${i.motivo}` })
+    eventos.push({ id: `incidencia-${i.id}`, fecha: i.fecha, tipo: 'incidencia', titulo: i.area, texto: `${i.operador} reportó un retraso: ${i.motivo}` })
   }
 
-  eventos.push({ id: 'creacion', fecha: proyecto.created_at as string, tipo: 'creacion', texto: `Proyecto "${proyecto.nombre}" creado` })
+  eventos.push({ id: 'creacion', fecha: proyecto.created_at as string, tipo: 'creacion', titulo: 'Proyecto creado', texto: proyecto.nombre as string })
   eventos.sort((a, b) => b.fecha.localeCompare(a.fecha))
 
   const progreso = Number(proyecto.progreso) || 0

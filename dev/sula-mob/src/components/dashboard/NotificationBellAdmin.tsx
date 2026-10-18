@@ -3,8 +3,12 @@
 /**
  * NotificationBellAdmin.tsx
  * ─────────────────────────
- * Campanita del dashboard del admin: las últimas 20 notificaciones de la planta
- * (avisos de retraso, proyectos nuevos...), con un "ding-dong" cuando llegan nuevas.
+ * Notificaciones del admin: las últimas 20 de la planta (avisos de retraso,
+ * proyectos nuevos...), con un "ding-dong" cuando llegan nuevas.
+ *
+ *   - useAvisosAdmin(): carga, agrupa y recuerda qué ya vio el admin. El dashboard
+ *     lo llama una vez y comparte el resultado con la campanita y el panel.
+ *   - NotificationBellAdmin: la campanita con su menú (hoja desde abajo en celular).
  *
  * "Leída" en la base pertenece al destinatario (casi siempre un operador), así que
  * el admin NO la cambia: recuerda en su navegador hasta qué momento ya vio todo.
@@ -17,6 +21,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { Bell, CheckCheck } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
@@ -31,21 +36,21 @@ interface Notificacion {
   proyectos: { codigo: string | null } | { codigo: string | null }[] | null;
 }
 
+export interface Aviso extends Notificacion { destinatarios: number }
+
 const CLAVE_VISTO = 'sula-admin-notificaciones-vistas';
 // Se piden de más porque cada aviso viene repetido una vez por destinatario
 const LIMITE = 100;
 const MOSTRAR = 20;
 const CADA_MS = 30_000;
 
-function hace(iso: string) {
+export function hace(iso: string) {
   const min = Math.floor((Date.now() - Date.parse(iso)) / 60_000);
   if (min < 1) return 'Ahora';
   if (min < 60) return `Hace ${min} min`;
   const h = Math.floor(min / 60);
   return h < 24 ? `Hace ${h} h` : `Hace ${Math.floor(h / 24)} d`;
 }
-
-interface Aviso extends Notificacion { destinatarios: number }
 
 /** Junta las copias del mismo aviso (mismo mensaje, proyecto y minuto) */
 function agrupar(filas: Notificacion[]): Aviso[] {
@@ -59,14 +64,22 @@ function agrupar(filas: Notificacion[]): Aviso[] {
   return [...grupos.values()].slice(0, MOSTRAR);
 }
 
-const codigoDe = (n: Notificacion) => (Array.isArray(n.proyectos) ? n.proyectos[0] : n.proyectos)?.codigo || '';
-const urgente = (n: Notificacion) => /retras|atras|urgent|incidenc/i.test(`${n.tipo} ${n.mensaje}`);
+export const codigoDe = (n: Notificacion) => (Array.isArray(n.proyectos) ? n.proyectos[0] : n.proyectos)?.codigo || '';
+export const urgente = (n: Notificacion) => /retras|atras|urgent|incidenc|falla|falta/i.test(`${n.tipo} ${n.mensaje}`);
 
-export function NotificationBellAdmin() {
-  const [abierto, setAbierto] = useState(false);
+export interface AvisosAdmin {
+  lista: Aviso[];
+  cargando: boolean;
+  esNueva: (n: Aviso) => boolean;
+  sinLeer: number;
+  marcarVistas: () => void;
+}
+
+/** Avisos agrupados, cuántos no ha visto el admin, y la consulta cada 30 s con la pestaña a la vista */
+export function useAvisosAdmin(): AvisosAdmin {
   const [lista, setLista] = useState<Aviso[]>([]);
+  const [cargando, setCargando] = useState(true);
   const [vistoHasta, setVistoHasta] = useState(0);
-  const contenedor = useRef<HTMLDivElement>(null);
   const masNueva = useRef<number | null>(null);
 
   const cargar = useCallback(async () => {
@@ -75,6 +88,7 @@ export function NotificationBellAdmin() {
       .select('id, tipo, mensaje, proyecto_id, created_at, proyectos ( codigo )')
       .order('created_at', { ascending: false })
       .limit(LIMITE);
+    setCargando(false);
     if (error) return;
     const filas = (data ?? []) as unknown as Notificacion[];
     const nueva = filas.length ? Date.parse(filas[0].created_at) : 0;
@@ -85,23 +99,98 @@ export function NotificationBellAdmin() {
   }, []);
 
   useEffect(() => {
-    const leerVisto = () => {
+    const primero = setTimeout(() => {
       try { setVistoHasta(Number(localStorage.getItem(CLAVE_VISTO)) || 0); } catch { /* sin almacenamiento */ }
-    };
-    const primero = setTimeout(() => { leerVisto(); void cargar(); }, 0);
-    // Solo consulta con la pestaña a la vista
+      void cargar();
+    }, 0);
     const intervalo = setInterval(() => { if (document.visibilityState === 'visible') void cargar(); }, CADA_MS);
-    const fuera = (e: MouseEvent) => { if (contenedor.current && !contenedor.current.contains(e.target as Node)) setAbierto(false); };
-    document.addEventListener('mousedown', fuera);
-    return () => { clearTimeout(primero); clearInterval(intervalo); document.removeEventListener('mousedown', fuera); };
+    return () => { clearTimeout(primero); clearInterval(intervalo); };
   }, [cargar]);
 
-  const sinLeer = lista.filter(n => Date.parse(n.created_at) > vistoHasta).length;
+  const esNueva = (n: Aviso) => Date.parse(n.created_at) > vistoHasta;
   const marcarVistas = () => {
     const ahora = Date.now();
     setVistoHasta(ahora);
     try { localStorage.setItem(CLAVE_VISTO, String(ahora)); } catch { /* sin almacenamiento */ }
   };
+
+  return { lista, cargando, esNueva, sinLeer: lista.filter(esNueva).length, marcarVistas };
+}
+
+/** Encabezado y lista del menú (igual en el panel flotante y en la hoja del celular) */
+function ContenidoAvisos({ avisos, alElegir, alto }: { avisos: AvisosAdmin; alElegir: () => void; alto: string }) {
+  const { lista, sinLeer, esNueva, marcarVistas } = avisos;
+  return (
+    <>
+      <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+        <p className="text-[11px] font-bold uppercase tracking-wider text-white/60">Notificaciones</p>
+        <button type="button" onClick={marcarVistas} disabled={!sinLeer} className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-400 hover:text-blue-300 disabled:text-white/25">
+          <CheckCheck className="h-3.5 w-3.5" /> Marcar todas
+        </button>
+      </div>
+      {lista.length === 0 ? (
+        <p className="px-4 py-8 text-center text-xs text-white/40">Sin notificaciones.</p>
+      ) : (
+        <ul className={`${alto} divide-y divide-white/[0.06] overflow-y-auto`}>
+          {lista.map(n => {
+            const nueva = esNueva(n);
+            const contenido = (
+              <span className="flex items-start gap-2.5 px-4 py-3">
+                <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${urgente(n) ? 'bg-red-500' : 'bg-amber-400'} ${nueva ? '' : 'opacity-30'}`} />
+                <span className="min-w-0 flex-1">
+                  <span className={`block text-xs leading-snug ${nueva ? 'font-semibold text-white' : 'text-white/60'}`}>{n.mensaje || n.tipo || 'Notificación'}</span>
+                  <span className="block text-[10px] text-white/40">
+                    {[codigoDe(n), n.destinatarios > 1 ? `a ${n.destinatarios} personas` : '', hace(n.created_at)].filter(Boolean).join(' · ')}
+                  </span>
+                </span>
+              </span>
+            );
+            return (
+              <li key={n.id}>
+                {n.proyecto_id ? (
+                  <Link href={`/admin/proyectos/${n.proyecto_id}`} onClick={alElegir} className="block hover:bg-white/[0.05]">{contenido}</Link>
+                ) : contenido}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </>
+  );
+}
+
+export function NotificationBellAdmin({ avisos }: { avisos: AvisosAdmin }) {
+  const [abierto, setAbierto] = useState(false);
+  const [movil, setMovil] = useState(false);
+  const contenedor = useRef<HTMLDivElement>(null);
+  const hoja = useRef<HTMLDivElement>(null);
+  const { sinLeer } = avisos;
+
+  useEffect(() => {
+    // En celular el panel sale como hoja desde abajo en vez de flotar junto al botón
+    const consulta = window.matchMedia('(max-width: 639px)');
+    const medir = () => setMovil(consulta.matches);
+    consulta.addEventListener('change', medir);
+    const primero = setTimeout(medir, 0);
+    const fuera = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (contenedor.current?.contains(t) || hoja.current?.contains(t)) return;
+      setAbierto(false);
+    };
+    document.addEventListener('mousedown', fuera);
+    return () => { clearTimeout(primero); document.removeEventListener('mousedown', fuera); consulta.removeEventListener('change', medir); };
+  }, []);
+
+  useEffect(() => {
+    if (!abierto) return;
+    const conTecla = (e: KeyboardEvent) => { if (e.key === 'Escape') setAbierto(false); };
+    document.addEventListener('keydown', conTecla);
+    const antes = document.body.style.overflow;
+    if (movil) document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', conTecla); document.body.style.overflow = antes; };
+  }, [abierto, movil]);
+
+  const cerrar = () => setAbierto(false);
 
   return (
     <div className="relative" ref={contenedor}>
@@ -120,42 +209,22 @@ export function NotificationBellAdmin() {
         )}
       </button>
 
-      {abierto && (
-        <div className="absolute right-0 top-12 z-50 w-[min(340px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-white/15 bg-[#0a0e1a]/97 shadow-2xl animate-in fade-in slide-in-from-top-2 duration-150">
-          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-white/60">Notificaciones</p>
-            <button type="button" onClick={marcarVistas} disabled={!sinLeer} className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-400 hover:text-blue-300 disabled:text-white/25">
-              <CheckCheck className="h-3.5 w-3.5" /> Marcar todas
-            </button>
-          </div>
-          {lista.length === 0 ? (
-            <p className="px-4 py-8 text-center text-xs text-white/40">Sin notificaciones.</p>
-          ) : (
-            <ul className="max-h-[360px] divide-y divide-white/[0.06] overflow-y-auto">
-              {lista.map(n => {
-                const nueva = Date.parse(n.created_at) > vistoHasta;
-                const contenido = (
-                  <span className="flex items-start gap-2.5 px-4 py-3">
-                    <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${urgente(n) ? 'bg-red-500' : 'bg-amber-400'} ${nueva ? '' : 'opacity-30'}`} />
-                    <span className="min-w-0 flex-1">
-                      <span className={`block text-xs leading-snug ${nueva ? 'font-semibold text-white' : 'text-white/60'}`}>{n.mensaje || n.tipo || 'Notificación'}</span>
-                      <span className="block text-[10px] text-white/40">
-                        {[codigoDe(n), n.destinatarios > 1 ? `a ${n.destinatarios} personas` : '', hace(n.created_at)].filter(Boolean).join(' · ')}
-                      </span>
-                    </span>
-                  </span>
-                );
-                return (
-                  <li key={n.id}>
-                    {n.proyecto_id ? (
-                      <Link href={`/admin/proyectos/${n.proyecto_id}`} onClick={() => setAbierto(false)} className="block hover:bg-white/[0.05]">{contenido}</Link>
-                    ) : contenido}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+      {abierto && !movil && (
+        <div className="absolute right-0 top-full mt-2 z-[60] w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-white/15 bg-[#0b0f17] shadow-2xl shadow-black/60 animate-in fade-in slide-in-from-top-2 duration-150" role="dialog" aria-label="Notificaciones">
+          <ContenidoAvisos avisos={avisos} alElegir={cerrar} alto="max-h-[360px]" />
         </div>
+      )}
+
+      {/* La hoja va directo en <body>: dentro del encabezado (con blur y animación) "fixed" no se pega a la pantalla */}
+      {abierto && movil && createPortal(
+        <div ref={hoja}>
+          <div className="fixed inset-0 z-[70] bg-black/60 animate-in fade-in duration-150" onClick={cerrar} aria-hidden="true" />
+          <div className="sula-hoja fixed inset-x-0 bottom-0 z-[71] max-h-[75vh] overflow-hidden rounded-t-2xl border-t border-white/15 bg-[#0b0f17] pb-[env(safe-area-inset-bottom)] shadow-2xl" role="dialog" aria-label="Notificaciones">
+            <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-white/20" aria-hidden="true" />
+            <ContenidoAvisos avisos={avisos} alElegir={cerrar} alto="max-h-[60vh]" />
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

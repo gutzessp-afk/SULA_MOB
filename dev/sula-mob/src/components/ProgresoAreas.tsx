@@ -1,4 +1,12 @@
-import { CheckCircle2 } from 'lucide-react';
+/**
+ * ProgresoAreas.tsx
+ * ─────────────────
+ * Avance de cada área de un proyecto en una cuadrícula compacta
+ * (2 columnas en celular y tablet, 3 en computadora): un cuadro con el %
+ * (o ✓ si terminó), el nombre, una barra delgada y las piezas hechas.
+ *
+ * RUTA: src/components/ProgresoAreas.tsx
+ */
 
 export interface AreaProgreso {
   nombre: string;
@@ -8,53 +16,43 @@ export interface AreaProgreso {
   pct: number;
 }
 
-interface Props {
-  areas: AreaProgreso[];
-  /** Avance total del proyecto (0 a 100); si no se pasa, no se muestra la barra de total */
-  total?: number;
-  /** Versión chica para tarjetas */
-  compact?: boolean;
+/** Verde terminada, ámbar en proceso, gris sin iniciar */
+function tono(pct: number) {
+  if (pct >= 100) return { cuadro: 'bg-emerald-500/15 text-emerald-400 border-emerald-400/30', barra: 'bg-emerald-400' };
+  if (pct > 0) return { cuadro: 'bg-amber-500/15 text-amber-400 border-amber-400/30', barra: 'bg-amber-400' };
+  return { cuadro: 'bg-white/[0.06] text-white/30 border-white/10', barra: 'bg-white/10' };
 }
 
-/** Rojo hasta 30%, amarillo hasta 60%, azul hasta 89% y verde de 90% para arriba */
-function colorBarra(pct: number): string {
-  if (pct >= 90) return 'bg-emerald-500';
-  if (pct >= 61) return 'bg-blue-500';
-  if (pct >= 31) return 'bg-amber-500';
-  return 'bg-red-500';
-}
-
-/** Barras de avance de cada área de un proyecto */
-export default function ProgresoAreas({ areas, total, compact = false }: Props) {
+export default function ProgresoAreas({ areas }: { areas: AreaProgreso[] }) {
   return (
-    <div className={compact ? 'space-y-1.5' : 'space-y-3'}>
-      {areas.map((area) => (
-        <div key={area.nombre}>
-          <div className={`mb-1 flex items-center justify-between gap-3 ${compact ? 'text-xs' : 'text-sm'}`}>
-            <span className="min-w-0 truncate text-white/70">{area.nombre}</span>
-            <span className="flex shrink-0 items-center gap-1.5 tabular-nums text-white/40">
-              {!compact && area.totales > 0 && <span>{area.hechas}/{area.totales} pzas</span>}
-              <span className="font-semibold text-white/70">{area.pct}%</span>
-              {area.pct >= 100 && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" aria-label="Terminada" />}
+    <ul className="grid grid-cols-2 gap-1.5 sm:gap-2 lg:grid-cols-3">
+      {areas.map((area) => {
+        const t = tono(area.pct);
+        const estado = area.pct >= 100 ? 'Completada' : area.pct > 0 ? 'En proceso' : 'Sin iniciar';
+        return (
+          <li
+            key={area.nombre}
+            title={`${area.nombre}: ${estado}`}
+            className="flex min-w-0 items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.03] p-2 transition-colors hover:bg-white/[0.06] sm:gap-3 sm:p-2.5"
+          >
+            <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border font-mono text-[10px] font-bold sm:h-9 sm:w-9 sm:text-[11px] ${t.cuadro}`}>
+              {area.pct >= 100 ? '✓' : `${area.pct}%`}
             </span>
-          </div>
-          <div className={`overflow-hidden rounded-full bg-white/[0.06] ${compact ? 'h-1.5' : 'h-2.5'}`}>
-            <div className={`h-full rounded-full transition-all duration-500 ${colorBarra(area.pct)}`} style={{ width: `${area.pct}%` }} />
-          </div>
-        </div>
-      ))}
-
-      {total !== undefined && (
-        <div className="mt-4 border-t border-white/[0.08] pt-4">
-          <div className="mb-1 flex items-center justify-between text-sm">
-            <span className="font-semibold text-white">Progreso total</span>
-            <span className="text-lg font-bold tabular-nums text-blue-400">{total}%</span>
-          </div>
-          <div className="h-3 overflow-hidden rounded-full bg-white/[0.06]">
-            <div className={`h-full rounded-full transition-all duration-700 ${colorBarra(total)}`} style={{ width: `${total}%` }} />
-          </div>
-        </div>
-      )}
-    </div>
+            <span className="min-w-0 flex-1">
+              {/* El nombre puede ocupar dos líneas en celular en vez de cortarse */}
+              <span className="line-clamp-2 text-[11px] font-semibold leading-tight text-white sm:truncate sm:text-xs">{area.nombre}</span>
+              <span className="mt-1.5 flex items-center gap-2">
+                <span className="block h-1 flex-1 overflow-hidden rounded-full bg-black/40">
+                  <span className={`block h-full rounded-full transition-all duration-500 ${t.barra}`} style={{ width: `${area.pct}%` }} />
+                </span>
+                {area.totales > 0 && (
+                  <span className="shrink-0 font-mono text-[10px] text-white/40">{area.hechas}/{area.totales}</span>
+                )}
+              </span>
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

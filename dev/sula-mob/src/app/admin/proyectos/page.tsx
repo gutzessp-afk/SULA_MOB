@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { cargarProyectos, useDatos } from '@/lib/cache-datos';
@@ -8,6 +8,48 @@ import { eliminarProyecto } from '@/lib/eliminar-proyecto';
 import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, X, Calendar, User, MapPin, Download, Layers } from 'lucide-react';
 import { parsePedidoPdf } from '@/lib/parse-pedido';
 import { useDebounce } from '@/hooks/useDebounce';
+import { BadgePrioridad } from '@/components/BadgePrioridad';
+import { estadoEntrega, fechaEntrega as entregaDe, fechaLegible } from '@/lib/entregas';
+
+const POR_PAGINA = 20;
+
+/** Barra de avance con su estado: gris sin iniciar, degradado en proceso, verde completado */
+function BarraProgresoConEstado({ progreso, ancho = 'flex-1' }: { progreso: number; ancho?: string }) {
+  const estado = progreso >= 100 ? 'COMPLETADO' : progreso > 0 ? 'EN PROCESO' : 'SIN INICIAR';
+  const colorBadge = progreso >= 100
+    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30'
+    : progreso > 0
+      ? 'bg-blue-500/15 text-blue-300 border-blue-400/30'
+      : 'bg-white/10 text-white/40 border-white/15';
+  return (
+    <div className="flex items-center gap-2">
+      <div className={`${ancho} h-2 bg-black/40 rounded-full overflow-hidden border border-white/10`}>
+        <div
+          className={`h-full transition-all duration-500 ${progreso >= 100 ? 'bg-emerald-400' : 'bg-gradient-to-r from-sky-500 via-indigo-400 to-emerald-400'}`}
+          style={{ width: `${progreso}%` }}
+        />
+      </div>
+      <span className={`font-mono text-xs font-bold w-10 text-right ${progreso >= 100 ? 'text-emerald-400' : progreso > 0 ? 'text-blue-400' : 'text-white/40'}`}>
+        {progreso}%
+      </span>
+      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border whitespace-nowrap ${colorBadge} hidden sm:inline`}>{estado}</span>
+    </div>
+  );
+}
+
+/** Fecha de entrega; en rojo con "ATRASADO" si ya pasó sin terminar */
+function FechaEntrega({ p }: { p: { progreso: number; fecha_maxima?: string | null; descripcion?: string } }) {
+  const entrega = entregaDe(p);
+  if (!entrega) return null;
+  const atrasado = estadoEntrega(Number(p.progreso) || 0, entrega) === 'atrasado';
+  return (
+    <span className={`inline-flex items-center gap-1 text-[11px] ${atrasado ? 'text-red-400' : 'text-white/45'}`}>
+      <Calendar className="w-3 h-3" />
+      {fechaLegible(entrega)}
+      {atrasado && <span className="font-bold ml-1">ATRASADO</span>}
+    </span>
+  );
+}
 
 interface PartidaItem {
   cantidad: number;
@@ -34,6 +76,7 @@ interface Proyecto {
   descripcion?: string;
   prioridad: string;
   progreso: number;
+  fecha_maxima?: string | null;
 }
 
 export default function ProyectosPage() {
@@ -61,6 +104,9 @@ export default function ProyectosPage() {
   const [partidas, setPartidas] = useState<PartidaItem[]>([{ cantidad: 1, clave: '', unidad: 'Pieza', descripcion: '', precio: 0 }]);
   const [selectedAreas, setSelectedAreas] = useState<string[]>([]);
   const [search, setSearch] = useState('');
+  const [pagina, setPagina] = useState(0);
+  const [isCreating, setIsCreating] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
   // Modal Vista de Pedido (solo lectura — la "hoja" del pedido)
   const [viewProyecto, setViewProyecto] = useState<Proyecto | null>(null);
@@ -106,6 +152,16 @@ export default function ProyectosPage() {
 
   async function handleCrearProyecto(e: React.FormEvent) {
     e.preventDefault();
+    if (isCreating) return;
+    setIsCreating(true);
+    try {
+      await crearProyecto();
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
+  async function crearProyecto() {
     const validPartidas = partidas.filter(p => p.descripcion.trim().length > 0);
     if (!nombre.trim() || !codigo.trim() || validPartidas.length === 0) {
       alert('Por favor ingresa código, nombre y al menos 1 partida con descripción.');
@@ -262,6 +318,7 @@ export default function ProyectosPage() {
         : '';
 
       setPdfSuccess(`PDF "${file.name}" procesado — ${pedido.partidas.length} partidas detectadas.${warningMsg}`);
+      setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Error desconocido';
       setPdfSuccess('');
@@ -313,6 +370,9 @@ export default function ProyectosPage() {
       p.cliente?.toLowerCase().includes(term)
     );
   }, [proyectos, searchDebounced]);
+  const totalPaginas = Math.max(1, Math.ceil(filtrados.length / POR_PAGINA));
+  const paginaActual = Math.min(pagina, totalPaginas - 1);
+  const visibles = filtrados.slice(paginaActual * POR_PAGINA, (paginaActual + 1) * POR_PAGINA);
 
   return (
     <div className="space-y-4 sm:space-y-6 max-w-7xl mx-auto px-2 sm:px-0 pb-8">
@@ -357,43 +417,38 @@ export default function ProyectosPage() {
               type="text"
               placeholder="Buscar por código, cliente o proyecto..."
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => { setSearch(e.target.value); setPagina(0); }}
               className="max-sm:text-base max-sm:min-h-[44px] bg-transparent text-sm text-white outline-none w-full placeholder:text-white/40"
             />
           </div>
 
           {/* ── VISTA MÓVIL: Tarjetas ── */}
           <div className="xl:hidden divide-y divide-white/10">
-            {filtrados.map(p => (
+            {visibles.map(p => (
               <div key={p.id} className="p-4 space-y-3 active:bg-white/[0.04] transition-colors">
                 {/* Fila superior: Código + Prioridad */}
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-blue-400 font-bold text-sm">{p.codigo}</span>
-                  <span className="px-2.5 py-0.5 rounded-lg border bg-white/10 text-white/60 border-white/10 uppercase text-[10px] font-bold tracking-wider">
-                    {p.prioridad}
-                  </span>
+                  <BadgePrioridad prioridad={p.prioridad} />
                 </div>
 
                 {/* Nombre del proyecto */}
                 <p className="text-white font-semibold text-[15px] leading-snug">{p.nombre}</p>
 
-                {/* Cliente */}
-                {p.cliente && (
-                  <p className="text-white/50 text-xs flex items-center gap-1.5">
-                    <User className="w-3 h-3" /> {p.cliente}
-                  </p>
+                {/* Cliente y entrega */}
+                {(p.cliente || entregaDe(p)) && (
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    {p.cliente && (
+                      <p className="text-white/50 text-xs flex items-center gap-1.5">
+                        <User className="w-3 h-3" /> {p.cliente}
+                      </p>
+                    )}
+                    <FechaEntrega p={p} />
+                  </div>
                 )}
 
                 {/* Barra de progreso */}
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 h-2 bg-black/40 rounded-full overflow-hidden border border-white/10">
-                    <div
-                      className="h-full bg-gradient-to-r from-sky-500 via-indigo-400 to-emerald-400 transition-all duration-500"
-                      style={{ width: `${p.progreso}%` }}
-                    />
-                  </div>
-                  <span className="font-mono text-emerald-400 font-bold text-xs w-10 text-right">{p.progreso}%</span>
-                </div>
+                <BarraProgresoConEstado progreso={p.progreso} />
 
                 {/* Botones de acción */}
                 <div className="flex gap-2 pt-1">
@@ -433,32 +488,20 @@ export default function ProyectosPage() {
                   <th className="p-4">Proyecto</th>
                   <th className="p-4">Cliente</th>
                   <th className="p-4">Prioridad</th>
+                  <th className="p-4">Entrega</th>
                   <th className="p-4">Progreso Global</th>
                   <th className="p-4 text-right">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
-                {filtrados.map(p => (
+                {visibles.map(p => (
                   <tr key={p.id} className="hover:bg-white/[0.06] transition-colors">
                     <td className="p-4 font-mono text-blue-400 font-bold">{p.codigo}</td>
                     <td className="p-4 font-semibold text-white">{p.nombre}</td>
                     <td className="p-4 text-white/60">{p.cliente || '—'}</td>
-                    <td className="p-4 uppercase text-[10px] font-bold">
-                      <span className="px-2.5 py-1 rounded-lg border bg-white/10 text-white/70 border-white/10">
-                        {p.prioridad}
-                      </span>
-                    </td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-32 h-2.5 bg-black/40 rounded-full overflow-hidden border border-white/10">
-                          <div
-                            className="h-full bg-gradient-to-r from-sky-500 via-indigo-400 to-emerald-400 transition-all duration-500"
-                            style={{ width: `${p.progreso}%` }}
-                          />
-                        </div>
-                        <span className="font-mono text-emerald-400 font-bold text-xs">{p.progreso}%</span>
-                      </div>
-                    </td>
+                    <td className="p-4"><BadgePrioridad prioridad={p.prioridad} /></td>
+                    <td className="p-4">{entregaDe(p) ? <FechaEntrega p={p} /> : <span className="text-white/30">—</span>}</td>
+                    <td className="p-4"><BarraProgresoConEstado progreso={p.progreso} ancho="w-28" /></td>
                     <td className="p-4 text-right">
                       <div className="flex justify-end items-center gap-2">
                         <button
@@ -492,6 +535,32 @@ export default function ProyectosPage() {
               </tbody>
             </table>
           </div>
+
+          {filtrados.length > POR_PAGINA && (
+            <div className="flex items-center justify-between gap-3 px-4 py-3 border-t border-white/10">
+              <span className="text-xs text-white/40">
+                {paginaActual * POR_PAGINA + 1}–{Math.min((paginaActual + 1) * POR_PAGINA, filtrados.length)} de {filtrados.length}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={paginaActual === 0}
+                  onClick={() => setPagina(paginaActual - 1)}
+                  className="max-sm:min-h-[44px] text-xs text-white/60 hover:text-white px-3 py-1.5 rounded-lg border border-white/15 bg-white/[0.05] disabled:opacity-30"
+                >
+                  ← Anterior
+                </button>
+                <button
+                  type="button"
+                  disabled={paginaActual >= totalPaginas - 1}
+                  onClick={() => setPagina(paginaActual + 1)}
+                  className="max-sm:min-h-[44px] text-xs text-white/60 hover:text-white px-3 py-1.5 rounded-lg border border-white/15 bg-white/[0.05] disabled:opacity-30"
+                >
+                  Siguiente →
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-6">
@@ -540,7 +609,7 @@ export default function ProyectosPage() {
             )}
           </div>
 
-          <form onSubmit={handleCrearProyecto} className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-5 sm:p-8 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] space-y-6">
+          <form ref={formRef} onSubmit={handleCrearProyecto} className="scroll-mt-4 relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-5 sm:p-8 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] space-y-6">
             <h2 className="text-xs font-bold uppercase tracking-wider text-white/60 border-b border-white/10 pb-3">
               Alta de Proyecto — Datos del Pedido
             </h2>
@@ -696,8 +765,14 @@ export default function ProyectosPage() {
                 >
                   <Download className="w-4 h-4" /> Descargar PDF
                 </button>
-                <button type="submit" className="max-sm:min-h-[44px] w-full sm:w-auto bg-white text-neutral-900 hover:bg-white/90 font-bold text-xs px-8 py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-lg transition-colors">
-                  <Plus className="w-4 h-4" /> Guardar Orden de Proyecto
+                <button
+                  type="submit"
+                  disabled={isCreating}
+                  className="max-sm:min-h-[44px] w-full sm:w-auto bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-wait text-white text-sm font-bold px-8 py-3.5 rounded-2xl inline-flex items-center justify-center gap-2 shadow-lg shadow-blue-950/50 transition-all"
+                >
+                  {isCreating
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Creando proyecto...</>
+                    : <><FolderPlus className="w-4 h-4" /> Crear Proyecto</>}
                 </button>
               </div>
             </div>
