@@ -1,41 +1,48 @@
 
 'use client'
 
+import { useEffect, useState } from 'react'
 import OperatorSidebar from '@/components/operator/OperatorSidebar'
+import { getUsuarioActual } from './actions'
 
 export default function OperatorLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const [nombre, setNombre] = useState('Operador')
+
+  useEffect(() => {
+    getUsuarioActual().then((u) => {
+      if (u?.nombre) setNombre(u.nombre)
+    })
+  }, [])
+
+  const inicial = nombre.trim().charAt(0).toUpperCase() || 'O'
+
   return (
-    <div className="min-h-screen w-full bg-[#0b0c10] text-slate-100 flex overflow-x-hidden">
+    <div className="min-h-screen w-full bg-[#080b14] text-slate-100 flex overflow-x-hidden">
       <OperatorSidebar />
 
-      <div className="flex-1 md:ml-64 flex flex-col min-h-screen bg-[#07080b]">
-        <header className="h-16 border-b border-slate-800/60 bg-[#0e1017]/50 backdrop-blur-md px-4 md:px-8 flex items-center justify-end md:justify-between sticky top-0 z-30">
+      <div className="flex-1 md:ml-64 flex flex-col min-h-screen min-w-0 bg-[#070910]">
+        <header className="h-16 border-b border-slate-800/60 bg-[#0b1020]/60 backdrop-blur-md px-4 md:px-8 flex items-center justify-end md:justify-between sticky top-0 z-30">
           <div className="hidden md:flex items-center gap-3">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
             <span className="text-xs font-mono text-slate-400 uppercase tracking-wider">
-              Sistema en Línea • Turno Activo
+              Sistema en Línea
             </span>
           </div>
 
-          <div className="flex items-center gap-4 pl-12 md:pl-0">
-            <div className="text-right">
-              <p className="text-xs font-bold text-white leading-none">Operador</p>
-              <p className="text-[10px] text-slate-500 font-mono mt-1">Área asignada</p>
-            </div>
-            <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs text-red-500">
-              OP
+          <div className="flex items-center gap-3 pl-12 md:pl-0">
+            <p className="text-xs font-bold text-white truncate max-w-[160px]">{nombre}</p>
+            <div className="w-8 h-8 rounded-full bg-blue-950 border border-blue-800 flex items-center justify-center font-bold text-xs text-blue-300">
+              {inicial}
             </div>
           </div>
         </header>
 
         <div className="p-4 md:p-8 space-y-8 max-w-7xl w-full mx-auto">
-          <main className="w-full">
-            {children}
-          </main>
+          <main className="w-full min-w-0">{children}</main>
         </div>
       </div>
     </div>
