@@ -23,7 +23,7 @@ import { BadgePrioridad } from '@/components/BadgePrioridad';
 import { HexagonGrid } from '@/components/dashboard/HexagonGrid';
 import { HeatMatrix, type FilaCalor } from '@/components/dashboard/HeatMatrix';
 import { StatCards, type StatCard } from '@/components/dashboard/StatCards';
-import { NotificationBellAdmin, useAvisosAdmin } from '@/components/dashboard/NotificationBellAdmin';
+import { NotificationBellAdmin, useAvisos, type AvisosAdmin } from '@/components/dashboard/NotificationBellAdmin';
 import { PanelNotificaciones } from '@/components/dashboard/PanelNotificaciones';
 import { EnVivo } from '@/components/EnVivo';
 import { useRealtimeAvances } from '@/hooks/useRealtimeAvances';
@@ -66,6 +66,8 @@ interface AvanceEstacion {
 }
 
 interface AvanceDia { piezas: number | null; created_at: string }
+
+const SIN_AVISOS: AvisosAdmin = { lista: [], cargando: false, esNueva: () => false, sinLeer: 0, marcarVistas: () => {}, recargar: () => {} };
 
 const REFRESCO_MS = 60_000;
 const DIAS_ACTIVIDAD = 30;
@@ -147,7 +149,8 @@ export default function DashboardPage() {
     if (error) throw new Error(error.message);
     return (data ?? []) as { area_id: string; created_at: string }[];
   });
-  const avisos = useAvisosAdmin();
+  // Los mismos avisos que la campanita del panel (vienen del layout del admin)
+  const avisos = useAvisos() ?? SIN_AVISOS;
 
   const proyectos = useMemo(() => datosProyectos.datos ?? [], [datosProyectos.datos]);
   const areas = useMemo(() => datosAreas.datos ?? [], [datosAreas.datos]);

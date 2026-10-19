@@ -59,8 +59,8 @@ export function PanelNotificaciones({ avisos }: { avisos: AvisosAdmin }) {
             const caja = 'flex items-start gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] p-2.5';
             return (
               <li key={n.id}>
-                {n.proyecto_id
-                  ? <Link href={`/admin/proyectos/${n.proyecto_id}`} className={`${caja} hover:bg-white/[0.06] transition-colors`}>{contenido}</Link>
+                {n.href
+                  ? <Link href={n.href} className={`${caja} hover:bg-white/[0.06] transition-colors`}>{contenido}</Link>
                   : <div className={caja}>{contenido}</div>}
               </li>
             );

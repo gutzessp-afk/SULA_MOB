@@ -20,7 +20,7 @@
  * RUTA: src/components/dashboard/NotificationBellAdmin.tsx
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { Bell, CheckCheck } from 'lucide-react';
@@ -36,13 +36,27 @@ interface Notificacion {
   proyectos: { codigo: string | null } | { codigo: string | null }[] | null;
 }
 
-export interface Aviso extends Notificacion { destinatarios: number }
+export interface Aviso extends Notificacion {
+  destinatarios: number;
+  /** A dónde lleva al tocarlo: los atrasos a Reportes (retrasos de operadores), lo demás al proyecto */
+  href: string | null;
+}
+
+interface FilaRetraso {
+  id: string;
+  motivo: string | null;
+  created_at: string;
+  proyecto_id: string | null;
+  areas: { nombre: string } | { nombre: string }[] | null;
+  proyectos: { codigo: string | null } | { codigo: string | null }[] | null;
+}
 
 const CLAVE_VISTO = 'sula-admin-notificaciones-vistas';
 // Se piden de más porque cada aviso viene repetido una vez por destinatario
 const LIMITE = 100;
 const MOSTRAR = 20;
-const CADA_MS = 30_000;
+// Respaldo por si Realtime no está activo; con Realtime llegan al instante
+const CADA_MS = 15_000;
 
 export function hace(iso: string) {
   const min = Math.floor((Date.now() - Date.parse(iso)) / 60_000);
@@ -59,9 +73,24 @@ function agrupar(filas: Notificacion[]): Aviso[] {
     const clave = `${n.mensaje}|${n.proyecto_id}|${n.created_at.slice(0, 16)}`;
     const g = grupos.get(clave);
     if (g) g.destinatarios++;
-    else grupos.set(clave, { ...n, destinatarios: 1 });
+    else grupos.set(clave, { ...n, destinatarios: 1, href: n.proyecto_id ? `/admin/proyectos/${n.proyecto_id}` : null });
   }
-  return [...grupos.values()].slice(0, MOSTRAR);
+  return [...grupos.values()];
+}
+
+/** Un atraso reportado por un operador, como aviso de la campanita */
+function avisoDeRetraso(r: FilaRetraso): Aviso {
+  const area = (Array.isArray(r.areas) ? r.areas[0] : r.areas)?.nombre;
+  return {
+    id: `retraso-${r.id}`,
+    tipo: 'retraso',
+    mensaje: `Atraso${area ? ` en ${area}` : ''}: ${r.motivo || 'sin motivo'}`,
+    proyecto_id: r.proyecto_id,
+    created_at: r.created_at,
+    proyectos: r.proyectos,
+    destinatarios: 1,
+    href: `/admin/reportes?retraso=${r.id}#incidencias`,
+  };
 }
 
 export const codigoDe = (n: Notificacion) => (Array.isArray(n.proyectos) ? n.proyectos[0] : n.proyectos)?.codigo || '';
@@ -73,9 +102,17 @@ export interface AvisosAdmin {
   esNueva: (n: Aviso) => boolean;
   sinLeer: number;
   marcarVistas: () => void;
+  /** Vuelve a consultar ya (por ejemplo, cuando llega un atraso en vivo) */
+  recargar: () => void;
 }
 
-/** Avisos agrupados, cuántos no ha visto el admin, y la consulta cada 30 s con la pestaña a la vista */
+/**
+ * Avisos de la campanita: las notificaciones (agrupadas) y los atrasos que reportan los
+ * operadores, leídos directo de `retrasos` (los reportes por pieza no crean notificación).
+ * Las notificaciones de tipo "retraso" se omiten para no repetir el mismo atraso.
+ * En vivo: se vuelve a consultar en cuanto entra una notificación o un atraso (Supabase
+ * Realtime, sql/realtime_notificaciones.sql); además, cada 15 s con la pestaña a la vista.
+ */
 export function useAvisosAdmin(): AvisosAdmin {
   const [lista, setLista] = useState<Aviso[]>([]);
   const [cargando, setCargando] = useState(true);
@@ -83,21 +120,29 @@ export function useAvisosAdmin(): AvisosAdmin {
   const masNueva = useRef<number | null>(null);
 
   const cargar = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('notificaciones')
-      .select('id, tipo, mensaje, proyecto_id, created_at, proyectos ( codigo )')
-      .order('created_at', { ascending: false })
-      .limit(LIMITE);
+    const [notifRes, retrasosRes] = await Promise.all([
+      supabase
+        .from('notificaciones')
+        .select('id, tipo, mensaje, proyecto_id, created_at, proyectos ( codigo )')
+        .or('tipo.is.null,tipo.neq.retraso')
+        .order('created_at', { ascending: false })
+        .limit(LIMITE),
+      supabase
+        .from('retrasos')
+        .select('id, motivo, created_at, proyecto_id, areas ( nombre ), proyectos ( codigo )')
+        .order('created_at', { ascending: false })
+        .limit(MOSTRAR),
+    ]);
     setCargando(false);
-    if (error) return;
-    const filas = (data ?? []) as unknown as Notificacion[];
-    const nueva = filas.length ? Date.parse(filas[0].created_at) : 0;
-    // Suena solo si llegó algo después de la consulta anterior (no al abrir la página).
+    if (notifRes.error && retrasosRes.error) return;
+    const filas = (notifRes.data ?? []) as unknown as Notificacion[];
+    // Suena solo si llegó una notificación después de la consulta anterior (no al abrir la página).
     // Los atrasos ya tienen su propio tono de celular (AlertaRetrasos): aquí no suenan dos veces.
     const anterior = masNueva.current;
-    if (anterior !== null && filas.some(f => Date.parse(f.created_at) > anterior && f.tipo !== 'retraso')) playNotificacion();
-    masNueva.current = nueva;
-    setLista(agrupar(filas));
+    if (anterior !== null && filas.some(f => Date.parse(f.created_at) > anterior)) playNotificacion();
+    masNueva.current = filas.length ? Date.parse(filas[0].created_at) : 0;
+    const avisos = [...agrupar(filas), ...((retrasosRes.data ?? []) as unknown as FilaRetraso[]).map(avisoDeRetraso)];
+    setLista(avisos.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).slice(0, MOSTRAR));
   }, []);
 
   useEffect(() => {
@@ -106,7 +151,23 @@ export function useAvisosAdmin(): AvisosAdmin {
       void cargar();
     }, 0);
     const intervalo = setInterval(() => { if (document.visibilityState === 'visible') void cargar(); }, CADA_MS);
-    return () => { clearTimeout(primero); clearInterval(intervalo); };
+    // Un aviso llega una vez por destinatario: se juntan los eventos y se consulta una sola vez
+    let espera: ReturnType<typeof setTimeout> | null = null;
+    const alCambiar = () => {
+      if (espera) clearTimeout(espera);
+      espera = setTimeout(() => void cargar(), 400);
+    };
+    const canal = supabase
+      .channel(`campana-admin-${Date.now()}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notificaciones' }, alCambiar)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'retrasos' }, alCambiar)
+      .subscribe();
+    return () => {
+      clearTimeout(primero);
+      clearInterval(intervalo);
+      if (espera) clearTimeout(espera);
+      void supabase.removeChannel(canal);
+    };
   }, [cargar]);
 
   const esNueva = (n: Aviso) => Date.parse(n.created_at) > vistoHasta;
@@ -116,7 +177,21 @@ export function useAvisosAdmin(): AvisosAdmin {
     try { localStorage.setItem(CLAVE_VISTO, String(ahora)); } catch { /* sin almacenamiento */ }
   };
 
-  return { lista, cargando, esNueva, sinLeer: lista.filter(esNueva).length, marcarVistas };
+  return { lista, cargando, esNueva, sinLeer: lista.filter(esNueva).length, marcarVistas, recargar: () => void cargar() };
+}
+
+/* ── Un solo juego de avisos para todo el panel (campanita, dashboard y alerta de atrasos) ── */
+
+const AvisosContexto = createContext<AvisosAdmin | null>(null);
+
+export function AvisosAdminProvider({ children }: { children: ReactNode }) {
+  const avisos = useAvisosAdmin();
+  return <AvisosContexto.Provider value={avisos}>{children}</AvisosContexto.Provider>;
+}
+
+/** Los avisos del panel; fuera de AvisosAdminProvider devuelve null */
+export function useAvisos(): AvisosAdmin | null {
+  return useContext(AvisosContexto);
 }
 
 /** Encabezado y lista del menú (igual en el panel flotante y en la hoja del celular) */
@@ -149,8 +224,8 @@ function ContenidoAvisos({ avisos, alElegir, alto }: { avisos: AvisosAdmin; alEl
             );
             return (
               <li key={n.id}>
-                {n.proyecto_id ? (
-                  <Link href={`/admin/proyectos/${n.proyecto_id}`} onClick={alElegir} className="block hover:bg-white/[0.05]">{contenido}</Link>
+                {n.href ? (
+                  <Link href={n.href} onClick={alElegir} className="block hover:bg-white/[0.05]">{contenido}</Link>
                 ) : contenido}
               </li>
             );
@@ -161,7 +236,7 @@ function ContenidoAvisos({ avisos, alElegir, alto }: { avisos: AvisosAdmin; alEl
   );
 }
 
-export function NotificationBellAdmin({ avisos }: { avisos: AvisosAdmin }) {
+export function NotificationBellAdmin({ avisos, alinear = 'derecha' }: { avisos: AvisosAdmin; alinear?: 'derecha' | 'izquierda' }) {
   const [abierto, setAbierto] = useState(false);
   const [movil, setMovil] = useState(false);
   const contenedor = useRef<HTMLDivElement>(null);
@@ -212,7 +287,7 @@ export function NotificationBellAdmin({ avisos }: { avisos: AvisosAdmin }) {
       </button>
 
       {abierto && !movil && (
-        <div className="absolute right-0 top-full mt-2 z-[60] w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-white/15 bg-[#0b0f17] shadow-2xl shadow-black/60 animate-in fade-in slide-in-from-top-2 duration-150" role="dialog" aria-label="Notificaciones">
+        <div className={`absolute ${alinear === 'izquierda' ? 'left-0' : 'right-0'} top-full mt-2 z-[60] w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-white/15 bg-[#0b0f17] shadow-2xl shadow-black/60 animate-in fade-in slide-in-from-top-2 duration-150`} role="dialog" aria-label="Notificaciones">
           <ContenidoAvisos avisos={avisos} alElegir={cerrar} alto="max-h-[360px]" />
         </div>
       )}

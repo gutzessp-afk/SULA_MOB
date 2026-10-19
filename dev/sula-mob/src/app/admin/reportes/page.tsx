@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { Suspense, useEffect, useRef, useState, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
+import { useAvisos } from '@/components/dashboard/NotificationBellAdmin';
 import { FileSpreadsheet, Download, AlertCircle, BarChart3, Loader2, Camera, Clock, User } from 'lucide-react';
 
 interface Retraso {
@@ -20,7 +22,19 @@ interface Retraso {
 
 type TipoReporte = 'produccion' | 'incidencias';
 
+// useSearchParams necesita un Suspense alrededor para que la página pueda prerenderizarse
 export default function ReportesPage() {
+  return (
+    <Suspense fallback={null}>
+      <Reportes />
+    </Suspense>
+  );
+}
+
+function Reportes() {
+  // ?retraso=… viene de la campanita o del aviso de atraso: ese reporte se resalta y se trae a la vista
+  const resaltado = useSearchParams().get('retraso');
+  const elegido = useRef<HTMLDivElement | null>(null);
   const [retrasos, setRetrasos] = useState<Retraso[]>([]);
   const [operadores, setOperadores] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -66,6 +80,21 @@ export default function ReportesPage() {
     void load();
     return () => { montado = false; };
   }, [cargar]);
+
+  // Cuando llega un atraso nuevo (la campanita lo detecta), la lista se actualiza sola
+  const ultimoAtraso = useAvisos()?.lista.find((a) => a.tipo === 'retraso')?.id;
+  const primeraVez = useRef(true);
+  useEffect(() => {
+    if (primeraVez.current) { primeraVez.current = false; return; }
+    void cargar();
+  }, [cargar, ultimoAtraso]);
+
+  // Lleva hasta el atraso que se tocó en la campanita
+  useEffect(() => {
+    if (!resaltado || loading) return;
+    const t = setTimeout(() => elegido.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
+    return () => clearTimeout(t);
+  }, [resaltado, loading, retrasos]);
 
   const nombreOperador = (r: Retraso) =>
     (r.operador_id && operadores[r.operador_id]) || 'Operador';
@@ -156,7 +185,7 @@ export default function ReportesPage() {
           </div>
 
           {/* INCIDENCIAS REPORTADAS POR OPERADORES */}
-          <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] space-y-4">
+          <div id="incidencias" className="scroll-mt-4 relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] space-y-4">
             <h2 className="text-xs font-bold uppercase tracking-wider text-white/60 border-b border-white/10 pb-3 flex items-center justify-between">
               <span>Retrasos reportados por operadores</span>
               <span className="text-white/40">{retrasos.length}</span>
@@ -174,8 +203,17 @@ export default function ReportesPage() {
             ) : (
               <div className="space-y-4">
                 {retrasos.map((r) => (
-                  <div key={r.id} className="bg-white/[0.07] border border-red-500/30 p-4 rounded-2xl space-y-2">
+                  <div
+                    key={r.id}
+                    ref={r.id === resaltado ? elegido : undefined}
+                    className={`bg-white/[0.07] border p-4 rounded-2xl space-y-2 transition-shadow ${
+                      r.id === resaltado ? 'border-amber-400/70 shadow-[0_0_0_3px_rgba(251,191,36,0.18)]' : 'border-red-500/30'
+                    }`}
+                  >
                     <div className="flex flex-wrap items-center gap-2">
+                      {r.id === resaltado && (
+                        <span className="text-[10px] font-bold uppercase bg-amber-400/15 text-amber-300 px-2 py-0.5 rounded-full">Nuevo</span>
+                      )}
                       <span className="text-xs font-bold text-white flex items-center gap-1">
                         <User className="w-3.5 h-3.5 text-white/50" />
                         {nombreOperador(r)}
@@ -190,7 +228,7 @@ export default function ReportesPage() {
                           Área: {r.areas.nombre}
                         </span>
                       )}
-                      {r.tiempo_estimado_retraso !== null && (
+                      {Number(r.tiempo_estimado_retraso) > 0 && (
                         <span className="text-[10px] text-amber-300 font-semibold">
                           {r.tiempo_estimado_retraso} h de retraso
                         </span>

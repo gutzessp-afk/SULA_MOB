@@ -5,12 +5,13 @@
  * ──────────────────
  * Cuando un operador reporta un atraso, en cualquier página del admin:
  *   - suena un tono de celular (y vibra en celulares que lo permiten),
- *   - aparece arriba un aviso con el motivo, el área, el operador y el proyecto.
+ *   - aparece arriba un aviso con el motivo, el área, el operador y el proyecto,
+ *     que lleva a Reportes (retrasos de operadores), y la campanita se actualiza al momento.
  *
  * Se entera de dos formas, la que llegue primero:
  *   - En vivo (Supabase Realtime), si la tabla `retrasos` está en la publicación
- *     (sql/realtime_retrasos.sql).
- *   - Revisando cada 20 s con la pestaña a la vista, por si Realtime no está activo.
+ *     (sql/realtime_notificaciones.sql).
+ *   - Revisando cada 5 s con la pestaña a la vista, por si Realtime no está activo.
  * Solo avisa de los atrasos que llegan después de abrir el panel, y una vez cada uno.
  * Los navegadores no dejan sonar nada hasta que el usuario toca la página por primera vez.
  *
@@ -22,6 +23,7 @@ import Link from 'next/link';
 import { AlertTriangle, X } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { playAlertaRetraso } from '@/lib/mobiSound';
+import { useAvisos } from '@/components/dashboard/NotificationBellAdmin';
 
 interface Retraso {
   id: string;
@@ -36,13 +38,17 @@ interface Retraso {
 }
 
 const COLUMNAS = 'id, motivo, descripcion, tiempo_estimado_retraso, created_at, proyecto_id, areas (nombre), usuarios (nombre, apellidos), proyectos (codigo)';
-const CADA_MS = 20_000;
+const CADA_MS = 5_000;
 const VISIBLE_MS = 15_000;
 const MAX_AVISOS = 3;
 const uno = <T,>(x: T | T[] | null): T | null => (Array.isArray(x) ? x[0] ?? null : x);
 
 export function AlertaRetrasos() {
   const [avisos, setAvisos] = useState<Retraso[]>([]);
+  // Para que la campanita muestre el atraso en cuanto llega, sin esperar su consulta de cada 30 s
+  const campana = useAvisos();
+  const recargarCampana = useRef(campana?.recargar);
+  useEffect(() => { recargarCampana.current = campana?.recargar; });
   const vistos = useRef(new Set<string>());
   // Solo cuentan los atrasos posteriores a este momento (el más reciente al abrir el panel)
   const desde = useRef<string | null>(null);
@@ -58,6 +64,7 @@ export function AlertaRetrasos() {
       setTimeout(() => quitar(r.id), VISIBLE_MS);
     }
     playAlertaRetraso();
+    recargarCampana.current?.();
     setAvisos(a => [...frescos.reverse(), ...a].slice(0, MAX_AVISOS));
   }, [quitar]);
 
@@ -89,7 +96,7 @@ export function AlertaRetrasos() {
       })
       .subscribe();
 
-    // Respaldo: revisa cada 20 s con la pestaña a la vista
+    // Respaldo: revisa cada 5 s con la pestaña a la vista
     const intervalo = setInterval(() => { if (document.visibilityState === 'visible') void revisar(); }, CADA_MS);
     const alVolver = () => { if (document.visibilityState === 'visible') void revisar(); };
     document.addEventListener('visibilitychange', alVolver);
@@ -124,11 +131,9 @@ export function AlertaRetrasos() {
                 {[area, operador, r.tiempo_estimado_retraso ? `${r.tiempo_estimado_retraso} h` : ''].filter(Boolean).join(' · ')}
               </p>
               {r.descripcion && <p className="mt-1 line-clamp-2 text-xs italic text-white/55">“{r.descripcion}”</p>}
-              {r.proyecto_id && (
-                <Link href={`/admin/proyectos/${r.proyecto_id}`} onClick={() => quitar(r.id)} className="mt-2 inline-flex min-h-[32px] items-center text-xs font-bold text-blue-400 hover:underline">
-                  Ver proyecto →
-                </Link>
-              )}
+              <Link href={`/admin/reportes?retraso=${r.id}#incidencias`} onClick={() => quitar(r.id)} className="mt-2 inline-flex min-h-[32px] items-center text-xs font-bold text-blue-400 hover:underline">
+                Ver en reportes →
+              </Link>
             </div>
             <button type="button" onClick={() => quitar(r.id)} aria-label="Cerrar aviso" className="-m-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white/40 hover:bg-white/10 hover:text-white">
               <X className="h-4 w-4" />

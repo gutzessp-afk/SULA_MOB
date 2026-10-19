@@ -24,6 +24,7 @@ import { limpiarCache } from '@/lib/cache-datos';
 import InstallPWA from '@/components/InstallPWA';
 import MobiChat from '@/components/MobiChat';
 import { AlertaRetrasos } from '@/components/AlertaRetrasos';
+import { AvisosAdminProvider } from '@/components/dashboard/NotificationBellAdmin';
 
 /* ── Secciones del menú ── */
 
@@ -52,7 +53,16 @@ const menuSections = [
   },
 ];
 
+/** Los avisos (campanita del dashboard y alerta de atrasos) se comparten en todo el panel */
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <AvisosAdminProvider>
+      <PanelAdmin>{children}</PanelAdmin>
+    </AvisosAdminProvider>
+  );
+}
+
+function PanelAdmin({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -117,7 +127,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <div className="space-y-1">
               {section.items.map((item) => {
                 const Icon = item.icon;
-                const isActive = pathname === item.href;
+                const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
 
                 return (
                   <Link
