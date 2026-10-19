@@ -5,6 +5,22 @@ const nextConfig: NextConfig = {
   // pdf-parse y @napi-rs/canvas son módulos nativos de Node.js
   // que NO deben ser bundleados por webpack — se cargan directo.
   serverExternalPackages: ['pdf-parse', '@napi-rs/canvas'],
+  // Optimización de imágenes: <Image> sirve AVIF/WebP del tamaño de cada pantalla
+  images: {
+    formats: ['image/avif', 'image/webp'],
+    deviceSizes: [640, 750, 828, 1080, 1200, 1920],
+    imageSizes: [16, 32, 48, 64, 96, 128, 256],
+    qualities: [75],
+  },
+  // El service worker no se guarda en caché del navegador: así las actualizaciones llegan de inmediato
+  async headers() {
+    return [
+      {
+        source: '/sw.js',
+        headers: [{ key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' }],
+      },
+    ]
+  },
 };
 
 export default nextConfig;

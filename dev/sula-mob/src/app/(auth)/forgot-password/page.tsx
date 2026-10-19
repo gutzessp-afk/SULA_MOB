@@ -41,7 +41,7 @@ export default function ForgotPasswordPage() {
         {/* Logo */}
         <div className="mb-6 flex justify-center sm:mb-7">
           <Image
-            src="/logo-sula.png"
+            src="/SULA_MOB_logo_transparente.png"
             alt="SULA MOB"
             width={260}
             height={130}

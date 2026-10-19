@@ -1,18 +1,39 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+/**
+ * Dashboard del admin — /admin/dashboard
+ * ──────────────────────────────────────
+ * Layout vertical para trabajar:
+ *   encabezado → 5 indicadores → actividad de 30 días + notificaciones →
+ *   tabla de proyectos activos → panal de áreas + matriz proyecto × área.
+ * Los datos salen de la caché (useDatos): se muestran al instante si ya se habían
+ * cargado y se actualizan solos cada minuto mientras la pestaña está a la vista.
+ *
+ * RUTA: src/app/admin/dashboard/page.tsx
+ */
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import {
-  Clock,
-  RefreshCw,
-  Search,
-  Download,
-  ShieldAlert,
-  Layers,
-  BarChart3,
-  TrendingUp,
-  Cpu
-} from 'lucide-react';
+import { cargarProyectos, cargarTodas, useDatos } from '@/lib/cache-datos';
+import { TemaToggle } from '@/components/TemaToggle';
+import { BadgePrioridad } from '@/components/BadgePrioridad';
+import { HexagonGrid } from '@/components/dashboard/HexagonGrid';
+import { HeatMatrix, type FilaCalor } from '@/components/dashboard/HeatMatrix';
+import { StatCards, type StatCard } from '@/components/dashboard/StatCards';
+import { NotificationBellAdmin, useAvisosAdmin } from '@/components/dashboard/NotificationBellAdmin';
+import { PanelNotificaciones } from '@/components/dashboard/PanelNotificaciones';
+import type { DiaActividad } from '@/components/dashboard/ActividadAvances';
+import { ETIQUETA_ESTADO, estadoEntrega, fechaEntrega, fechaHoy, fechaLegible, ZONA_HORARIA, type EstadoEntrega } from '@/lib/entregas';
+import { AlertTriangle, Bell, Calendar, CheckCircle2, Download, FolderOpen, Gauge, RefreshCw } from 'lucide-react';
+
+// Recharts pesa ~100 KB: se descarga aparte para que lo demás aparezca primero
+const ActividadAvances = dynamic(() => import('@/components/dashboard/ActividadAvances'), {
+  ssr: false,
+  loading: () => <div className="h-[200px] animate-pulse rounded-xl bg-white/[0.04]" />,
+});
 
 interface Proyecto {
   id: string;
@@ -23,6 +44,7 @@ interface Proyecto {
   prioridad?: string;
   created_at?: string;
   descripcion?: string;
+  fecha_maxima?: string | null;
 }
 
 interface Area {
@@ -33,576 +55,427 @@ interface Area {
 }
 
 interface AvanceEstacion {
-  id?: string;
   producto_id?: string;
-  proyecto_id?: string;
   area_id: string;
   porcentaje: number;
   completado: boolean;
   piezas_totales?: number;
   piezas_completadas?: number;
-  updated_at?: string;
+}
+
+interface AvanceDia { piezas: number | null; created_at: string }
+
+/** Orden de las áreas en la línea de producción (sin acentos ni mayúsculas) */
+const FLUJO = ['corte de lamina', 'corte de laser', 'corte de tubo', 'doblez', 'troquel', 'punteado', 'soldadura y pulido', 'pintura', 'empaque'];
+const normal = (t: string) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+
+const REFRESCO_MS = 60_000;
+const DIAS_ACTIVIDAD = 30;
+const MAX_TABLA = 10;
+
+const diaMexico = (d: Date | string) => new Date(d).toLocaleDateString('en-CA', { timeZone: ZONA_HORARIA });
+
+/** Avance de una fila de producto_area_avance (piezas si las tiene; si no, su porcentaje) */
+const pctFila = (f: AvanceEstacion) => (f.piezas_totales && f.piezas_totales > 0
+  ? Math.min(100, Math.round(((f.piezas_completadas || 0) / f.piezas_totales) * 100))
+  : f.porcentaje || (f.completado ? 100 : 0));
+
+/** "Actualizado hace 2 min": se recalcula cada 15 s */
+function UltimaActualizacion({ en, actualizando }: { en: number | null; actualizando: boolean }) {
+  const [ahora, setAhora] = useState(0);
+  useEffect(() => {
+    const tic = () => setAhora(Date.now());
+    const primero = setTimeout(tic, 0);
+    const intervalo = setInterval(tic, 15_000);
+    return () => { clearTimeout(primero); clearInterval(intervalo); };
+  }, [en]);
+
+  let texto = 'Conectando con la base...';
+  if (en && ahora) {
+    const segundos = Math.max(0, Math.round((ahora - en) / 1000));
+    texto = segundos < 60 ? 'Actualizado hace un momento' : `Actualizado hace ${Math.round(segundos / 60)} min`;
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5" aria-live="polite">
+      <span className={`h-1.5 w-1.5 rounded-full ${actualizando ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
+      {actualizando && en ? 'Actualizando...' : texto}
+    </span>
+  );
+}
+
+/** Fecha larga de hoy; vacía hasta montar para que no difiera de la del servidor */
+function FechaHoy() {
+  const [texto, setTexto] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const f = new Date().toLocaleDateString('es-MX', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+      setTexto(f.charAt(0).toUpperCase() + f.slice(1));
+    }, 0);
+    return () => clearTimeout(t);
+  }, []);
+  return <>{texto}</>;
+}
+
+/** Avances de los últimos N días (Supabase entrega máximo 1000 filas por petición) */
+async function cargarAvancesRecientes(dias: number): Promise<AvanceDia[]> {
+  const desde = new Date(Date.now() - dias * 86_400_000).toISOString();
+  const filas: AvanceDia[] = [];
+  for (let i = 0; ; i += 1000) {
+    const { data, error } = await supabase.from('avances').select('piezas, created_at').gte('created_at', desde).order('created_at').range(i, i + 999);
+    if (error) throw new Error(error.message);
+    filas.push(...((data ?? []) as AvanceDia[]));
+    if (!data || data.length < 1000) return filas;
+  }
 }
 
 export default function DashboardPage() {
-  const [proyectos, setProyectos] = useState<Proyecto[]>([]);
-  const [areas, setAreas] = useState<Area[]>([]);
-  const [avances, setAvances] = useState<AvanceEstacion[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
+  const router = useRouter();
+  const datosProyectos = useDatos('proyectos', () => cargarProyectos<Proyecto>());
+  const datosAreas = useDatos('areas', async () => {
+    const { data, error } = await supabase.from('areas').select('*').order('created_at', { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data ?? []) as Area[];
+  });
+  const datosAvances = useDatos('avance-areas', () => cargarTodas<AvanceEstacion>('producto_area_avance'));
+  const datosProductos = useDatos('productos-proyecto', () => cargarTodas<{ id: string; proyecto_id: string }>('proyecto_productos', 'id, proyecto_id'));
+  // Avances de los últimos 30 días: la gráfica de actividad y qué áreas trabajaron hoy
+  const datosActividad = useDatos('avances-30d', () => cargarAvancesRecientes(DIAS_ACTIVIDAD));
+  const datosRecientes = useDatos('avances-24h', async () => {
+    const { data, error } = await supabase
+      .from('avances')
+      .select('area_id, created_at')
+      .gte('created_at', new Date(Date.now() - 86_400_000).toISOString())
+      .limit(1000);
+    if (error) throw new Error(error.message);
+    return (data ?? []) as { area_id: string; created_at: string }[];
+  });
+  const avisos = useAvisosAdmin();
 
-  const fetchMetrics = useCallback(async () => {
-    setLoading(true);
-    const [
-      { data: pData },
-      { data: aData },
-      { data: avData }
-    ] = await Promise.all([
-      supabase.from('proyectos').select('*').order('created_at', { ascending: false }),
-      supabase.from('areas').select('*').order('created_at', { ascending: true }),
-      supabase.from('producto_area_avance').select('*')
-    ]);
+  const proyectos = useMemo(() => datosProyectos.datos ?? [], [datosProyectos.datos]);
+  const areas = useMemo(() => datosAreas.datos ?? [], [datosAreas.datos]);
+  const avances = useMemo(() => datosAvances.datos ?? [], [datosAvances.datos]);
+  const actualizando = datosProyectos.actualizando || datosAreas.actualizando || datosAvances.actualizando;
+  const cargandoProyectos = datosProyectos.cargando;
 
-    if (pData) setProyectos(pData as Proyecto[]);
-    if (aData) setAreas(aData as Area[]);
-    if (avData) setAvances(avData as AvanceEstacion[]);
+  const fetchMetrics = () => Promise.all([
+    datosProyectos.recargar(), datosAreas.recargar(), datosAvances.recargar(),
+    datosProductos.recargar(), datosActividad.recargar(), datosRecientes.recargar(),
+  ]);
+  const actualizadoEn = [datosProyectos.actualizadoEn, datosAreas.actualizadoEn, datosAvances.actualizadoEn].every(Boolean)
+    ? Math.min(datosProyectos.actualizadoEn!, datosAreas.actualizadoEn!, datosAvances.actualizadoEn!)
+    : null;
 
-    setLoading(false);
+  // Se actualiza solo cada minuto mientras la pestaña está a la vista, y al volver a ella
+  const sincronizar = useRef(fetchMetrics);
+  useEffect(() => {
+    sincronizar.current = fetchMetrics;
+  });
+  useEffect(() => {
+    const siVisible = () => { if (document.visibilityState === 'visible') void sincronizar.current(); };
+    const intervalo = setInterval(siVisible, REFRESCO_MS);
+    document.addEventListener('visibilitychange', siVisible);
+    return () => { clearInterval(intervalo); document.removeEventListener('visibilitychange', siVisible); };
   }, []);
 
-  useEffect(() => {
-    let isMounted = true;
-    async function init() {
-      await fetchMetrics();
-      if (!isMounted) return;
+  // Estado de entrega de cada proyecto (misma regla que alertas y calendario)
+  const estadoDe = useMemo(() => {
+    const mapa = new Map<string, EstadoEntrega>();
+    for (const p of proyectos) mapa.set(p.id, estadoEntrega(Number(p.progreso) || 0, fechaEntrega(p)));
+    return mapa;
+  }, [proyectos]);
+  const cuenta = (...estados: EstadoEntrega[]) => proyectos.filter(p => estados.includes(estadoDe.get(p.id)!)).length;
+
+  // Activos: primero los atrasados, luego los que se entregan antes; sin fecha al final
+  const activos = useMemo(() => {
+    const orden = (p: Proyecto) => (estadoDe.get(p.id) === 'atrasado' ? 0 : 1);
+    return proyectos
+      .filter(p => { const e = estadoDe.get(p.id); return e === 'en_proceso' || e === 'pendiente' || e === 'atrasado'; })
+      .sort((a, b) => orden(a) - orden(b) || (fechaEntrega(a) || '9999').localeCompare(fechaEntrega(b) || '9999') || (Number(b.progreso) || 0) - (Number(a.progreso) || 0));
+  }, [proyectos, estadoDe]);
+  const topProyectos = activos.slice(0, MAX_TABLA);
+
+  // Rendimiento por área: promedio del avance de cada producto en esa área
+  const rendimientoAreas = useMemo(() => areas.map(area => {
+    const filas = avances.filter(a => a.area_id === area.id);
+    let hechas = 0;
+    let totales = 0;
+    for (const f of filas) {
+      if (f.piezas_totales && f.piezas_totales > 0) {
+        totales += f.piezas_totales;
+        hechas += Math.min(f.piezas_completadas || 0, f.piezas_totales);
+      }
     }
-    void init();
-    return () => { isMounted = false; };
-  }, [fetchMetrics]);
+    const rendimiento = filas.length ? Math.round(filas.reduce((s, f) => s + pctFila(f), 0) / filas.length) : 0;
+    return { ...area, rendimiento, piezasCompletadas: hechas, piezasTotales: totales, productos: filas.length };
+  }), [areas, avances]);
 
-  // Proyectos Filtrados
-  const proyectosFiltrados = useMemo(() => {
-    return proyectos.filter(p =>
-      p.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.codigo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.cliente && p.cliente.toLowerCase().includes(searchTerm.toLowerCase()))
-    );
-  }, [proyectos, searchTerm]);
+  // Panal: áreas activas en el orden de la línea, con su actividad de las últimas 24 h
+  const estaciones = useMemo(() => {
+    const recientes = datosRecientes.datos ?? [];
+    const lugar = (nombre: string) => { const i = FLUJO.indexOf(normal(nombre)); return i === -1 ? FLUJO.length : i; };
+    return rendimientoAreas
+      .filter(a => a.activo)
+      .map(a => ({
+        id: a.id, nombre: a.nombre, rendimiento: a.rendimiento, hechas: a.piezasCompletadas, totales: a.piezasTotales,
+        productos: a.productos, actividad: recientes.filter(x => x.area_id === a.id).length,
+      }))
+      .sort((a, b) => lugar(a.nombre) - lugar(b.nombre));
+  }, [rendimientoAreas, datosRecientes.datos]);
 
-  // Cálculo de Rendimiento Comparativo por Área
-  const rendimientoAreas = useMemo(() => {
-    if (!areas.length || !avances.length) return [];
+  // Matriz de calor: avance de cada proyecto en cada área (promedio de sus productos)
+  const celdasCalor = useMemo(() => {
+    const proyectoDe = new Map((datosProductos.datos ?? []).map(x => [x.id, x.proyecto_id]));
+    const suma = new Map<string, { total: number; n: number }>();
+    for (const f of avances) {
+      const proyecto = f.producto_id ? proyectoDe.get(f.producto_id) : undefined;
+      if (!proyecto) continue;
+      const clave = `${proyecto}|${f.area_id}`;
+      const g = suma.get(clave) ?? { total: 0, n: 0 };
+      g.total += pctFila(f); g.n++;
+      suma.set(clave, g);
+    }
+    return new Map([...suma].map(([k, g]) => [k, Math.round(g.total / g.n)]));
+  }, [avances, datosProductos.datos]);
+  const filasCalor: FilaCalor[] = activos.slice(0, 8).map(p => ({ id: p.id, codigo: p.codigo, nombre: p.nombre }));
 
-    return areas.map(area => {
-      const avancesArea = avances.filter(a => a.area_id === area.id);
-      if (!avancesArea.length) return { ...area, rendimiento: 0, piezasCompletadas: 0, piezasTotales: 0 };
+  // Eficiencia: piezas terminadas contra programadas en todas las áreas (sin piezas, el avance promedio)
+  const piezas = avances.reduce((t, f) => (f.piezas_totales && f.piezas_totales > 0
+    ? { hechas: t.hechas + Math.min(f.piezas_completadas || 0, f.piezas_totales), totales: t.totales + f.piezas_totales }
+    : t), { hechas: 0, totales: 0 });
+  const eficienciaGlobal = piezas.totales
+    ? Math.round((piezas.hechas / piezas.totales) * 100)
+    : proyectos.length ? Math.round(proyectos.reduce((s, p) => s + (Number(p.progreso) || 0), 0) / proyectos.length) : 0;
 
-      let totalPiezas = 0;
-      let piezasHechas = 0;
-      let sumaPcts = 0;
+  // Actividad: avances por día de los últimos 30 días (también los días sin avances), acumulados
+  const actividad = useMemo<DiaActividad[]>(() => {
+    const porDia = new Map<string, { avances: number; piezas: number }>();
+    for (const a of datosActividad.datos ?? []) {
+      const d = diaMexico(a.created_at);
+      const g = porDia.get(d) ?? { avances: 0, piezas: 0 };
+      g.avances++; g.piezas += a.piezas || 0;
+      porDia.set(d, g);
+    }
+    // Días contados desde hoy (México) a mediodía UTC para que restar días nunca cruce de fecha
+    const hoy = Date.parse(`${fechaHoy()}T12:00:00Z`);
+    const dias = Array.from({ length: DIAS_ACTIVIDAD }, (_, i) => new Date(hoy - (DIAS_ACTIVIDAD - 1 - i) * 86_400_000).toISOString().slice(0, 10));
+    return dias.reduce<DiaActividad[]>((acc, dia) => {
+      const g = porDia.get(dia) ?? { avances: 0, piezas: 0 };
+      acc.push({ dia, ...g, total: (acc.at(-1)?.total ?? 0) + g.avances });
+      return acc;
+    }, []);
+  }, [datosActividad.datos]);
+  const avancesMes = actividad.at(-1)?.total ?? 0;
 
-      avancesArea.forEach(item => {
-        if (item.piezas_totales && item.piezas_totales > 0) {
-          totalPiezas += item.piezas_totales;
-          piezasHechas += item.piezas_completadas || 0;
-          sumaPcts += Math.min(100, Math.round(((item.piezas_completadas || 0) / item.piezas_totales) * 100));
-        } else {
-          sumaPcts += item.porcentaje || (item.completado ? 100 : 0);
-        }
-      });
-
-      const promedio = Math.round(sumaPcts / avancesArea.length);
-
-      return {
-        ...area,
-        rendimiento: promedio,
-        piezasCompletadas: piezasHechas,
-        piezasTotales: totalPiezas
-      };
-    });
-  }, [areas, avances]);
-
-  // Detección de Atrasos
-  const metricasAtrasos = useMemo(() => {
-    let proyectosAtrasados = 0;
-    let proyectosRiesgo = 0;
-    let dentroDeTiempo = 0;
-
-    proyectos.forEach(p => {
-      if (p.progreso === 100) {
-        dentroDeTiempo++;
-        return;
-      }
-
-      let fechaEntrega: Date | null = null;
-      if (p.descripcion && p.descripcion.includes('Entrega:')) {
-        const match = p.descripcion.match(/Entrega:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/);
-        if (match && match[1]) {
-          fechaEntrega = new Date(match[1]);
-        }
-      }
-
-      const hoy = new Date();
-      if (fechaEntrega && fechaEntrega < hoy && p.progreso < 100) {
-        proyectosAtrasados++;
-      } else if (p.progreso < 30 && p.prioridad === 'urgente') {
-        proyectosRiesgo++;
-      } else {
-        dentroDeTiempo++;
-      }
-    });
-
-    const total = proyectos.length || 1;
-    return {
-      atrasados: proyectosAtrasados,
-      riesgo: proyectosRiesgo,
-      aTiempo: dentroDeTiempo,
-      pctAtraso: Math.round((proyectosAtrasados / total) * 100)
-    };
-  }, [proyectos]);
-
-  // Cronología por Fechas
-  const avancesPorFechas = useMemo(() => {
-    const ordenados = [...proyectos].sort((a, b) => {
-      const fechaA = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const fechaB = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return fechaB - fechaA;
-    });
-
-    return ordenados.slice(0, 6).map(p => {
-      let fechaTexto = 'Sin fecha';
-      if (p.descripcion && p.descripcion.includes('Entrega:')) {
-        const match = p.descripcion.match(/Entrega:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/);
-        if (match && match[1]) fechaTexto = match[1];
-      } else if (p.created_at) {
-        fechaTexto = new Date(p.created_at).toISOString().split('T')[0];
-      }
-
-      return { ...p, fechaTarget: fechaTexto };
-    });
-  }, [proyectos]);
-
-  // Eficiencia global
-  const eficienciaGlobal = useMemo(() => {
-    if (!proyectos.length) return 0;
-    const sum = proyectos.reduce((acc, p) => acc + p.progreso, 0);
-    return Math.round(sum / proyectos.length);
-  }, [proyectos]);
+  const tarjetas: StatCard[] = [
+    { icono: FolderOpen, titulo: 'Activos', valor: activos.length, color: 'bg-sky-500/80', detalle: 'Proyectos sin terminar' },
+    { icono: CheckCircle2, titulo: 'Completados', valor: cuenta('completado'), color: 'bg-emerald-500/80', detalle: 'Proyectos al 100%' },
+    { icono: AlertTriangle, titulo: 'Atrasados', valor: cuenta('atrasado'), color: 'bg-red-500/80', detalle: 'Pasaron su fecha de entrega sin terminar' },
+    { icono: Gauge, titulo: 'Eficiencia', valor: eficienciaGlobal, sufijo: '%', color: 'bg-violet-500/80',
+      detalle: piezas.totales ? `${piezas.hechas.toLocaleString('es-MX')} de ${piezas.totales.toLocaleString('es-MX')} piezas terminadas en todas las áreas` : 'Avance promedio de los proyectos' },
+    { icono: Bell, titulo: 'Alertas pendientes', valor: avisos.sinLeer, color: 'bg-amber-500/80', detalle: 'Notificaciones que todavía no has visto' },
+  ];
 
   const exportarReporte = () => {
-    const fecha = new Date();
-    const fechaStr = fecha.toISOString().slice(0, 10);
-    const horaStr = fecha.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
-
-    const lines: string[] = [];
-
-    // ═══ ENCABEZADO DEL REPORTE ═══
-    lines.push('REPORTE DE PRODUCCIÓN — SULA MOB');
-    lines.push(`Fecha de generación:,${fechaStr} ${horaStr}`);
-    lines.push(`Total de proyectos:,${proyectos.length}`);
-    lines.push(`Eficiencia global:,${eficienciaGlobal}%`);
-    lines.push('');
-
-    // ═══ SECCIÓN 1: RESUMEN EJECUTIVO ═══
-    lines.push('═══ RESUMEN EJECUTIVO ═══');
-    lines.push('Métrica,Valor');
-    lines.push(`Proyectos totales,${proyectos.length}`);
-    lines.push(`En proceso,${proyectos.filter(p => p.progreso > 0 && p.progreso < 100).length}`);
-    lines.push(`Finalizados,${proyectos.filter(p => p.progreso === 100).length}`);
-    lines.push(`Sin iniciar,${proyectos.filter(p => p.progreso === 0).length}`);
-    lines.push(`Atrasados,${metricasAtrasos.atrasados}`);
-    lines.push(`En riesgo,${metricasAtrasos.riesgo}`);
-    lines.push(`A tiempo,${metricasAtrasos.aTiempo}`);
-    lines.push(`% de atraso,${metricasAtrasos.pctAtraso}%`);
-    lines.push(`Eficiencia global,${eficienciaGlobal}%`);
-    lines.push('');
-
-    // ═══ SECCIÓN 2: DETALLE POR PROYECTO ═══
-    lines.push('═══ DETALLE POR PROYECTO ═══');
-    lines.push('Código,Proyecto,Cliente,Prioridad,Progreso %,Estado,Fecha Entrega');
-    proyectos.forEach(p => {
-      let fechaEntrega = '—';
-      if (p.descripcion && p.descripcion.includes('Entrega:')) {
-        const match = p.descripcion.match(/Entrega:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/);
-        if (match?.[1]) fechaEntrega = match[1];
-      }
-
-      let estado = 'Sin iniciar';
-      if (p.progreso === 100) estado = 'Finalizado';
-      else if (p.progreso > 0) estado = 'En proceso';
-
-      // Verificar atraso
-      if (fechaEntrega !== '—' && p.progreso < 100) {
-        const fEntrega = new Date(fechaEntrega);
-        if (fEntrega < new Date()) estado = '⚠ ATRASADO';
-      }
-
-      lines.push(`${p.codigo},"${p.nombre}","${p.cliente || 'General'}",${(p.prioridad || 'media').toUpperCase()},${p.progreso}%,${estado},${fechaEntrega}`);
-    });
-    lines.push('');
-
-    // ═══ SECCIÓN 3: RENDIMIENTO POR ÁREA ═══
-    lines.push('═══ RENDIMIENTO POR ÁREA / ESTACIÓN ═══');
-    lines.push('Área,Peso %,Rendimiento %,Piezas Completadas,Piezas Totales');
-    rendimientoAreas.forEach(a => {
-      lines.push(`"${a.nombre}",${a.peso || 0}%,${a.rendimiento}%,${a.piezasCompletadas},${a.piezasTotales}`);
-    });
-    lines.push('');
-
-    // ═══ PIE DE REPORTE ═══
-    lines.push('═══ FIN DEL REPORTE ═══');
-    lines.push(`Generado por SULA MOB — ${fechaStr}`);
-
-    const csvContent = '﻿' + lines.join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const ahora = new Date();
+    const fechaStr = fechaHoy();
+    const horaStr = ahora.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+    const texto = (t: string | undefined) => `"${(t || '').replace(/"/g, '""')}"`;
+    const lines: string[] = [
+      'REPORTE DE PRODUCCIÓN — SULA MOB',
+      `Fecha de generación:,${fechaStr} ${horaStr}`,
+      '',
+      '═══ RESUMEN ═══',
+      'Métrica,Valor',
+      `Proyectos totales,${proyectos.length}`,
+      `Activos,${activos.length}`,
+      `Completados,${cuenta('completado')}`,
+      `Atrasados,${cuenta('atrasado')}`,
+      `Eficiencia global,${eficienciaGlobal}%`,
+      `Avances en los últimos ${DIAS_ACTIVIDAD} días,${avancesMes}`,
+      '',
+      '═══ DETALLE POR PROYECTO ═══',
+      'Código,Proyecto,Cliente,Prioridad,Progreso %,Estado,Fecha Entrega',
+      ...proyectos.map(p => {
+        const estado = estadoDe.get(p.id);
+        return `${texto(p.codigo)},${texto(p.nombre)},${texto(p.cliente || 'General')},${(p.prioridad || 'media').toUpperCase()},${p.progreso}%,${estado ? ETIQUETA_ESTADO[estado] : ''},${fechaEntrega(p) || '—'}`;
+      }),
+      '',
+      '═══ RENDIMIENTO POR ÁREA ═══',
+      'Área,Peso %,Rendimiento %,Piezas Completadas,Piezas Totales',
+      ...rendimientoAreas.map(a => `${texto(a.nombre)},${a.peso || 0}%,${a.rendimiento}%,${a.piezasCompletadas},${a.piezasTotales}`),
+      '',
+      `Generado por SULA MOB — ${fechaStr}`,
+    ];
+    const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
     link.download = `Reporte_Produccion_SULA_${fechaStr}.csv`;
-    document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
 
-  /* ── Glass card base ── */
-  const glass = 'backdrop-blur-2xl backdrop-saturate-[1.7] bg-white/[0.04] border border-white/[0.10] rounded-2xl shadow-[0_8px_32px_-8px_rgba(0,0,0,0.6)]';
+  const tarjeta = 'rounded-2xl border border-white/[0.08] bg-white/[0.04] backdrop-blur-xl';
+  const boton = 'flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.07] text-white/70 hover:bg-white/[0.12] hover:text-white transition-colors';
+  const barra = (p: Proyecto) => (estadoDe.get(p.id) === 'atrasado' ? 'bg-red-500' : 'bg-gradient-to-r from-sky-500 to-emerald-400');
+  const colorPct = (p: Proyecto) => (estadoDe.get(p.id) === 'atrasado' ? 'text-red-400' : 'text-emerald-400');
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-12 px-2 sm:px-4 text-white">
+    <div className="mx-auto max-w-7xl space-y-3 px-1 pb-12 text-white sm:space-y-4 sm:px-4">
 
-      {/* ═══ HEADER PRINCIPAL ═══ */}
-      <div className={`relative overflow-hidden ${glass} p-5 sm:p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4`}>
-        <div className="space-y-1">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-bold font-mono">
-            <Cpu className="w-3.5 h-3.5 animate-pulse" /> Telemetría de Planta
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
-            Control y Monitoreo General
-          </h1>
-          <p className="text-xs text-white/50">Monitoreo general de proyectos en planta y rendimiento por área.</p>
+      {/* ═══ ENCABEZADO ═══ */}
+      <header className={`sula-entrada relative z-30 ${tarjeta} flex items-center justify-between gap-3 p-4 sm:p-5`}>
+        <div className="min-w-0">
+          <h1 className="whitespace-nowrap text-lg font-bold leading-tight text-white sm:text-xl">Panel de Control</h1>
+          <p className="mt-0.5 flex items-center gap-x-2 truncate text-[11px] text-white/50">
+            <span className="hidden sm:inline"><FechaHoy /> ·</span>
+            <UltimaActualizacion en={actualizadoEn} actualizando={actualizando} />
+          </p>
         </div>
-
-        <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
-          <div className="relative flex items-center flex-1 md:flex-initial">
-            <Search className="w-4 h-4 text-white/40 absolute left-3.5" />
-            <input
-              type="text"
-              placeholder="Buscar proyecto..."
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              className="bg-white/[0.07] border border-white/20 hover:border-white/30 focus:border-blue-400/60 focus:ring-1 focus:ring-blue-500/15 rounded-xl text-xs text-white pl-9 pr-3 py-2.5 outline-none w-full sm:w-52 transition-all placeholder:text-white/30"
-            />
-          </div>
-
-          <button
-            onClick={() => void fetchMetrics()}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs border border-blue-500/30 transition-all shrink-0 active:scale-95 shadow-lg shadow-blue-900/40"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Sincronizar
+        <div className="flex shrink-0 items-center gap-2">
+          <button type="button" onClick={() => void fetchMetrics()} className={boton} title="Actualizar" aria-label="Actualizar">
+            <RefreshCw className={`h-4 w-4 ${actualizando ? 'animate-spin' : ''}`} />
           </button>
+          <button type="button" onClick={exportarReporte} className={`${boton} max-sm:hidden`} title="Exportar CSV" aria-label="Exportar CSV">
+            <Download className="h-4 w-4" />
+          </button>
+          <NotificationBellAdmin avisos={avisos} />
+          <TemaToggle />
         </div>
+      </header>
+
+      {/* ═══ INDICADORES ═══ */}
+      <div className="sula-entrada" style={{ animationDelay: '50ms' }}>
+        <StatCards cards={tarjetas} cargando={cargandoProyectos || datosAvances.cargando} />
       </div>
 
-      {/* ═══ STAT CARDS — 4 métricas principales ═══ */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        {/* Proyectos */}
-        <div className={`${glass} !bg-blue-500/[0.08] !border-blue-500/20 p-4 sm:p-5 space-y-2`}>
-          <div className="flex items-center justify-between">
-            <span className="text-3xl sm:text-4xl font-black text-blue-400 font-mono">{proyectos.length}</span>
-            <div className="w-10 h-10 rounded-xl bg-blue-500/15 flex items-center justify-center">
-              <BarChart3 className="w-5 h-5 text-blue-400" />
-            </div>
+      {/* ═══ ACTIVIDAD + NOTIFICACIONES ═══ */}
+      <div className="grid grid-cols-1 gap-3 sm:gap-4 xl:grid-cols-5">
+        <section className={`sula-entrada ${tarjeta} flex min-w-0 flex-col p-4 sm:p-5 xl:col-span-3`} style={{ animationDelay: '100ms' }}>
+          <div className="mb-4 flex items-baseline justify-between gap-3">
+            <h3 className="whitespace-nowrap text-sm font-bold text-white">Actividad de Avances</h3>
+            <span className="truncate text-[10px] uppercase text-white/40">
+              {datosActividad.cargando ? '30 días' : <>{avancesMes} <span className="hidden sm:inline">en los últimos</span><span className="sm:hidden">·</span> 30 días</>}
+            </span>
           </div>
-          <p className="text-xs text-white/50 font-semibold">Proyectos</p>
-          <p className="text-[10px] text-white/35">Órdenes Totales</p>
-        </div>
+          <div className="h-[200px] xl:h-auto xl:min-h-[200px] xl:flex-1">
+            {datosActividad.cargando
+              ? <div className="h-full min-h-[200px] animate-pulse rounded-xl bg-white/[0.04]" />
+              : <ActividadAvances datos={actividad} />}
+          </div>
+        </section>
 
-        {/* Áreas */}
-        <div className={`${glass} !bg-cyan-500/[0.08] !border-cyan-500/20 p-4 sm:p-5 space-y-2`}>
-          <div className="flex items-center justify-between">
-            <span className="text-3xl sm:text-4xl font-black text-cyan-400 font-mono">{areas.filter(a => a.activo).length}</span>
-            <div className="w-10 h-10 rounded-xl bg-cyan-500/15 flex items-center justify-center">
-              <Layers className="w-5 h-5 text-cyan-400" />
-            </div>
-          </div>
-          <p className="text-xs text-white/50 font-semibold">Áreas</p>
-          <p className="text-[10px] text-white/35">Estaciones Activas</p>
-        </div>
-
-        {/* Eficiencia */}
-        <div className={`${glass} !bg-emerald-500/[0.08] !border-emerald-500/20 p-4 sm:p-5 space-y-2`}>
-          <div className="flex items-center justify-between">
-            <span className="text-3xl sm:text-4xl font-black text-emerald-400 font-mono">{eficienciaGlobal}%</span>
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center">
-              <TrendingUp className="w-5 h-5 text-emerald-400" />
-            </div>
-          </div>
-          <p className="text-xs text-white/50 font-semibold">Eficiencia</p>
-          <p className="text-[10px] text-white/35">Tasa de Eficiencia</p>
-        </div>
-
-        {/* Atrasados */}
-        <div className={`${glass} !bg-red-500/[0.08] !border-red-500/20 p-4 sm:p-5 space-y-2`}>
-          <div className="flex items-center justify-between">
-            <span className="text-3xl sm:text-4xl font-black text-red-400 font-mono">{metricasAtrasos.atrasados}</span>
-            <div className="w-10 h-10 rounded-xl bg-red-500/15 flex items-center justify-center">
-              <ShieldAlert className="w-5 h-5 text-red-400" />
-            </div>
-          </div>
-          <p className="text-xs text-white/50 font-semibold">Atrasados</p>
-          <p className="text-[10px] text-white/35">Órdenes Atrasadas</p>
-        </div>
+        <section className={`sula-entrada ${tarjeta} min-w-0 p-4 sm:p-5 xl:col-span-2`} style={{ animationDelay: '150ms' }}>
+          <PanelNotificaciones avisos={avisos} />
+        </section>
       </div>
 
-      {/* ═══ GRÁFICA DE BARRAS — Avance por Proyecto ═══ */}
-      <div className={`${glass} p-5 sm:p-6 space-y-5`}>
-        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-white/10 pb-4">
-          <div>
-            <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
-              <BarChart3 className="w-5 h-5 text-blue-400" /> Avance Total por Proyecto
-            </h2>
-            <p className="text-[11px] text-white/40">Cada barra representa el porcentaje de avance global</p>
-          </div>
-          <button onClick={exportarReporte} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-bold bg-white/[0.06] border border-white/10 px-3 py-1.5 rounded-xl self-start sm:self-auto transition-colors">
-            <Download className="w-3.5 h-3.5" /> Exportar CSV
-          </button>
+      {/* ═══ PROYECTOS ACTIVOS ═══ */}
+      <section className={`sula-entrada ${tarjeta} overflow-hidden`} style={{ animationDelay: '200ms' }}>
+        <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-4 py-3 sm:px-5">
+          <h3 className="text-sm font-bold text-white">
+            Proyectos activos <span className="font-mono text-white/40">{activos.length}</span>
+          </h3>
+          <Link href="/admin/proyectos" className="-my-2 whitespace-nowrap py-2 text-[11px] font-semibold text-blue-400 hover:underline">Ver todos<span className="hidden sm:inline"> los proyectos</span> →</Link>
         </div>
 
-        {proyectosFiltrados.length === 0 ? (
-          <p className="text-xs text-white/40 text-center py-12">No hay proyectos registrados o que coincidan con la búsqueda.</p>
+        {cargandoProyectos ? (
+          <div className="space-y-2 p-4">{[0, 1, 2].map(i => <div key={i} className="h-10 animate-pulse rounded-lg bg-white/[0.05]" />)}</div>
+        ) : topProyectos.length === 0 ? (
+          <p className="py-8 text-center text-xs text-white/40">No hay proyectos activos.</p>
         ) : (
-          <div className="pt-6 pb-2">
-            <div className="h-56 sm:h-64 w-full flex items-end justify-between gap-2 sm:gap-4 overflow-x-auto pb-6 px-2 border-b border-white/[0.08] relative">
-              <div className="absolute inset-x-0 top-0 border-b border-dashed border-white/[0.08] text-[9px] font-mono text-white/25 pl-1">100%</div>
-              <div className="absolute inset-x-0 top-1/2 border-b border-dashed border-white/[0.08] text-[9px] font-mono text-white/25 pl-1">50%</div>
-
-              {proyectosFiltrados.map((p) => {
-                const alturaPorcentaje = Math.max(5, p.progreso);
-                const esCompletado = p.progreso === 100;
-
-                return (
-                  <div key={p.id} className="flex-1 min-w-[50px] max-w-[85px] h-full flex flex-col justify-end items-center group relative">
-
-                    <div className="absolute -top-12 opacity-0 group-hover:opacity-100 transition-opacity bg-[#0a0c14] border border-white/20 text-[10px] p-2.5 rounded-xl text-center shadow-xl z-20 pointer-events-none whitespace-nowrap">
-                      <p className="font-bold text-white">{p.nombre}</p>
-                      <p className="text-blue-400 font-mono">{p.progreso}% completado</p>
-                    </div>
-
-                    <span className={`text-[10px] font-mono font-bold mb-1.5 group-hover:scale-110 transition-transform ${esCompletado ? 'text-emerald-400' : 'text-blue-400'}`}>
-                      {p.progreso}%
-                    </span>
-
-                    <div className="w-full bg-white/[0.03] rounded-t-xl p-0.5 border-t border-x border-white/[0.08] h-full flex items-end">
-                      <div
-                        className={`w-full rounded-t-lg transition-all duration-1000 relative ${
-                          esCompletado
-                            ? 'bg-gradient-to-t from-emerald-600 via-emerald-500 to-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.3)]'
-                            : 'bg-gradient-to-t from-blue-700 via-blue-500 to-cyan-400 shadow-[0_0_15px_rgba(59,130,246,0.3)]'
-                        }`}
-                        style={{ height: `${alturaPorcentaje}%` }}
-                      >
-                        <div className="absolute top-0 inset-x-0 h-[2px] bg-white/50" />
-                      </div>
-                    </div>
-
-                    <span className="text-[10px] font-mono text-blue-300 font-bold mt-2 truncate w-full text-center" title={p.nombre}>
-                      {p.codigo}
-                    </span>
+          <>
+            {/* Celular: tarjetas */}
+            <div className="divide-y divide-white/[0.06] md:hidden">
+              {topProyectos.map(p => (
+                <Link key={p.id} href={`/admin/proyectos/${p.id}`} className="block p-3.5 transition-colors active:bg-white/[0.04]">
+                  <div className="mb-1.5 flex items-center justify-between gap-2">
+                    <span className="font-mono text-xs font-bold text-blue-400">{p.codigo}</span>
+                    <BadgePrioridad prioridad={p.prioridad} />
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ═══ GRÁFICA DE LÍNEAS + INDICADOR DE ATRASOS ═══ */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-
-        {/* Gráfica de líneas — Desempeño por Área */}
-        <div className={`lg:col-span-2 ${glass} p-5 sm:p-6 space-y-4`}>
-          <div className="border-b border-white/[0.08] pb-3 flex flex-col sm:flex-row justify-between sm:items-center gap-2">
-            <div>
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-blue-400" /> Desempeño Comparativo por Área
-              </h3>
-              <p className="text-[11px] text-white/40">Porcentaje promedio de trabajo terminado en cada taller</p>
-            </div>
-            <span className="text-[10px] font-mono text-blue-300 bg-blue-500/10 px-2.5 py-1 rounded-full border border-blue-500/20">
-              Análisis Comparativo
-            </span>
-          </div>
-
-          <div className="relative h-56 w-full pt-4">
-            {rendimientoAreas.length === 0 ? (
-              <p className="text-xs text-white/40 text-center py-16">Sin datos para la comparativa de áreas.</p>
-            ) : (
-              <div className="h-full w-full relative flex flex-col justify-between">
-                <svg className="w-full h-40 overflow-visible" viewBox={`0 0 ${Math.max(100, (rendimientoAreas.length - 1) * 100)} 100`} preserveAspectRatio="none">
-                  {/* Grid lines */}
-                  <line x1="0" y1="0" x2="1000" y2="0" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
-                  <line x1="0" y1="50" x2="1000" y2="50" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
-                  <line x1="0" y1="100" x2="1000" y2="100" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
-
-                  {/* Área bajo la curva */}
-                  <polygon
-                    fill="url(#areaGradient)"
-                    points={`0,100 ${rendimientoAreas.map((a, i) => `${i * 100},${100 - a.rendimiento}`).join(' ')} ${(rendimientoAreas.length - 1) * 100},100`}
-                  />
-                  <defs>
-                    <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.2" />
-                      <stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
-                    </linearGradient>
-                  </defs>
-
-                  {/* Línea principal */}
-                  <polyline
-                    fill="none"
-                    stroke="#3b82f6"
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    points={rendimientoAreas.map((a, i) => `${i * 100},${100 - a.rendimiento}`).join(' ')}
-                    className="drop-shadow-[0_4px_10px_rgba(59,130,246,0.5)] transition-all duration-1000"
-                  />
-
-                  {/* Puntos */}
-                  {rendimientoAreas.map((a, i) => (
-                    <g key={a.id}>
-                      <circle
-                        cx={i * 100}
-                        cy={100 - a.rendimiento}
-                        r="5"
-                        fill="#3b82f6"
-                        stroke="#ffffff"
-                        strokeWidth="2"
-                        className="transition-all hover:scale-150 cursor-pointer"
-                      />
-                    </g>
-                  ))}
-                </svg>
-
-                <div className="flex justify-between items-center text-[10px] text-white/50 font-semibold pt-2 border-t border-white/[0.08]">
-                  {rendimientoAreas.map(a => (
-                    <div key={a.id} className="text-center truncate px-1" style={{ width: `${100 / rendimientoAreas.length}%` }}>
-                      <span className="block truncate font-bold text-white/70">{a.nombre}</span>
-                      <span className={`font-mono ${a.rendimiento > 50 ? 'text-emerald-400' : a.rendimiento > 0 ? 'text-amber-400' : 'text-white/30'}`}>
-                        {a.rendimiento}%
-                      </span>
+                  <p className="truncate text-sm font-semibold text-white">{p.nombre}</p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/40">
+                      <div className={`h-full transition-all ${barra(p)}`} style={{ width: `${p.progreso}%` }} />
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Indicador de Atrasos */}
-        <div className={`${glass} p-5 sm:p-6 flex flex-col justify-between space-y-4`}>
-          <div className="flex justify-between items-center border-b border-white/[0.08] pb-3">
-            <div>
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <ShieldAlert className="w-4 h-4 text-red-400" /> Indicador de Atrasos
-              </h3>
-              <p className="text-[11px] text-white/40">Cumplimiento de fechas</p>
-            </div>
-            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-red-500/15 text-red-300 border border-red-500/20">
-              {metricasAtrasos.pctAtraso}% Crítico
-            </span>
-          </div>
-
-          <div className="space-y-3 my-auto">
-            <div className="bg-emerald-500/[0.08] p-3 rounded-xl border border-emerald-500/15 flex justify-between items-center">
-              <span className="text-xs text-emerald-300 font-bold">A Tiempo / En Regla</span>
-              <span className="text-lg font-black text-emerald-400 font-mono">{metricasAtrasos.aTiempo}</span>
+                    <span className={`font-mono text-[11px] font-bold ${colorPct(p)}`}>{p.progreso}%</span>
+                  </div>
+                  {estadoDe.get(p.id) === 'atrasado' && (
+                    <p className="mt-1.5 text-[10px] font-bold uppercase text-red-400">Atrasado · entrega {fechaLegible(fechaEntrega(p))}</p>
+                  )}
+                </Link>
+              ))}
             </div>
 
-            <div className="bg-amber-500/[0.08] p-3 rounded-xl border border-amber-500/15 flex justify-between items-center">
-              <span className="text-xs text-amber-300 font-bold">En Riesgo</span>
-              <span className="text-lg font-black text-amber-400 font-mono">{metricasAtrasos.riesgo}</span>
+            {/* md en adelante: tabla */}
+            <div className="hidden md:block">
+              <table className="w-full table-fixed text-left text-sm">
+                <thead className="text-[10px] font-bold uppercase tracking-wider text-white/40">
+                  <tr className="border-b border-white/[0.06]">
+                    <th className="w-28 px-5 py-2.5">Código</th>
+                    <th className="px-3 py-2.5">Nombre</th>
+                    <th className="hidden w-[18%] px-3 py-2.5 xl:table-cell">Cliente</th>
+                    <th className="w-28 px-3 py-2.5">Entrega</th>
+                    <th className="w-[18%] px-3 py-2.5">Progreso</th>
+                    <th className="w-28 px-5 py-2.5 text-right">Prioridad</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/[0.05]">
+                  {topProyectos.map(p => {
+                    const entrega = fechaEntrega(p);
+                    const atrasado = estadoDe.get(p.id) === 'atrasado';
+                    return (
+                      <tr key={p.id} onClick={() => router.push(`/admin/proyectos/${p.id}`)} className="cursor-pointer transition-colors hover:bg-white/[0.04]">
+                        <td className="px-5 py-3 font-mono text-xs font-bold text-blue-400">
+                          <Link href={`/admin/proyectos/${p.id}`} onClick={e => e.stopPropagation()}>{p.codigo}</Link>
+                        </td>
+                        <td className="truncate px-3 py-3 font-semibold text-white" title={p.nombre}>{p.nombre}</td>
+                        <td className="hidden truncate px-3 py-3 text-white/55 xl:table-cell" title={p.cliente}>{p.cliente || '—'}</td>
+                        <td className={`whitespace-nowrap px-3 py-3 text-xs ${atrasado ? 'font-bold text-red-400' : 'text-white/50'}`}>
+                          {entrega ? <span className="inline-flex items-center gap-1"><Calendar className="h-3 w-3" />{fechaLegible(entrega)}</span> : '—'}
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/40">
+                              <div className={`h-full ${barra(p)}`} style={{ width: `${p.progreso}%` }} />
+                            </div>
+                            <span className={`w-9 text-right font-mono text-[11px] font-bold ${colorPct(p)}`}>{p.progreso}%</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3 text-right"><BadgePrioridad prioridad={p.prioridad} /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
+          </>
+        )}
+        {activos.length > MAX_TABLA && (
+          <p className="border-t border-white/[0.06] px-4 py-2.5 text-center text-[11px] text-white/40">
+            Mostrando {MAX_TABLA} de {activos.length} · <Link href="/admin/proyectos" className="text-blue-400 hover:underline">ver todos</Link>
+          </p>
+        )}
+      </section>
 
-            <div className="bg-red-500/[0.08] p-3 rounded-xl border border-red-500/15 flex justify-between items-center">
-              <span className="text-xs text-red-300 font-bold">Órdenes Atrasadas</span>
-              <span className="text-lg font-black text-red-400 font-mono">{metricasAtrasos.atrasados}</span>
-            </div>
+      {/* ═══ ÁREAS ═══ */}
+      <div className="grid grid-cols-1 gap-3 sm:gap-4 xl:grid-cols-3">
+        <section className={`sula-entrada ${tarjeta} flex min-h-[280px] min-w-0 flex-col gap-2 p-4 sm:p-5`} style={{ animationDelay: '250ms' }}>
+          <h3 className="text-sm font-bold text-white">Áreas de producción</h3>
+          <div className="flex flex-1 items-center justify-center">
+            {datosAvances.cargando || datosAreas.cargando
+              ? <div className="h-[220px] w-full animate-pulse rounded-xl bg-white/[0.04]" />
+              : <HexagonGrid areas={estaciones} />}
           </div>
+        </section>
 
-          <div className="pt-2 border-t border-white/[0.08] text-[10px] text-white/40 text-center">
-            Total de pedidos en análisis: <strong className="text-white/70">{proyectos.length}</strong>
-          </div>
-        </div>
-
+        <section className={`sula-entrada ${tarjeta} flex min-w-0 flex-col gap-3 p-4 sm:p-5 xl:col-span-2`} style={{ animationDelay: '300ms' }}>
+          <h3 className="text-sm font-bold text-white">Proyecto × área</h3>
+          {cargandoProyectos || datosProductos.cargando
+            ? <div className="h-[220px] animate-pulse rounded-xl bg-white/[0.04]" />
+            : <HeatMatrix proyectos={filasCalor} areas={estaciones} celdas={celdasCalor} />}
+        </section>
       </div>
-
-      {/* ═══ RESUMEN INFERIOR — métricas clave ═══ */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
-        <div className={`${glass} p-4 text-center space-y-1`}>
-          <p className="text-[11px] text-white/40 font-medium">Proyectos Totales</p>
-          <p className="text-xl font-black text-white font-mono">{proyectos.length} <span className="text-xs font-normal text-white/40">órdenes</span></p>
-        </div>
-        <div className={`${glass} p-4 text-center space-y-1`}>
-          <p className="text-[11px] text-white/40 font-medium">En Proceso</p>
-          <p className="text-xl font-black text-blue-400 font-mono">{proyectos.filter(p => p.progreso > 0 && p.progreso < 100).length} <span className="text-xs font-normal text-white/40">órdenes</span></p>
-        </div>
-        <div className={`${glass} p-4 text-center space-y-1`}>
-          <p className="text-[11px] text-white/40 font-medium">Finalizados</p>
-          <p className="text-xl font-black text-emerald-400 font-mono">{proyectos.filter(p => p.progreso === 100).length} <span className="text-xs font-normal text-white/40">órdenes</span></p>
-        </div>
-        <div className={`${glass} p-4 text-center space-y-1`}>
-          <p className="text-[11px] text-white/40 font-medium">Atrasados</p>
-          <p className="text-xl font-black text-red-400 font-mono">{metricasAtrasos.atrasados} <span className="text-xs font-normal text-white/40">órdenes</span></p>
-        </div>
-        <div className={`${glass} col-span-2 sm:col-span-1 p-4 text-center space-y-1`}>
-          <p className="text-[11px] text-white/40 font-medium">Eficiencia Global</p>
-          <p className="text-xl font-black text-cyan-400 font-mono">{eficienciaGlobal}%</p>
-        </div>
-      </div>
-
-      {/* ═══ CRONOLOGÍA DE PROYECTOS ═══ */}
-      <div className={`${glass} p-5 sm:p-6 space-y-5`}>
-        <div className="border-b border-white/[0.08] pb-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-          <div>
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <Layers className="w-4 h-4 text-blue-400" /> Avances por Fechas y Programación
-            </h3>
-            <p className="text-[11px] text-white/40">Progreso registrado según fecha compromiso de entrega</p>
-          </div>
-          <span className="text-[10px] font-mono text-white/50 bg-white/[0.06] px-3 py-1 rounded-full border border-white/[0.08]">
-            Línea del Tiempo
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-          {avancesPorFechas.map((item) => (
-            <div
-              key={item.id}
-              className={`p-4 rounded-xl ${glass} !border-white/[0.08] hover:!border-blue-500/30 transition-all flex items-center justify-between gap-3`}
-            >
-              <div className="space-y-1 min-w-0">
-                <span className="text-[10px] text-blue-400 font-mono font-bold block">{item.codigo}</span>
-                <h4 className="text-xs font-bold text-white truncate" title={item.nombre}>{item.nombre}</h4>
-                <div className="flex items-center gap-1.5 text-[10px] text-white/40">
-                  <Clock className="w-3 h-3 text-amber-400" />
-                  <span>Entrega: {item.fechaTarget}</span>
-                </div>
-              </div>
-
-              <div className="text-right shrink-0">
-                <div className={`text-base font-black font-mono ${item.progreso === 100 ? 'text-emerald-400' : item.progreso > 50 ? 'text-blue-400' : 'text-amber-400'}`}>
-                  {item.progreso}%
-                </div>
-                <div className="w-12 h-1.5 bg-white/[0.06] rounded-full overflow-hidden border border-white/[0.08] mt-1">
-                  <div className={`h-full rounded-full ${item.progreso === 100 ? 'bg-emerald-400' : item.progreso > 50 ? 'bg-blue-400' : 'bg-amber-400'}`} style={{ width: `${item.progreso}%` }} />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
     </div>
   );
 }

@@ -1,0 +1,75 @@
+/*
+ * movil.css
+ * ─────────
+ * Ajustes de rendimiento y de uso táctil para celulares y tablets.
+ * Va fuera de las capas de Tailwind, así que gana a las utilidades sin !important.
+ * Se importa en src/app/layout.tsx después de globals.css.
+ */
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Sin el retraso de doble toque en lo que se puede tocar */
+a,
+button,
+[role='button'],
+label,
+summary,
+input,
+select,
+textarea {
+  touch-action: manipulation;
+}
+
+/* Nada debe empujar la página hacia los lados */
+img,
+video,
+canvas {
+  max-width: 100%;
+}
+
+@media (max-width: 1023px), (pointer: coarse) {
+  /*
+   * El vidrio esmerilado (backdrop-filter) es lo más caro de pintar en un teléfono:
+   * cada panel obliga a redibujar lo que tiene detrás en cada cuadro del scroll.
+   * En el contenido se quita; el fondo ya es oscuro y los paneles se leen igual.
+   */
+  main [class*='backdrop-blur'] {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* Barras y menús fijos: lo conservan, pero corto */
+  [class*='backdrop-blur-xl'],
+  [class*='backdrop-blur-2xl'],
+  [class*='backdrop-blur-['] {
+    --tw-backdrop-blur: blur(12px);
+    --tw-backdrop-saturate: saturate(1.2);
+  }
+
+  /* Sombras enormes de las tarjetas → una corta, que se pinta mucho más rápido */
+  main [class*='shadow-[0_32px_90px'] {
+    --tw-shadow: 0 10px 28px -16px rgb(0 0 0 / 0.8);
+  }
+
+  /* iOS hace zoom al enfocar campos con letra menor a 16px */
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

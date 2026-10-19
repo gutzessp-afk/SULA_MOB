@@ -18,10 +18,14 @@ interface Retraso {
   areas: { nombre: string } | null;
 }
 
+type TipoReporte = 'produccion' | 'incidencias';
+
 export default function ReportesPage() {
   const [retrasos, setRetrasos] = useState<Retraso[]>([]);
   const [operadores, setOperadores] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [descargando, setDescargando] = useState<TipoReporte | null>(null);
+  const [errorDescarga, setErrorDescarga] = useState('');
 
   const cargar = useCallback(async () => {
     const { data, error } = await supabase
@@ -66,36 +70,46 @@ export default function ReportesPage() {
   const nombreOperador = (r: Retraso) =>
     (r.operador_id && operadores[r.operador_id]) || 'Operador';
 
-  const exportarCSV = () => {
-    const celda = (v: string | number | null) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const encabezado = ['Fecha', 'Operador', 'Proyecto', 'Área', 'Motivo', 'Descripción', 'Horas de retraso', 'Comentario', 'Evidencia'];
-    const filas = retrasos.map((r) => [
-      new Date(r.created_at).toLocaleString('es-MX'),
-      nombreOperador(r),
-      r.proyectos?.nombre ?? '',
-      r.areas?.nombre ?? '',
-      r.motivo,
-      r.descripcion,
-      r.tiempo_estimado_retraso,
-      r.comentario,
-      r.evidencia_url,
-    ]);
-    const csv = [encabezado, ...filas].map((f) => f.map(celda).join(',')).join('\n');
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `incidencias-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  // Los Excel se arman en el servidor (/api/reportes/...) con los datos actuales
+  const descargarReporte = async (tipo: TipoReporte) => {
+    setDescargando(tipo);
+    setErrorDescarga('');
+    try {
+      const res = await fetch(`/api/reportes/${tipo}`);
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Error ${res.status}`);
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = res.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || `reporte-${tipo}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setErrorDescarga('No se pudo descargar el reporte: ' + (err instanceof Error ? err.message : 'error desconocido'));
+    } finally {
+      setDescargando(null);
+    }
   };
+
+  const botonExportar = (tipo: TipoReporte) => (
+    <button
+      onClick={() => descargarReporte(tipo)}
+      disabled={descargando !== null}
+      className="bg-white text-neutral-900 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 hover:bg-white/90 shadow-md disabled:opacity-40"
+    >
+      {descargando === tipo ? (
+        <><Loader2 className="w-4 h-4 animate-spin" /> Generando...</>
+      ) : (
+        <><Download className="w-4 h-4" /> Exportar Excel</>
+      )}
+    </button>
+  );
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
 
       <div
         className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 sm:p-8 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-cover bg-center"
-        style={{ backgroundImage: `linear-gradient(to right, rgba(11,15,23,0.95), rgba(18,24,36,0.8)), url('/images/nuevap.png')` }}
+        style={{ backgroundImage: `linear-gradient(to right, rgba(11,15,23,0.95), rgba(18,24,36,0.8)), url('/images/nuevap.webp')` }}
       >
         <div>
           <h1 className="text-2xl font-bold text-white tracking-wide flex items-center gap-3">
@@ -121,10 +135,8 @@ export default function ReportesPage() {
                 <div className="flex items-center gap-3 text-white font-bold text-sm">
                   <BarChart3 className="w-5 h-5 text-red-400" /> Reporte de Producción
                 </div>
-                <p className="text-xs text-white/60">Exporta el acumulado de proyectos finalizados por estación.</p>
-                <button className="bg-white text-neutral-900 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 hover:bg-white/90 shadow-md">
-                  <Download className="w-4 h-4" /> Exportar CSV
-                </button>
+                <p className="text-xs text-white/60">Estado y avance de cada proyecto, y progreso por área de producción.</p>
+                {botonExportar('produccion')}
               </div>
 
               <div className="bg-white/[0.07] border border-white/10 p-5 rounded-2xl space-y-3">
@@ -132,15 +144,15 @@ export default function ReportesPage() {
                   <AlertCircle className="w-5 h-5 text-amber-400" /> Historial de Incidencias
                 </div>
                 <p className="text-xs text-white/60">Consolidado de avisos y detenciones enviadas por operadores.</p>
-                <button
-                  onClick={exportarCSV}
-                  disabled={retrasos.length === 0}
-                  className="bg-white text-neutral-900 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 hover:bg-white/90 shadow-md disabled:opacity-40"
-                >
-                  <Download className="w-4 h-4" /> Exportar CSV
-                </button>
+                {botonExportar('incidencias')}
               </div>
             </div>
+
+            {errorDescarga && (
+              <p className="text-xs text-red-400 flex items-center gap-2" role="alert">
+                <AlertCircle className="w-4 h-4 shrink-0" /> {errorDescarga}
+              </p>
+            )}
           </div>
 
           {/* INCIDENCIAS REPORTADAS POR OPERADORES */}
@@ -216,7 +228,7 @@ export default function ReportesPage() {
         </div>
 
         <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-4 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] h-64 flex flex-col justify-end">
-          <Image src="/images/instalaciones.png" alt="Infraestructura" fill className="object-cover rounded-2xl opacity-75" />
+          <Image src="/images/instalaciones.webp" alt="Infraestructura" fill className="object-cover rounded-2xl opacity-75" />
           <div className="absolute inset-0 bg-gradient-to-t from-[#0B0F17] via-transparent to-transparent rounded-2xl" />
           <div className="relative z-10 p-2 space-y-1">
             <span className="text-[10px] uppercase tracking-wider font-bold text-red-400 bg-black/60 px-2.5 py-1 rounded-full border border-white/10 backdrop-blur-md inline-block">
