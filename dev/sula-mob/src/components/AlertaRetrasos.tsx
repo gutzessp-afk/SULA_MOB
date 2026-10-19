@@ -121,7 +121,7 @@ export function AlertaRetrasos() {
               <p className="text-[10px] font-bold uppercase tracking-wider text-red-300">Nuevo reporte de atraso{codigo ? ` · ${codigo}` : ''}</p>
               <p className="mt-0.5 text-sm font-semibold leading-snug text-white">{r.motivo || 'Sin motivo'}</p>
               <p className="mt-0.5 text-xs text-white/60">
-                {[area, operador, r.tiempo_estimado_retraso != null ? `${r.tiempo_estimado_retraso} h` : ''].filter(Boolean).join(' · ')}
+                {[area, operador, r.tiempo_estimado_retraso ? `${r.tiempo_estimado_retraso} h` : ''].filter(Boolean).join(' · ')}
               </p>
               {r.descripcion && <p className="mt-1 line-clamp-2 text-xs italic text-white/55">“{r.descripcion}”</p>}
               {r.proyecto_id && (
