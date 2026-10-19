@@ -7,8 +7,6 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { logoutAction } from '@/app/(auth)/login/actions'
 import {
-  LayoutDashboard,
-  Factory,
   ClipboardList,
   AlertOctagon,
   Bell,
@@ -64,16 +62,14 @@ export default function OperatorSidebar() {
     {
       title: 'Menú',
       items: [
-        { name: 'Dashboard', href: '/operator', icon: LayoutDashboard },
-        { name: 'Actividades', href: '/operator/actividades', icon: Factory },
-        { name: 'Notificaciones', href: '/operator/avisos', icon: Bell, badge: sinLeer },
+        { name: 'Notificaciones', href: '/operator/notificaciones', icon: Bell, badge: sinLeer },
       ],
     },
     {
       title: 'Producción',
       items: [
-        { name: 'Registrar Avance', href: '/operator/avances', icon: ClipboardList },
-        { name: 'Reportar Retraso', href: '/operator/retrasos', icon: AlertOctagon },
+        { name: 'Registrar avance', href: '/operator/avances', icon: ClipboardList },
+        { name: 'Reportar retraso', href: '/operator/retrasos', icon: AlertOctagon },
       ],
     },
   ]
@@ -85,13 +81,8 @@ export default function OperatorSidebar() {
 
   const inicial = nombre.trim().charAt(0).toUpperCase() || 'O'
 
-  function estaActivo(href: string) {
-    return href === '/operator' ? pathname === href : pathname.startsWith(href)
-  }
-
   return (
     <>
-      {/* Botón de menú, solo celular y tablet */}
       <button
         onClick={() => setAbierto(true)}
         className="md:hidden fixed top-4 left-4 z-50 p-2.5 rounded-xl bg-[#111114]/90 border border-white/10 backdrop-blur-xl text-white"
@@ -99,7 +90,7 @@ export default function OperatorSidebar() {
       >
         <Menu className="w-5 h-5" />
         {sinLeer > 0 && (
-          <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-red-600 border-2 border-[#111114]" />
+          <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-red-500 border-2 border-[#111114]" />
         )}
       </button>
 
@@ -111,11 +102,10 @@ export default function OperatorSidebar() {
       )}
 
       <aside
-        className={`w-64 max-w-[85vw] h-screen fixed left-0 top-0 z-50 flex flex-col bg-gradient-to-b from-[#151517] to-[#0b0b0d] border-r border-white/5 transition-transform duration-300 ${
+        className={`w-64 max-w-[85vw] h-screen fixed left-0 top-0 z-50 flex flex-col bg-gradient-to-b from-[#10172a] to-[#0a0d16] border-r border-white/5 transition-transform duration-300 ${
           abierto ? 'translate-x-0' : '-translate-x-full'
         } md:translate-x-0`}
       >
-        {/* Logo */}
         <div className="flex items-center justify-between px-5 pt-6 pb-4">
           <div className="flex-1 flex justify-center">
             <Image
@@ -136,10 +126,9 @@ export default function OperatorSidebar() {
           </button>
         </div>
 
-        {/* Tarjeta del usuario */}
         <div className="px-4 pb-4">
           <div className="flex items-center gap-3 p-3 rounded-2xl bg-white/[0.06] border border-white/10">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-red-500 to-red-700 flex items-center justify-center text-white font-bold text-sm flex-shrink-0 shadow-lg shadow-red-900/40">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white font-bold text-sm flex-shrink-0 shadow-lg shadow-blue-900/40">
               {inicial}
             </div>
             <div className="flex-1 min-w-0">
@@ -150,7 +139,6 @@ export default function OperatorSidebar() {
           </div>
         </div>
 
-        {/* Navegación por secciones */}
         <nav className="flex-1 overflow-y-auto px-4 pb-4 space-y-6">
           {secciones.map((seccion) => (
             <div key={seccion.title}>
@@ -160,7 +148,7 @@ export default function OperatorSidebar() {
               <div className="space-y-1">
                 {seccion.items.map((item) => {
                   const Icon = item.icon
-                  const activo = estaActivo(item.href)
+                  const activo = pathname.startsWith(item.href)
 
                   return (
                     <Link
@@ -169,7 +157,7 @@ export default function OperatorSidebar() {
                       onClick={() => setAbierto(false)}
                       className={`flex items-center gap-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all ${
                         activo
-                          ? 'bg-red-600 text-white shadow-lg shadow-red-600/30'
+                          ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
                           : 'text-slate-300 hover:bg-white/5 hover:text-white'
                       }`}
                     >
