@@ -2,6 +2,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRealtimeAvances } from '@/hooks/useRealtimeAvances'
 import Link from 'next/link'
 import {
   FolderKanban,
@@ -38,6 +39,9 @@ export default function OperatorDashboardPage() {
   const [resumen, setResumen] = useState<ResumenDashboard | null>(null)
   const [avisos, setAvisos] = useState<Notificacion[]>([])
   const [abierto, setAbierto] = useState<string | null>(null)
+  // Sube cuando alguien registra piezas: vuelve a cargar el resumen
+  const [version, setVersion] = useState(0)
+  useRealtimeAvances(() => setVersion((v) => v + 1))
 
   useEffect(() => {
     async function cargar() {
@@ -50,7 +54,7 @@ export default function OperatorDashboardPage() {
       setCargando(false)
     }
     cargar()
-  }, [])
+  }, [version])
 
   if (cargando || !resumen) {
     return (

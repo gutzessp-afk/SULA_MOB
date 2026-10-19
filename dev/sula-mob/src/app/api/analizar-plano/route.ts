@@ -25,7 +25,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { NextRequest, NextResponse } from 'next/server'
 import { esAdmin, supabaseServidor } from '@/lib/admin-api'
 import { leerPlanoPDF, leerTextoPlano } from '@/lib/bom-pdf'
-import { AREAS_PRODUCCION, type BomSource, type CalidadPlano, type PlantillaBOM, type ProblemaPlano } from '@/lib/types'
+import { AREAS_PRODUCCION, type AreaProduccion, type BomSource, type CalidadPlano, type PlantillaBOM, type ProblemaPlano } from '@/lib/types'
 
 // Un plano de ~20 hojas tarda alrededor de un minuto con IA
 export const maxDuration = 300
@@ -76,7 +76,7 @@ Qué debes devolver:
     - Lámina que el plano marca "CORTE LASER", o piezas pequeñas o de contorno complejo sin doblez (orejas, placas, cartabones): Corte de Laser.
     - Lámina plana de corte recto, sin dobleces: Corte de Lamina.
     - Pieza troquelada en serie: Troquel.
-    - Vidrio, melamina, hule y aluminio no pasan por las áreas de corte de acero: asígnales Empaque (el sistema los agrupa por su material).
+    - Vidrio, melamina, hule, aluminio y plástico NO se fabrican en planta: van directo a Empaque (el sistema los agrupa por su material). Solo las piezas metálicas (lámina, tubo, perfil, alambre de acero) pasan por las estaciones de producción. NUNCA asignes un área que no esté en la lista de opciones.
 - Revisa al final la tabla MATERIALES: cada material listado (hule, melamina, vidrio, aluminio...) debe aparecer en al menos una pieza del BOM. Si falta, busca la hoja donde se detalla esa pieza y agrégala.
 - Las piezas con el mismo nombre en subensambles gemelos (JAULA A y JAULA B, MODULO A y MODULO B) llevan el mismo material y las mismas medidas, salvo que el plano diga lo contrario.
 - Precisión de las medidas: junto con el PDF recibes el TEXTO EXACTO de cada hoja (cotas, tablas y cajetín, tal como están impresos). Toda medida que devuelvas debe ser un número que aparezca en ese texto, en la hoja de la pieza; cópialo con sus decimales (823.77, no 824). No calcules, no redondees y no estimes medidas a ojo a partir del dibujo: si la medida no está impresa, usa null.
@@ -84,7 +84,7 @@ Qué debes devolver:
 - Piezas espejo ("ESPEJO DE X", "IGUAL A X", "INCLUIDO EN X"): llevan las mismas medidas que la pieza X; cópialas y deja la referencia en notas.
 - Cantidades: usa la columna de cantidad de la tabla del subensamble donde aparece la pieza. No multipliques por el número de módulos ni por la cantidad del pedido.
 - Recorre TODAS las hojas del plano, de la primera a la última: cada hoja de detalle es una pieza que debe aparecer en el BOM. No omitas subensambles (jaulas de tubo, entrepaños y frentes de vidrio, puertas, baguetas, cubiertas) aunque el plano sea largo.
-- herrajes: nunca los pongas como componentes. Solo lo comercial que se compra (tornillos, tuercas remache, pijas, niveladores, correderas, cerraduras, tapones), con su SKU si lo trae y la cantidad total por UN producto. Si un herraje aparece dentro de un subensamble, multiplica su cantidad por la del subensamble.
+- herrajes: NUNCA los pongas como componentes fabricados. Son todo lo comercial que se compra hecho: tornillos, tuercas remache, pijas, niveladores, correderas, cerraduras, tapones, fieltros, kits de iluminación, contactos eléctricos, rieles de sistemas (Ducasse, corredizas), pasacables, plásticos decorativos (bralle). Incluye su SKU si lo trae y la cantidad total por UN producto. Si un herraje aparece dentro de un subensamble, multiplica su cantidad por la del subensamble. En caso de duda: si NO se corta ni dobla en planta, es herraje. El vidrio, la melamina y el hule cortados a medida SÍ van como componentes (con sus medidas), porque se necesitan para la Matriz de Corte y el 3D.
 
 Revisión de calidad del plano. Además de leerlo, revísalo como lo haría control de ingeniería antes de liberarlo a producción y lista en "problemas" lo que esté MAL HECHO en el plano mismo, con la hoja, la gravedad y una frase concreta que cite el dato (por ejemplo: "La tabla pide 2 REFUERZO y la hoja de detalle dice 1 PIEZA"). Busca:
 - Contradicciones: una cantidad, medida o material que no coincide entre la tabla general, la tabla del subensamble, el cajetín ("PIEZAS POR MODELO", "CORTE: L: A:") y las cotas del dibujo; cotas parciales que no suman la cota total; dimensiones generales distintas entre hojas.
@@ -258,7 +258,7 @@ function limpiarBOM(bom: PlantillaBOM): PlantillaBOM {
   const norm = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim()
   const nombres = new Set((bom.subensambles ?? []).map(s => norm(s.nombre)))
   // Lo que se compra hecho va a herrajes, no a la lista de corte
-  const esHerraje = (t: string) => /^(PIJA|TORNILLO|TUERCA|NIVELADOR|REMACHE|RONDANA|ROLDANA|ARANDELA|TAPON|REGATON|BISAGRA|CORREDERA|CERRADURA|RODAJA|RUEDA|IMAN)\b/.test(norm(t))
+  const esHerraje = (t: string) => /^(PIJA|TORNILLO|TUERCA|NIVELADOR|REMACHE|RONDANA|ROLDANA|ARANDELA|TAPON|REGATON|BISAGRA|CORREDERA|CERRADURA|RODAJA|RUEDA|IMAN|FIELTRO|KIT|CONTACTO|PASACABLE|RIEL|BRALLE|CHAPA|JALADERA)\b/.test(norm(t))
   const herrajes = [...(bom.herrajes ?? [])]
   const subensambles = (bom.subensambles ?? []).map(s => ({
     ...s,
@@ -275,6 +275,37 @@ function limpiarBOM(bom: PlantillaBOM): PlantillaBOM {
       if (ya) ya.cantidad = Math.max(ya.cantidad, cantidad)
       else herrajes.push({ descripcion: c.descripcion, sku: '', cantidad })
       return false
+    }),
+  }))
+  const contenedores = new Set(subensambles.map(s => norm(s.dentro_de ?? '')))
+  return { ...bom, herrajes, subensambles: subensambles.filter(s => s.componentes.length > 0 || contenedores.has(norm(s.nombre))) }
+}
+
+/**
+ * Segundo filtro, para lo que no pasa por las estaciones de producción:
+ *   - Una pieza que no es de metal y no trae medidas (kit de iluminación, fieltro,
+ *     riel de un sistema comercial...) se compra hecha: se mueve a herrajes.
+ *   - El vidrio, la melamina, el hule o el aluminio CON medidas se quedan como
+ *     piezas (la Matriz de Corte los lista por material y el 3D los dibuja), pero
+ *     siempre en Empaque: nunca en un área de corte de acero.
+ *   - Un área que no es de las 9 de producción pasa a "Sin área" para revisarla.
+ */
+function filtrarNoFabricados(bom: PlantillaBOM): PlantillaBOM {
+  const norm = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim()
+  const herrajes = [...(bom.herrajes ?? [])]
+  const subensambles = (bom.subensambles ?? []).map(s => ({
+    ...s,
+    componentes: (s.componentes ?? []).flatMap(c => {
+      const metal = !c.tipo_material || c.tipo_material === 'metal'
+      if (!metal && c.largo_mm === null) {
+        const cantidad = (c.cantidad || 1) * (s.cantidad || 1)
+        const ya = herrajes.find(h => norm(h.descripcion) === norm(c.descripcion))
+        if (ya) ya.cantidad = Math.max(ya.cantidad, cantidad)
+        else herrajes.push({ descripcion: c.descripcion, sku: '', cantidad })
+        return []
+      }
+      const area = !metal ? 'Empaque' : AREAS_PRODUCCION.includes(c.area as AreaProduccion) ? c.area : 'Sin área'
+      return [{ ...c, area }]
     }),
   }))
   const contenedores = new Set(subensambles.map(s => norm(s.dentro_de ?? '')))
@@ -508,14 +539,16 @@ export async function POST(request: NextRequest) {
     let errorIA: unknown = null
     if (process.env.ANTHROPIC_API_KEY) {
       try {
+        // Solo las estaciones de producción reales: un área de más en la base (Melamina, Herraje...) no llega a la IA
         const { data: areasData } = await supabase.from('areas').select('nombre').eq('activo', true)
-        const areas = areasData?.length ? areasData.map(a => a.nombre as string) : AREAS_PRODUCCION
+        const areasBD = (areasData ?? []).map(a => a.nombre as string).filter(a => AREAS_PRODUCCION.includes(a as AreaProduccion))
+        const areas: string[] = areasBD.length ? areasBD : [...AREAS_PRODUCCION]
         const textoHojas = await leerTextoPlano(buffer).catch(() => [] as string[][])
         // Hasta dos intentos: una respuesta cortada o vacía casi siempre sale bien a la segunda
         let analizado: PlantillaBOM | null = null
         for (let intento = 1; intento <= 2 && !analizado; intento++) {
           try {
-            const respuesta = limpiarBOM(await analizarConIA(buffer.toString('base64'), textoHojas, clave, descripcion, areas, request.signal))
+            const respuesta = filtrarNoFabricados(limpiarBOM(await analizarConIA(buffer.toString('base64'), textoHojas, clave, descripcion, areas, request.signal)))
             if (contarPiezas(respuesta) === 0) throw new Error('La IA no encontró piezas en este plano.')
             analizado = respuesta
           } catch (err) {

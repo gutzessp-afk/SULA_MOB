@@ -25,6 +25,8 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import IncidenciasProyecto from '@/components/IncidenciasProyecto';
+import { EnVivo } from '@/components/EnVivo';
+import { useRealtimeAvances } from '@/hooks/useRealtimeAvances';
 
 /* ═══════════════════════════════════════
    TIPOS (columnas reales de cada tabla)
@@ -274,7 +276,7 @@ export default function DespiecePage() {
     const [proyectoRes, partidasRes, areasRes] = await Promise.all([
       supabase.from('proyectos').select('id, codigo, nombre, cliente, progreso').eq('id', proyectoId).maybeSingle(),
       supabase.from('partidas').select('id, clave, descripcion, cantidad, orden, progreso').eq('proyecto_id', proyectoId).order('orden'),
-      supabase.from('areas').select('id, nombre, peso').eq('activo', true).order('nombre'),
+      supabase.from('areas').select('id, nombre, peso').eq('activo', true).order('orden', { ascending: true }),
     ]);
 
     if (proyectoRes.error || !proyectoRes.data) {
@@ -333,6 +335,9 @@ export default function DespiecePage() {
     }
     void init();
   }, [loadDespiece]);
+
+  // En vivo: el avance del proyecto se actualiza solo cuando un operador registra piezas
+  const enVivo = useRealtimeAvances(() => void loadDespiece(), { proyectoId });
 
   /* ── Datos derivados ── */
   const subsDe = (partidaId: string) => subs.filter(s => s.partida_id === partidaId);
@@ -483,6 +488,7 @@ export default function DespiecePage() {
             <p className="text-[11px] sm:text-xs text-white/65 mt-1">
               Despiece del pedido{proyecto?.cliente ? ` · Cliente: ${proyecto.cliente}` : ''}
             </p>
+            <EnVivo estado={enVivo} className="mt-1.5" />
           </div>
         </div>
 

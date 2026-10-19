@@ -9,6 +9,8 @@ import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2
 import { parsePedidoPdf } from '@/lib/parse-pedido';
 import { useDebounce } from '@/hooks/useDebounce';
 import { BadgePrioridad } from '@/components/BadgePrioridad';
+import { EnVivo } from '@/components/EnVivo';
+import { useRealtimeAvances } from '@/hooks/useRealtimeAvances';
 import { estadoEntrega, fechaEntrega as entregaDe, fechaLegible } from '@/lib/entregas';
 
 const POR_PAGINA = 20;
@@ -85,11 +87,13 @@ export default function ProyectosPage() {
   // Proyectos y áreas se piden a la vez y se muestran al instante si ya se habían cargado
   const { datos: listaProyectos, cargando: cargandoProyectos, recargar: fetchProyectos } = useDatos('proyectos', () => cargarProyectos<Proyecto>());
   const { datos: listaAreas } = useDatos('areas-activas', async () => {
-    const { data, error } = await supabase.from('areas').select('id, nombre, peso').eq('activo', true);
+    const { data, error } = await supabase.from('areas').select('id, nombre, peso').eq('activo', true).order('orden', { ascending: true });
     if (error) throw new Error(error.message);
     return (data ?? []) as Area[];
   });
   const proyectos = useMemo(() => listaProyectos ?? [], [listaProyectos]);
+  // En vivo: cuando un operador registra piezas, las barras de avance se actualizan solas
+  const enVivo = useRealtimeAvances(() => void fetchProyectos());
   const areasDisponibles = listaAreas ?? [];
 
   // Formulario — campos del Pedido Data
@@ -381,6 +385,7 @@ export default function ProyectosPage() {
         <div className="min-w-0">
           <h1 className="text-lg sm:text-2xl font-bold text-white tracking-wide leading-tight">Órdenes y Cálculo Ponderado de Avances</h1>
           <p className="text-[11px] sm:text-xs text-white/65 mt-1">Da de alta pedidos y controla su avance desde el despiece de cada orden.</p>
+          <EnVivo estado={enVivo} className="mt-1.5" />
         </div>
 
         <div className="flex w-full md:w-auto bg-white/[0.07] p-1 sm:p-1.5 rounded-xl sm:rounded-2xl border border-white/15 backdrop-blur-sm gap-1">

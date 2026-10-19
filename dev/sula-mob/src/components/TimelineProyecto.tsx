@@ -16,6 +16,8 @@ import { useEffect, useState } from 'react';
 import { CalendarClock, Clock, Loader2 } from 'lucide-react';
 import ProgresoAreas from '@/components/ProgresoAreas';
 import IncidenciasProyecto from '@/components/IncidenciasProyecto';
+import { EnVivo } from '@/components/EnVivo';
+import { useRealtimeAvances, type EstadoRealtime } from '@/hooks/useRealtimeAvances';
 import { ETIQUETA_ESTADO, diasEntre, fechaHoy, fechaLegible, ZONA_HORARIA, type EstadoEntrega } from '@/lib/entregas';
 import type { Seguimiento, TipoEvento } from '@/app/api/proyectos/[id]/seguimiento/route';
 
@@ -55,7 +57,7 @@ function fechaHora(iso: string) {
  * Encabezado del progreso en una sola franja: estado, barra con el %, entrega,
  * días que faltan (o de atraso) y diferencia contra el plan lineal (0% en el alta → 100% en la entrega)
  */
-function ProgresoTotal({ p, estado }: { p: Seguimiento['proyecto']; estado: EstadoEntrega }) {
+function ProgresoTotal({ p, estado, enVivo }: { p: Seguimiento['proyecto']; estado: EstadoEntrega; enVivo: EstadoRealtime }) {
   const hoy = fechaHoy();
   const pct = Math.min(100, Math.max(0, p.progreso));
   const alta = p.creado ? new Date(p.creado).toLocaleDateString('en-CA', { timeZone: ZONA_HORARIA }) : '';
@@ -73,6 +75,7 @@ function ProgresoTotal({ p, estado }: { p: Seguimiento['proyecto']; estado: Esta
           <span className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${COLOR_ESTADO[estado]}`}>
             {ETIQUETA_ESTADO[estado]}
           </span>
+          <EnVivo estado={enVivo} />
         </div>
         <div className="flex items-center gap-2.5">
           <div className="h-2 w-24 overflow-hidden rounded-full bg-black/40 sm:w-36">
@@ -105,6 +108,9 @@ function ProgresoTotal({ p, estado }: { p: Seguimiento['proyecto']; estado: Esta
 export default function TimelineProyecto({ proyectoId }: { proyectoId: string }) {
   const [datos, setDatos] = useState<Seguimiento | null>(null);
   const [error, setError] = useState('');
+  // Sube cada vez que un operador registra algo en este proyecto: vuelve a pedir el seguimiento
+  const [version, setVersion] = useState(0);
+  const enVivo = useRealtimeAvances(() => setVersion(v => v + 1), { proyectoId });
 
   useEffect(() => {
     let vigente = true;
@@ -118,7 +124,7 @@ export default function TimelineProyecto({ proyectoId }: { proyectoId: string })
         if (vigente) setError(err instanceof Error ? err.message : 'No se pudo cargar el seguimiento.');
       });
     return () => { vigente = false; };
-  }, [proyectoId]);
+  }, [proyectoId, version]);
 
   if (error) {
     return <p className="text-xs text-red-300 font-semibold bg-red-500/10 border border-red-500/25 rounded-xl px-4 py-3">{error}</p>;
@@ -136,7 +142,7 @@ export default function TimelineProyecto({ proyectoId }: { proyectoId: string })
   return (
     <div className="space-y-3">
       <section className={`${TARJETA} space-y-4 p-4 sm:p-5`}>
-        <ProgresoTotal p={proyecto} estado={proyecto.estado as EstadoEntrega} />
+        <ProgresoTotal p={proyecto} estado={proyecto.estado as EstadoEntrega} enVivo={enVivo} />
         {areas.length === 0 ? (
           <p className="text-sm text-white/40">Este proyecto todavía no tiene áreas asignadas.</p>
         ) : (

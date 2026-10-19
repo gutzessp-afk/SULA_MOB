@@ -64,7 +64,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!proyecto) return NextResponse.json({ error: 'No se encontró el proyecto.' }, { status: 404 })
 
   const [areasRes, avanceRes, avancesRes, retrasosRes] = await Promise.all([
-    supabase.from('areas').select('id, nombre').eq('activo', true).order('created_at', { ascending: true }),
+    supabase.from('areas').select('id, nombre').eq('activo', true).order('orden', { ascending: true }),
     supabase
       .from('producto_area_avance')
       .select('area_id, porcentaje, completado, piezas_completadas, piezas_totales, proyecto_productos!inner ( proyecto_id )')

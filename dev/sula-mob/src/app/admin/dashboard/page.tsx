@@ -25,6 +25,8 @@ import { HeatMatrix, type FilaCalor } from '@/components/dashboard/HeatMatrix';
 import { StatCards, type StatCard } from '@/components/dashboard/StatCards';
 import { NotificationBellAdmin, useAvisosAdmin } from '@/components/dashboard/NotificationBellAdmin';
 import { PanelNotificaciones } from '@/components/dashboard/PanelNotificaciones';
+import { EnVivo } from '@/components/EnVivo';
+import { useRealtimeAvances } from '@/hooks/useRealtimeAvances';
 import type { DiaActividad } from '@/components/dashboard/ActividadAvances';
 import { ETIQUETA_ESTADO, estadoEntrega, fechaEntrega, fechaHoy, fechaLegible, ZONA_HORARIA, type EstadoEntrega } from '@/lib/entregas';
 import { AlertTriangle, Bell, Calendar, CheckCircle2, Download, FolderOpen, Gauge, RefreshCw } from 'lucide-react';
@@ -64,10 +66,6 @@ interface AvanceEstacion {
 }
 
 interface AvanceDia { piezas: number | null; created_at: string }
-
-/** Orden de las áreas en la línea de producción (sin acentos ni mayúsculas) */
-const FLUJO = ['corte de lamina', 'corte de laser', 'corte de tubo', 'doblez', 'troquel', 'punteado', 'soldadura y pulido', 'pintura', 'empaque'];
-const normal = (t: string) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 
 const REFRESCO_MS = 60_000;
 const DIAS_ACTIVIDAD = 30;
@@ -132,7 +130,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const datosProyectos = useDatos('proyectos', () => cargarProyectos<Proyecto>());
   const datosAreas = useDatos('areas', async () => {
-    const { data, error } = await supabase.from('areas').select('*').order('created_at', { ascending: true });
+    const { data, error } = await supabase.from('areas').select('*').order('orden', { ascending: true });
     if (error) throw new Error(error.message);
     return (data ?? []) as Area[];
   });
@@ -164,6 +162,9 @@ export default function DashboardPage() {
   const actualizadoEn = [datosProyectos.actualizadoEn, datosAreas.actualizadoEn, datosAvances.actualizadoEn].every(Boolean)
     ? Math.min(datosProyectos.actualizadoEn!, datosAreas.actualizadoEn!, datosAvances.actualizadoEn!)
     : null;
+
+  // En vivo: cuando un operador registra piezas se recarga solo (el refresco de cada minuto queda de respaldo)
+  const enVivo = useRealtimeAvances(() => void fetchMetrics());
 
   // Se actualiza solo cada minuto mientras la pestaña está a la vista, y al volver a ella
   const sincronizar = useRef(fetchMetrics);
@@ -209,17 +210,15 @@ export default function DashboardPage() {
     return { ...area, rendimiento, piezasCompletadas: hechas, piezasTotales: totales, productos: filas.length };
   }), [areas, avances]);
 
-  // Panal: áreas activas en el orden de la línea, con su actividad de las últimas 24 h
+  // Panal: áreas activas en el orden del flujo (el que se define en Áreas), con su actividad de las últimas 24 h
   const estaciones = useMemo(() => {
     const recientes = datosRecientes.datos ?? [];
-    const lugar = (nombre: string) => { const i = FLUJO.indexOf(normal(nombre)); return i === -1 ? FLUJO.length : i; };
     return rendimientoAreas
       .filter(a => a.activo)
       .map(a => ({
         id: a.id, nombre: a.nombre, rendimiento: a.rendimiento, hechas: a.piezasCompletadas, totales: a.piezasTotales,
         productos: a.productos, actividad: recientes.filter(x => x.area_id === a.id).length,
-      }))
-      .sort((a, b) => lugar(a.nombre) - lugar(b.nombre));
+      }));
   }, [rendimientoAreas, datosRecientes.datos]);
 
   // Matriz de calor: avance de cada proyecto en cada área (promedio de sus productos)
@@ -330,6 +329,7 @@ export default function DashboardPage() {
           <p className="mt-0.5 flex items-center gap-x-2 truncate text-[11px] text-white/50">
             <span className="hidden sm:inline"><FechaHoy /> ·</span>
             <UltimaActualizacion en={actualizadoEn} actualizando={actualizando} />
+            <EnVivo estado={enVivo} className="ml-1" />
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">

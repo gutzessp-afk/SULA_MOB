@@ -100,7 +100,7 @@ export async function GET() {
           .order('id')
           .range(desde, hasta)
       ),
-      supabase.from('areas').select('id, nombre').eq('activo', true).order('created_at', { ascending: true }),
+      supabase.from('areas').select('id, nombre').eq('activo', true).order('orden', { ascending: true }),
       todasLasFilas<AvanceFila>((desde, hasta) =>
         supabase
           .from('producto_area_avance')

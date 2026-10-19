@@ -159,7 +159,7 @@ async function obtenerDatosSistema(): Promise<DatosSistema> {
       .select('id, codigo, nombre, cliente, descripcion, progreso, prioridad, fecha_maxima, created_at, estados:estado_id ( nombre )')
       .order('created_at', { ascending: false })
       .limit(MAX_PROYECTOS),
-    supabase.from('areas').select('id, nombre').eq('activo', true).order('created_at', { ascending: true }),
+    supabase.from('areas').select('id, nombre').eq('activo', true).order('orden', { ascending: true }),
   ])
 
   if (proyectosRes.error || areasRes.error) {

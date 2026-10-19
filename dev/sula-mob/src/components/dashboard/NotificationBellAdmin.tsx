@@ -92,8 +92,10 @@ export function useAvisosAdmin(): AvisosAdmin {
     if (error) return;
     const filas = (data ?? []) as unknown as Notificacion[];
     const nueva = filas.length ? Date.parse(filas[0].created_at) : 0;
-    // Suena solo si llegó algo después de la consulta anterior (no al abrir la página)
-    if (masNueva.current !== null && nueva > masNueva.current) playNotificacion();
+    // Suena solo si llegó algo después de la consulta anterior (no al abrir la página).
+    // Los atrasos ya tienen su propio tono de celular (AlertaRetrasos): aquí no suenan dos veces.
+    const anterior = masNueva.current;
+    if (anterior !== null && filas.some(f => Date.parse(f.created_at) > anterior && f.tipo !== 'retraso')) playNotificacion();
     masNueva.current = nueva;
     setLista(agrupar(filas));
   }, []);

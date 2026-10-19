@@ -39,7 +39,7 @@ export default function NotificacionesOperatorPage() {
   }, []);
 
   const fetchAreas = useCallback(async () => {
-    const { data } = await supabase.from('areas').select('id, nombre').eq('activo', true);
+    const { data } = await supabase.from('areas').select('id, nombre').eq('activo', true).order('orden', { ascending: true });
     if (data) setAreas(data as Area[]);
   }, []);
 

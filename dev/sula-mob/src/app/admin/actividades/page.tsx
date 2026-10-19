@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Layers, Plus, UserCheck, Edit3, Trash2, AlertCircle, Loader2, Percent } from 'lucide-react';
+import { Layers, Plus, UserCheck, Edit3, Trash2, AlertCircle, Loader2, Percent, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
 
 interface Usuario { id: string; nombre: string; apellidos?: string; }
 interface Area {
@@ -12,6 +12,8 @@ interface Area {
   peso: number;
   responsable_id?: string;
   activo: boolean;
+  /** Lugar de la estación en el flujo de producción (1, 2, 3...) */
+  orden: number;
   usuarios?: Usuario | null;
 }
 
@@ -79,6 +81,11 @@ export default function ActividadesPage() {
   const [peso, setPeso] = useState<number>(15);
   const [responsableId, setResponsableId] = useState('');
 
+  // Arrastrar para reordenar (computadora) y flechas (celular, donde no hay arrastre nativo)
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
   const fetchUsuarios = useCallback(async () => {
     const { data } = await supabase.from('usuarios').select('id, nombre, apellidos').eq('activo', true);
     if (data) setUsuarios(data as Usuario[]);
@@ -92,10 +99,10 @@ export default function ActividadesPage() {
       const { data: areasData, error: areasError } = await supabase
         .from('areas')
         .select(`*, usuarios!areas_responsable_id_fkey (id, nombre, apellidos)`)
-        .order('created_at', { ascending: true });
+        .order('orden', { ascending: true });
 
       if (areasError) {
-        const { data: fallbackData } = await supabase.from('areas').select('*').order('created_at', { ascending: true });
+        const { data: fallbackData } = await supabase.from('areas').select('*').order('orden', { ascending: true });
         setAreas((fallbackData || []) as Area[]);
       } else {
         setAreas((areasData || []) as Area[]);
@@ -123,12 +130,15 @@ export default function ActividadesPage() {
     if (!nombre.trim()) return;
 
     try {
+      // Una estación nueva entra al final del flujo
+      const maxOrden = areas.reduce((max, a) => Math.max(max, a.orden || 0), 0);
       const payload = {
         nombre: nombre.trim(),
         descripcion: descripcion.trim() || null,
         peso: peso || 0,
         responsable_id: responsableId ? responsableId : null,
-        activo: true
+        activo: true,
+        ...(editingId ? {} : { orden: maxOrden + 1 }),
       };
 
       if (editingId) {
@@ -146,6 +156,36 @@ export default function ActividadesPage() {
       alert('No se pudo guardar el área: ' + error.message);
     }
   }
+
+  /** Mueve una estación al lugar de otra y guarda solo las que cambiaron de número */
+  async function handleReorder(fromId: string, toId: string) {
+    if (fromId === toId || saving) return;
+    const items = [...areas];
+    const fromIdx = items.findIndex(a => a.id === fromId);
+    const toIdx = items.findIndex(a => a.id === toId);
+    if (fromIdx === -1 || toIdx === -1) return;
+
+    const [moved] = items.splice(fromIdx, 1);
+    items.splice(toIdx, 0, moved);
+    const reordered = items.map((item, i) => ({ ...item, orden: i + 1 }));
+    const cambiadas = reordered.filter(a => areas.find(x => x.id === a.id)?.orden !== a.orden);
+    setAreas(reordered); // se ve al instante; si falla el guardado se recarga lo de la base
+
+    setSaving(true);
+    const resultados = await Promise.all(cambiadas.map(a => supabase.from('areas').update({ orden: a.orden }).eq('id', a.id)));
+    const fallo = resultados.find(r => r.error);
+    if (fallo) {
+      setErrorMsg('No se pudo guardar el orden: ' + fallo.error!.message);
+      void fetchAreas();
+    }
+    setSaving(false);
+  }
+
+  /** Flechas: sube o baja una estación un lugar */
+  const mover = (index: number, paso: -1 | 1) => {
+    const destino = areas[index + paso];
+    if (destino) void handleReorder(areas[index].id, destino.id);
+  };
 
   function handleStartEdit(area: Area) {
     setEditingId(area.id);
@@ -185,12 +225,20 @@ export default function ActividadesPage() {
       >
         <div>
           <h1 className="text-2xl font-bold text-white tracking-wide">Configuración de Áreas y Ponderación</h1>
-          <p className="text-xs text-white/65 mt-1">Asigna el porcentaje de importancia de cada estación dentro del flujo del 100%.</p>
+          <p className="text-xs text-white/65 mt-1">Asigna el porcentaje de importancia de cada estación dentro del flujo del 100%. Arrastra las tarjetas (o usa las flechas) para ordenar el flujo de producción.</p>
         </div>
 
-        <div className="bg-white/10 border border-white/15 px-4 py-2 rounded-2xl backdrop-blur-md text-xs text-white flex items-center gap-2">
-          <Percent className="w-4 h-4 text-emerald-400" />
-          <span>Suma total configurada: <strong className="text-emerald-400 font-mono text-sm">{totalPeso}%</strong></span>
+        <div className="flex flex-wrap items-center gap-2">
+          {saving && (
+            <div className="bg-emerald-500/20 border border-emerald-400/30 px-3 py-2 rounded-2xl backdrop-blur-md text-xs text-emerald-300 flex items-center gap-2 animate-pulse" role="status">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Guardando orden...
+            </div>
+          )}
+          <div className="bg-white/10 border border-white/15 px-4 py-2 rounded-2xl backdrop-blur-md text-xs text-white flex items-center gap-2">
+            <Percent className="w-4 h-4 text-emerald-400" />
+            <span>Suma total configurada: <strong className="text-emerald-400 font-mono text-sm">{totalPeso}%</strong></span>
+          </div>
         </div>
       </div>
 
@@ -278,26 +326,49 @@ export default function ActividadesPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {areas.map((a) => {
+          {areas.map((a, i) => {
             const bgImg = getAreaImage(a.nombre);
+            const destino = overId === a.id && dragId !== null && dragId !== a.id;
             return (
-              <div 
-                key={a.id} 
-                className={`relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] flex flex-col justify-between transition-all hover:border-white/40 ${
-                  !a.activo && 'opacity-50'
-                }`}
+              <div
+                key={a.id}
+                draggable={!saving}
+                onDragStart={(e) => { setDragId(a.id); e.dataTransfer.effectAllowed = 'move'; }}
+                onDragEnd={() => { setDragId(null); setOverId(null); }}
+                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (overId !== a.id) setOverId(a.id); }}
+                onDragLeave={() => setOverId(o => (o === a.id ? null : o))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragId && dragId !== a.id) void handleReorder(dragId, a.id);
+                  setDragId(null); setOverId(null);
+                }}
+                className={`relative overflow-hidden rounded-[26px] border bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] flex flex-col justify-between cursor-grab active:cursor-grabbing transition-all duration-300 ease-out ${
+                  !a.activo ? 'opacity-50' : ''
+                } ${
+                  destino ? 'border-emerald-400/60 scale-[1.03] shadow-2xl shadow-emerald-500/20' : 'border-white/20 hover:border-white/40'
+                } ${dragId === a.id ? 'opacity-40 ring-2 ring-emerald-400/40' : ''}`}
               >
                 <div 
                   className="h-36 bg-cover bg-center relative p-4 flex justify-between items-start"
                   style={{ backgroundImage: `linear-gradient(to bottom, rgba(11,15,23,0.3), rgba(18,24,36,0.9)), url('${bgImg}')` }}
                 >
-                  <div className="w-9 h-9 rounded-xl bg-black/60 backdrop-blur-md flex items-center justify-center text-red-400 border border-white/10">
-                    <Layers className="w-4 h-4" />
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-xl bg-black/60 backdrop-blur-md flex items-center justify-center text-red-400 border border-white/10">
+                      <Layers className="w-4 h-4" />
+                    </div>
+                    <span className="text-xs font-mono font-bold text-white/80 bg-black/50 backdrop-blur-md px-2 py-1 rounded-lg border border-white/10" title="Lugar en el flujo de producción">
+                      #{i + 1}
+                    </span>
                   </div>
 
-                  <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 backdrop-blur-md">
-                    Peso: {a.peso}%
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 backdrop-blur-md">
+                      Peso: {a.peso}%
+                    </span>
+                    <div className="hidden sm:flex w-8 h-8 rounded-xl bg-black/40 backdrop-blur-md items-center justify-center text-white/50 hover:text-white/80 border border-white/10 transition-colors cursor-grab active:cursor-grabbing" title="Arrastra para cambiar el orden" aria-hidden="true">
+                      <GripVertical className="w-4 h-4" />
+                    </div>
+                  </div>
                 </div>
 
                 <div className="p-6 space-y-4 flex-1 flex flex-col justify-between">
@@ -318,6 +389,27 @@ export default function ActividadesPage() {
                   </div>
 
                   <div className="flex justify-end items-center gap-2 pt-2 border-t border-white/10">
+                    {/* Flechas para ordenar: funcionan también con el dedo */}
+                    <div className="mr-auto flex gap-1">
+                      <button
+                        type="button"
+                        onClick={() => mover(i, -1)}
+                        disabled={i === 0 || saving}
+                        aria-label={`Subir ${a.nombre}`}
+                        className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-xl text-white/60 hover:text-white hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent"
+                      >
+                        <ChevronUp className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => mover(i, 1)}
+                        disabled={i === areas.length - 1 || saving}
+                        aria-label={`Bajar ${a.nombre}`}
+                        className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-xl text-white/60 hover:text-white hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent"
+                      >
+                        <ChevronDown className="w-4 h-4" />
+                      </button>
+                    </div>
                     <button
                       type="button"
                       onClick={() => handleStartEdit(a)}

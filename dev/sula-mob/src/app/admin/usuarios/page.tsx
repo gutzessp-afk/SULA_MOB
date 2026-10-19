@@ -41,7 +41,7 @@ export default function UsuariosPage() {
   const loadDependencies = useCallback(async () => {
     const [{ data: rData }, { data: aData }] = await Promise.all([
       supabase.from('roles').select('id, nombre'),
-      supabase.from('areas').select('id, nombre').eq('activo', true)
+      supabase.from('areas').select('id, nombre').eq('activo', true).order('orden', { ascending: true })
     ]);
     if (rData) {
       setRoles(rData as Rol[]);

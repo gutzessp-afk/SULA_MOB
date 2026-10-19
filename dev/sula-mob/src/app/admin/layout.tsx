@@ -23,6 +23,7 @@ import { logoutAction } from '@/app/(auth)/login/actions';
 import { limpiarCache } from '@/lib/cache-datos';
 import InstallPWA from '@/components/InstallPWA';
 import MobiChat from '@/components/MobiChat';
+import { AlertaRetrasos } from '@/components/AlertaRetrasos';
 
 /* ── Secciones del menú ── */
 
@@ -293,6 +294,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </main>
 
       <MobiChat />
+      {/* Tono de celular y aviso cuando un operador reporta un atraso */}
+      <AlertaRetrasos />
       <InstallPWA />
     </div>
   );

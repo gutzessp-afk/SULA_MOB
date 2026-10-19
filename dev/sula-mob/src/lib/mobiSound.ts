@@ -21,6 +21,8 @@ interface Nota {
   tipo?: OscillatorType
   /** 0 a 1 */
   volumen?: number
+  /** Golpe y caída natural (como una campanita o un tono de celular) en vez de sonido sostenido */
+  golpe?: boolean
 }
 
 let audioCtx: AudioContext | null = null
@@ -45,7 +47,7 @@ async function tocar(notas: Nota[]): Promise<boolean> {
     if (!ctx) return false
     const ahora = ctx.currentTime
 
-    for (const { frecuencia, inicio, duracion, tipo = 'sine', volumen = 0.15 } of notas) {
+    for (const { frecuencia, inicio, duracion, tipo = 'sine', volumen = 0.15, golpe = false } of notas) {
       const osc = ctx.createOscillator()
       osc.type = tipo
       osc.frequency.value = frecuencia
@@ -54,9 +56,15 @@ async function tocar(notas: Nota[]): Promise<boolean> {
       const gain = ctx.createGain()
       const t0 = ahora + inicio
       gain.gain.setValueAtTime(0, t0)
-      gain.gain.linearRampToValueAtTime(volumen, t0 + 0.01)
-      gain.gain.setValueAtTime(volumen, t0 + duracion - 0.02)
-      gain.gain.linearRampToValueAtTime(0, t0 + duracion)
+      if (golpe) {
+        // Ataque inmediato y se apaga solo, como una tecla de marimba
+        gain.gain.linearRampToValueAtTime(volumen, t0 + 0.005)
+        gain.gain.exponentialRampToValueAtTime(0.001, t0 + duracion)
+      } else {
+        gain.gain.linearRampToValueAtTime(volumen, t0 + 0.01)
+        gain.gain.setValueAtTime(volumen, t0 + duracion - 0.02)
+        gain.gain.linearRampToValueAtTime(0, t0 + duracion)
+      }
 
       osc.connect(gain)
       gain.connect(ctx.destination)
@@ -98,6 +106,26 @@ export function playNotificacion(): void {
     { frecuencia: 880, inicio: 0, duracion: 0.12, volumen: 0.18 },
     { frecuencia: 1174.66, inicio: 0.1, duracion: 0.32, volumen: 0.16 },
   ])
+}
+
+/**
+ * Tono de celular para un reporte de atraso: tres notas rápidas ascendentes
+ * (Mi6-La6-Do7) con caída de campanita, dos veces seguidas para que se note
+ * aunque haya ruido en la planta. Cada nota lleva su octava baja suave para
+ * que suene con cuerpo y no chillón.
+ */
+export function playAlertaRetraso(): void {
+  const rafaga = (t: number) => [
+    { frecuencia: 1318.5, inicio: t, duracion: 0.35, volumen: 0.2, golpe: true },
+    { frecuencia: 659.25, inicio: t, duracion: 0.3, tipo: 'triangle' as const, volumen: 0.07, golpe: true },
+    { frecuencia: 1760, inicio: t + 0.13, duracion: 0.35, volumen: 0.2, golpe: true },
+    { frecuencia: 880, inicio: t + 0.13, duracion: 0.3, tipo: 'triangle' as const, volumen: 0.07, golpe: true },
+    { frecuencia: 2093, inicio: t + 0.26, duracion: 0.6, volumen: 0.22, golpe: true },
+    { frecuencia: 1046.5, inicio: t + 0.26, duracion: 0.5, tipo: 'triangle' as const, volumen: 0.08, golpe: true },
+  ]
+  void tocar([...rafaga(0), ...rafaga(0.95)])
+  // En celulares que lo permiten, también vibra
+  try { navigator.vibrate?.([180, 90, 180]) } catch { /* sin vibración */ }
 }
 
 /* ═══════════════════════════════════════

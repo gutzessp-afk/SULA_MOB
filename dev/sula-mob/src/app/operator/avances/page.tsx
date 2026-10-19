@@ -2,6 +2,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRealtimeAvances } from '@/hooks/useRealtimeAvances'
 import { CheckCircle2, Plus, Trash2, Download, ClipboardList } from 'lucide-react'
 import jsPDF from 'jspdf'
 import {
@@ -169,6 +170,10 @@ export default function AvancesPage() {
   useEffect(() => {
     cargarTodo()
   }, [])
+
+  // En vivo: si otro operador registra piezas, los contadores se actualizan solos (evita trabajo duplicado).
+  // Lo que se está capturando en el formulario no se pierde: solo se recargan las listas.
+  useRealtimeAvances(() => void cargarTodo())
 
   function iniciarRegistro(areaId: string) {
     setRegistro({

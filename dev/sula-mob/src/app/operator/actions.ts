@@ -67,7 +67,7 @@ export async function getModulosDeProduccion(): Promise<AreaDelOperador[]> {
   const supabase = await createClient()
 
   const [areasRes, productosRes, filasRes] = await Promise.all([
-    supabase.from('areas').select('id, nombre').eq('activo', true).order('nombre'),
+    supabase.from('areas').select('id, nombre').eq('activo', true).order('orden', { ascending: true }),
     supabase
       .from('proyecto_productos')
       .select('id, nombre, cantidad, proyecto_id, proyectos ( id, nombre )'),
