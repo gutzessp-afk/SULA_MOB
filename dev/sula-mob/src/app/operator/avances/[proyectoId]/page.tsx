@@ -1292,13 +1292,16 @@ export default function ProyectoPage() {
 
   const cargar = useCallback(
     async (area: string | null) => {
-      const d = await getProyectoOperador(proyectoId)
+      // El proyecto y el área se piden al mismo tiempo
+      const [d, r] = await Promise.all([
+        getProyectoOperador(proyectoId),
+        area ? getAreaOperador(proyectoId, area) : Promise.resolve(null),
+      ])
       if (d) {
         setDetalle(d)
         setOffset(new Date(d.ahora).getTime() - Date.now())
       }
-      if (area) {
-        const r = await getAreaOperador(proyectoId, area)
+      if (area && r) {
         if (r.vista) {
           setVista(r.vista)
           setOffset(new Date(r.vista.ahora).getTime() - Date.now())
@@ -1315,23 +1318,23 @@ export default function ProyectoPage() {
     [proyectoId]
   )
 
-  // Al abrir el proyecto se reparten por área las piezas del despiece de sus planos (una vez)
-  const [preparado, setPreparado] = useState(false)
+  // Al abrir el proyecto se reparten por área las piezas del despiece de sus planos. La pantalla
+  // no lo espera: carga de inmediato y, si llegaron piezas nuevas, se vuelve a cargar sola.
+  const [version, setVersion] = useState(0)
   useEffect(() => {
     let vigente = true
-    prepararProyecto(proyectoId).finally(() => {
-      if (vigente) setPreparado(true)
-    })
+    prepararProyecto(proyectoId)
+      .then((cambio) => {
+        if (vigente && cambio) setVersion((v) => v + 1)
+      })
+      .catch((e) => console.error('No se pudo preparar el proyecto:', e))
     return () => {
       vigente = false
     }
   }, [proyectoId])
 
-  // carga inicial y actualizacion cada 15 s con la pantalla a la vista (asi ves lo que hacen otros operadores);
-  // espera a que se repartan las piezas del despiece
-  useConsultaPeriodica(() => (preparado ? cargar(areaId) : undefined), 15000, {
-    recargarCon: `${areaId}|${preparado}`,
-  })
+  // carga inicial y actualizacion cada 15 s con la pantalla a la vista (asi ves lo que hacen otros operadores)
+  useConsultaPeriodica(() => cargar(areaId), 15000, { recargarCon: `${areaId}|${version}` })
 
   // En vivo: además de cada 15 s, se recarga al instante cuando cambia el avance de este proyecto
   useRealtimeAvances(() => void cargar(areaId), { proyectoId })

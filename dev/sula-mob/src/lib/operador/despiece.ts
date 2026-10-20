@@ -155,16 +155,16 @@ async function piezasDelPlano(supabase: Supabase, proyectoId: string): Promise<F
  * ya no está (si nadie lo ha trabajado). No hace nada si el proyecto tiene piezas cargadas a mano
  * (Matriz de Corte en PDF) o si ninguna partida tiene plano analizado.
  */
-export async function sincronizarDespiece(supabase: Supabase, proyectoId: string): Promise<void> {
+export async function sincronizarDespiece(supabase: Supabase, proyectoId: string): Promise<boolean> {
   const { count: aMano } = await supabase
     .from('piezas_proyecto')
     .select('id', { count: 'exact', head: true })
     .eq('proyecto_id', proyectoId)
     .is('origen', null)
-  if (aMano) return
+  if (aMano) return false
 
   const deseadas = await piezasDelPlano(supabase, proyectoId)
-  if (!deseadas) return
+  if (!deseadas) return false
 
   const { data: actuales, error } = await supabase
     .from('piezas_proyecto')
@@ -173,7 +173,7 @@ export async function sincronizarDespiece(supabase: Supabase, proyectoId: string
     .eq('origen', ORIGEN_DESPIECE)
   if (error) {
     console.error('Error al leer piezas del despiece (¿ya corriste sql/despiece_operador.sql?):', error)
-    return
+    return false
   }
 
   const llave = (f: { area_id: string; origen_clave: string }) => `${f.area_id}#${f.origen_clave}`
@@ -194,7 +194,7 @@ export async function sincronizarDespiece(supabase: Supabase, proyectoId: string
       )
     if (errorAlta) {
       console.error('Error al repartir el despiece por área:', errorAlta)
-      return
+      return false
     }
   }
 
@@ -208,7 +208,7 @@ export async function sincronizarDespiece(supabase: Supabase, proyectoId: string
     if (borrar.length > 0) await supabase.from('piezas_proyecto').delete().in('id', borrar)
   }
 
-  if (cambios.length > 0 || sobrantes.length > 0) await actualizarAvanceAdmin(supabase, proyectoId)
+  return cambios.length > 0 || sobrantes.length > 0
 }
 
 /** Producto del admin (proyecto_productos) al que pertenece una pieza del despiece */
@@ -290,15 +290,15 @@ export async function usaDespiece(supabase: Supabase, proyectoId: string) {
 export async function actualizarAvanceAdmin(supabase: Supabase, proyectoId: string): Promise<void> {
   const [piezasRes, productosRes, partidasRes, areasRes] = await Promise.all([
     supabase.from('piezas_proyecto').select('id, area_id, origen_clave, meta').eq('proyecto_id', proyectoId).eq('origen', ORIGEN_DESPIECE),
-    supabase.from('proyecto_productos').select('id, nombre').eq('proyecto_id', proyectoId),
-    supabase.from('partidas').select('id, clave').eq('proyecto_id', proyectoId),
+    supabase.from('proyecto_productos').select('id, nombre, progreso').eq('proyecto_id', proyectoId),
+    supabase.from('partidas').select('id, clave, progreso').eq('proyecto_id', proyectoId),
     supabase.from('areas').select('id, peso'),
   ])
   const piezas = (piezasRes.data ?? []) as { id: string; area_id: string; origen_clave: string; meta: number }[]
   if (piezas.length === 0) return
 
   // Producto del admin de cada partida: su nombre empieza con "[clave]"
-  const productos = (productosRes.data ?? []) as { id: string; nombre: string }[]
+  const productos = (productosRes.data ?? []) as { id: string; nombre: string; progreso: number | null }[]
   const productoDe = (clave: string) => productos.find((p) => p.nombre?.startsWith(`[${clave}]`))?.id ?? null
 
   const { data: trabajos } = await supabase
@@ -332,22 +332,21 @@ export async function actualizarAvanceAdmin(supabase: Supabase, proyectoId: stri
     .in('producto_id', idsProducto)
   const filaDe = new Map((existentes ?? []).map((f) => [`${f.producto_id}|${f.area_id}`, f]))
 
+  const escrituras: PromiseLike<unknown>[] = []
   for (const [k, s] of suma) {
     const porcentaje = s.meta > 0 ? Math.min(100, Math.round((s.hechas / s.meta) * 100)) : 0
     const valores = { piezas_completadas: s.hechas, piezas_totales: s.meta, porcentaje, completado: porcentaje >= 100 }
     const fila = filaDe.get(k)
-    if (fila) {
-      if (fila.piezas_completadas !== s.hechas || fila.piezas_totales !== s.meta) {
-        await supabase.from('producto_area_avance').update(valores).eq('id', fila.id)
-      }
-    } else {
-      await supabase.from('producto_area_avance').insert({ producto_id: s.producto, area_id: s.area, ...valores })
+    if (!fila) {
+      escrituras.push(supabase.from('producto_area_avance').insert({ producto_id: s.producto, area_id: s.area, ...valores }))
+    } else if (fila.piezas_completadas !== s.hechas || fila.piezas_totales !== s.meta) {
+      escrituras.push(supabase.from('producto_area_avance').update(valores).eq('id', fila.id))
     }
   }
 
   // Avance por producto que no corresponde al plano (registros viejos por producto): se quita
   const sobrantes = (existentes ?? []).filter((f) => !suma.has(`${f.producto_id}|${f.area_id}`)).map((f) => f.id as string)
-  if (sobrantes.length > 0) await supabase.from('producto_area_avance').delete().in('id', sobrantes)
+  if (sobrantes.length > 0) escrituras.push(supabase.from('producto_area_avance').delete().in('id', sobrantes))
 
   // % por producto y del proyecto, con el peso de cada área (igual que el admin)
   const peso = new Map(((areasRes.data ?? []) as { id: string; peso: number }[]).map((a) => [a.id, Number(a.peso)]))
@@ -364,17 +363,26 @@ export async function actualizarAvanceAdmin(supabase: Supabase, proyectoId: stri
     pctProducto.set(producto, pesoTotal > 0 ? Math.round((pesoAvanzado / pesoTotal) * 100) : 0)
   }
 
+  // Solo se escribe el % que cambió, todo al mismo tiempo
   for (const [producto, pct] of pctProducto) {
-    await supabase.from('proyecto_productos').update({ progreso: pct }).eq('id', producto)
+    if (productos.find((p) => p.id === producto)?.progreso !== pct) {
+      escrituras.push(supabase.from('proyecto_productos').update({ progreso: pct }).eq('id', producto))
+    }
   }
-  for (const partida of (partidasRes.data ?? []) as { id: string; clave: string }[]) {
+  for (const partida of (partidasRes.data ?? []) as { id: string; clave: string; progreso: number | null }[]) {
     const producto = productoDe(partida.clave)
-    if (producto && pctProducto.has(producto)) {
-      await supabase.from('partidas').update({ progreso: pctProducto.get(producto) }).eq('id', partida.id)
+    const pct = producto ? pctProducto.get(producto) : undefined
+    if (pct !== undefined && partida.progreso !== pct) {
+      escrituras.push(supabase.from('partidas').update({ progreso: pct }).eq('id', partida.id))
     }
   }
 
   const todos = productos.map((p) => pctProducto.get(p.id) ?? 0)
   const progreso = todos.length > 0 ? Math.min(100, Math.round(todos.reduce((a, b) => a + b, 0) / todos.length)) : 0
-  await supabase.from('proyectos').update({ progreso }).eq('id', proyectoId)
+  escrituras.push(supabase.from('proyectos').update({ progreso }).eq('id', proyectoId))
+
+  const resultados = await Promise.all(escrituras)
+  for (const r of resultados as { error?: { message: string } | null }[]) {
+    if (r?.error) console.error('Error al actualizar el avance del admin:', r.error)
+  }
 }

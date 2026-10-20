@@ -1,6 +1,7 @@
 
 'use server'
 
+import { after } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import {
   areasAbiertas,
@@ -432,35 +433,6 @@ async function recalcularProgreso(supabase: Supabase, proyectoId: string) {
     .eq('id', proyectoId)
 }
 
-async function areaCompleta(supabase: Supabase, proyectoId: string, areaId: string) {
-  const { data: productos } = await supabase
-    .from('proyecto_productos')
-    .select('id, cantidad')
-    .eq('proyecto_id', proyectoId)
-
-  if (!productos || productos.length === 0) return false
-
-  const { data: filas } = await supabase
-    .from('producto_area_avance')
-    .select('producto_id, piezas_completadas, piezas_totales')
-    .eq('area_id', areaId)
-    .in(
-      'producto_id',
-      productos.map((p) => p.id as string)
-    )
-
-  const conFila = (filas ?? []).map((f) => f.producto_id as string)
-  const aplican = productos.filter((p) => conFila.includes(p.id as string))
-  if (aplican.length === 0) return false
-
-  return aplican.every((p) => {
-    const fila = (filas ?? []).find((f) => f.producto_id === p.id)
-    const meta = (fila?.piezas_totales as number | null) ?? (p.cantidad as number | null) ?? 0
-    const hechas = (fila?.piezas_completadas as number | null) ?? 0
-    return meta > 0 && hechas >= meta
-  })
-}
-
 // Proyectos con PDF: el % del proyecto se calcula con el peso de cada area (igual que el admin)
 async function actualizarProgresoPdf(
   supabase: Supabase,
@@ -509,11 +481,14 @@ async function actualizarProgresoPdf(
  * Al abrir un proyecto: reparte por área las piezas del despiece de sus planos (lo que el admin
  * analizó). Se llama una vez al entrar, no en cada actualización de la pantalla.
  */
-export async function prepararProyecto(proyectoId: string): Promise<void> {
+export async function prepararProyecto(proyectoId: string): Promise<boolean> {
   const usuario = await getUsuarioActual()
-  if (!usuario) return
+  if (!usuario) return false
   const supabase = await createClient()
-  await sincronizarDespiece(supabase, proyectoId)
+  const cambio = await sincronizarDespiece(supabase, proyectoId)
+  // El avance del admin se recalcula después de responder: la pantalla no espera
+  if (cambio) after(() => actualizarAvanceAdmin(supabase, proyectoId))
+  return cambio
 }
 
 export async function getProyectoOperador(proyectoId: string): Promise<ProyectoOperador | null> {
@@ -552,29 +527,22 @@ export async function getProyectoOperador(proyectoId: string): Promise<ProyectoO
 
   const usaPdf = piezasPdf.length > 0
   const productos = prodRes.data ?? []
+  const trabajos = (trabRes.data ?? []) as { id: string; area_id: string }[]
 
-  const filas = usaPdf
-    ? []
-    : await cargarFilas(
-        supabase,
-        productos.map((p) => p.id as string)
-      )
+  // Lo que no depende entre sí se pide al mismo tiempo
+  const [filas, hechasMapa, pausasTodas] = await Promise.all([
+    usaPdf ? Promise.resolve([] as FilaAvance[]) : cargarFilas(supabase, productos.map((p) => p.id as string)),
+    usaPdf ? hechasPdf(supabase, piezasPdf.map((p) => p.id)) : Promise.resolve(new Map<string, number>()),
+    pausasDe(supabase, trabajos.map((t) => t.id)),
+  ])
   const claves = new Map<string, FilaAvance>()
   filas.forEach((f) => claves.set(`${f.producto_id}|${f.area_id}`, f))
   const conFilas = new Set(filas.map((f) => f.producto_id))
   const clavesSet = new Set(claves.keys())
 
-  const hechasMapa = usaPdf
-    ? await hechasPdf(
-        supabase,
-        piezasPdf.map((p) => p.id)
-      )
-    : new Map<string, number>()
-
   const cerradas = new Set((cierresRes.data ?? []).map((c) => c.area_id as string))
 
-  const trabajos = (trabRes.data ?? []) as { id: string; area_id: string }[]
-  const pausas = (await pausasDe(supabase, trabajos.map((t) => t.id))).filter((p) => p.fin === null)
+  const pausas = pausasTodas.filter((p) => p.fin === null)
   const areaDeTrabajo = new Map(trabajos.map((t) => [t.id, t.area_id]))
 
   const areas: AreaOperador[] = (areasRes.data ?? [])
@@ -657,11 +625,8 @@ export async function getAreaOperador(
 
   const supabase = await createClient()
 
-  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
-    return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
-  }
-
-  const [areaRes, prodRes, cierreRes, trabRes, piezasPdf] = await Promise.all([
+  const [acceso, areaRes, prodRes, cierreRes, trabRes, piezasPdf] = await Promise.all([
+    tieneAccesoArea(supabase, usuario, areaId),
     supabase.from('areas').select('id, nombre').eq('id', areaId).maybeSingle(),
     supabase.from('proyecto_productos').select('*').eq('proyecto_id', proyectoId).order('created_at'),
     supabase
@@ -679,6 +644,7 @@ export async function getAreaOperador(
     cargarPiezasPdf(supabase, proyectoId),
   ])
 
+  if (!acceso) return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
   if (!areaRes.data) return { error: 'No se encontró el área.' }
   if (prodRes.error) {
     console.error('Error al traer piezas:', prodRes.error)
@@ -694,19 +660,19 @@ export async function getAreaOperador(
     pieza_id: string | null
     inicio: string
   }[]
-  const pausas = await pausasDe(
-    supabase,
-    trabajos.map((t) => t.id)
-  )
+  const propias = piezasPdf.filter((p) => p.area_id === areaId)
+  const productosArea = (prodRes.data ?? []) as Record<string, unknown>[]
+
+  // Pausas y avance de las piezas al mismo tiempo
+  const [pausas, hechasMapa, filasProducto] = await Promise.all([
+    pausasDe(supabase, trabajos.map((t) => t.id)),
+    usaPdf ? hechasPdf(supabase, propias.map((p) => p.id)) : Promise.resolve(new Map<string, number>()),
+    usaPdf ? Promise.resolve([] as FilaAvance[]) : cargarFilas(supabase, productosArea.map((p) => p.id as string)),
+  ])
 
   let piezas: PiezaOperador[]
 
   if (usaPdf) {
-    const propias = piezasPdf.filter((p) => p.area_id === areaId)
-    const hechasMapa = await hechasPdf(
-      supabase,
-      propias.map((p) => p.id)
-    )
 
     piezas = propias.map((p) => {
       const hechas = hechasMapa.get(p.id) ?? 0
@@ -726,17 +692,12 @@ export async function getAreaOperador(
       }
     })
   } else {
-    const productos = (prodRes.data ?? []) as Record<string, unknown>[]
-    const filas = await cargarFilas(
-      supabase,
-      productos.map((p) => p.id as string)
-    )
     const claves = new Map<string, FilaAvance>()
-    filas.forEach((f) => claves.set(`${f.producto_id}|${f.area_id}`, f))
+    filasProducto.forEach((f) => claves.set(`${f.producto_id}|${f.area_id}`, f))
     const clavesSet = new Set(claves.keys())
-    const conFilas = new Set(filas.map((f) => f.producto_id))
+    const conFilas = new Set(filasProducto.map((f) => f.producto_id))
 
-    piezas = productos
+    piezas = productosArea
       .filter((p) => esVisible(nombreArea, p.id as string, areaId, clavesSet, conFilas))
       .map((p) => {
         const id = p.id as string
@@ -821,38 +782,29 @@ export async function iniciarPieza(
 
   const supabase = await createClient()
 
-  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
-    return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
-  }
+  // Revisiones al mismo tiempo: acceso, área cerrada, la pieza, lo hecho y si ya está en curso
+  const [acceso, cierreRes, piezaRes, hechasMapa, enCursoRes] = await Promise.all([
+    tieneAccesoArea(supabase, usuario, areaId),
+    supabase.from('area_cierres').select('id').eq('proyecto_id', proyectoId).eq('area_id', areaId).maybeSingle(),
+    tipo === 'pdf'
+      ? supabase.from('piezas_proyecto').select('id, meta').eq('id', id).eq('proyecto_id', proyectoId).eq('area_id', areaId).maybeSingle()
+      : Promise.resolve({ data: null }),
+    tipo === 'pdf' ? hechasPdf(supabase, [id]) : Promise.resolve(new Map<string, number>()),
+    tipo === 'pdf'
+      ? supabase.from('trabajos_pieza').select('id').eq('pieza_id', id).eq('estado', 'en_curso').maybeSingle()
+      : supabase.from('trabajos_pieza').select('id').eq('producto_id', id).eq('area_id', areaId).eq('estado', 'en_curso').maybeSingle(),
+  ])
 
-  const { data: cierre } = await supabase
-    .from('area_cierres')
-    .select('id')
-    .eq('proyecto_id', proyectoId)
-    .eq('area_id', areaId)
-    .maybeSingle()
-  if (cierre) return { error: 'Esta área ya fue marcada como terminada en este proyecto.' }
+  if (!acceso) return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
+  if (cierreRes.data) return { error: 'Esta área ya fue marcada como terminada en este proyecto.' }
+  if (enCursoRes.data) return { error: 'Esta pieza ya está en curso.' }
 
   if (tipo === 'pdf') {
-    const { data: pieza } = await supabase
-      .from('piezas_proyecto')
-      .select('id, meta')
-      .eq('id', id)
-      .eq('proyecto_id', proyectoId)
-      .eq('area_id', areaId)
-      .maybeSingle()
+    const pieza = piezaRes.data as { meta: number } | null
     if (!pieza) return { error: 'No se encontró la pieza en esta área.' }
 
-    const hechas = (await hechasPdf(supabase, [id])).get(id) ?? 0
+    const hechas = hechasMapa.get(id) ?? 0
     if ((pieza.meta as number) - hechas <= 0) return { error: 'Esta pieza ya está completa.' }
-
-    const { data: enCurso } = await supabase
-      .from('trabajos_pieza')
-      .select('id')
-      .eq('pieza_id', id)
-      .eq('estado', 'en_curso')
-      .maybeSingle()
-    if (enCurso) return { error: 'Esta pieza ya está en curso.' }
 
     const { error } = await supabase.from('trabajos_pieza').insert({
       proyecto_id: proyectoId,
@@ -873,15 +825,6 @@ export async function iniciarPieza(
 
   const faltan = (fila.piezas_totales ?? 0) - (fila.piezas_completadas ?? 0)
   if (faltan <= 0) return { error: 'Esta pieza ya está completa.' }
-
-  const { data: enCurso } = await supabase
-    .from('trabajos_pieza')
-    .select('id')
-    .eq('producto_id', id)
-    .eq('area_id', areaId)
-    .eq('estado', 'en_curso')
-    .maybeSingle()
-  if (enCurso) return { error: 'Esta pieza ya está en curso.' }
 
   const { error } = await supabase.from('trabajos_pieza').insert({
     proyecto_id: proyectoId,
@@ -923,9 +866,17 @@ export async function finalizarPieza(trabajoId: string, piezas: number): Promise
   const productoId = trabajo.producto_id as string | null
   const piezaId = trabajo.pieza_id as string | null
 
-  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
-    return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
-  }
+  // Acceso, meta, lo ya hecho y las pausas abiertas: al mismo tiempo
+  const [acceso, piezaRes, hechasMapa, pausasTrabajo] = await Promise.all([
+    tieneAccesoArea(supabase, usuario, areaId),
+    piezaId
+      ? supabase.from('piezas_proyecto').select('meta').eq('id', piezaId).maybeSingle()
+      : Promise.resolve({ data: null }),
+    piezaId ? hechasPdf(supabase, [piezaId]) : Promise.resolve(new Map<string, number>()),
+    pausasDe(supabase, [trabajoId]),
+  ])
+
+  if (!acceso) return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
 
   // ---- cuanto falta ----
   let meta = 0
@@ -933,13 +884,8 @@ export async function finalizarPieza(trabajoId: string, piezas: number): Promise
   let filaId: string | null = null
 
   if (piezaId) {
-    const { data: pieza } = await supabase
-      .from('piezas_proyecto')
-      .select('meta')
-      .eq('id', piezaId)
-      .maybeSingle()
-    meta = (pieza?.meta as number | null) ?? 0
-    previas = (await hechasPdf(supabase, [piezaId])).get(piezaId) ?? 0
+    meta = ((piezaRes.data as { meta: number } | null)?.meta as number | null) ?? 0
+    previas = hechasMapa.get(piezaId) ?? 0
   } else if (productoId) {
     const { fila, error: errorFila } = await obtenerFila(supabase, productoId, areaId)
     if (errorFila || !fila) return { error: errorFila ?? 'No se encontró el avance.' }
@@ -955,8 +901,8 @@ export async function finalizarPieza(trabajoId: string, piezas: number): Promise
   }
 
   // cierra cualquier pausa abierta para que cuente el tiempo perdido
-  const abiertas = (await pausasDe(supabase, [trabajoId])).filter((p) => p.fin === null)
-  await cerrarPausas(supabase, abiertas)
+  const abiertas = pausasTrabajo.filter((p) => p.fin === null)
+  if (abiertas.length > 0) await cerrarPausas(supabase, abiertas)
 
   const ahora = ahoraISO()
 
@@ -970,20 +916,22 @@ export async function finalizarPieza(trabajoId: string, piezas: number): Promise
     return { error: `No se pudo guardar. Intenta de nuevo${detalleError(errorTrabajo)}` }
   }
 
-  // Piezas del PDF: el avance sale de sumar los trabajos; solo se actualiza el % del proyecto
+  // Piezas del PDF: el avance sale de sumar los trabajos. El % del proyecto y lo que ve el admin
+  // se recalculan DESPUÉS de responder: el operador no espera (el admin lo recibe en vivo)
   if (piezaId) {
-    const completaPdf = await actualizarProgresoPdf(supabase, proyectoId, areaId)
-    // Piezas del despiece del plano: el admin además ve el registro y el avance por producto
-    await registrarEnAdmin(supabase, {
-      proyectoId,
-      areaId,
-      piezaId,
-      piezas,
-      inicio: trabajo.inicio as string,
-      fin: ahora,
-      operadorId: usuario.id,
+    after(async () => {
+      await actualizarProgresoPdf(supabase, proyectoId, areaId)
+      await registrarEnAdmin(supabase, {
+        proyectoId,
+        areaId,
+        piezaId,
+        piezas,
+        inicio: trabajo.inicio as string,
+        fin: ahora,
+        operadorId: usuario.id,
+      })
     })
-    return { success: true, areaCompleta: completaPdf }
+    return { success: true }
   }
 
   // Productos de siempre: se actualiza el avance que ve el administrador
@@ -1000,26 +948,26 @@ export async function finalizarPieza(trabajoId: string, piezas: number): Promise
     return { error: 'Se guardó el tiempo, pero no se pudo actualizar el avance.' }
   }
 
-  // Mantiene el historial que ya existia (tabla avances) para que el admin lo siga viendo
-  const { error: errorAvance } = await supabase.from('avances').insert({
-    proyecto_id: proyectoId,
-    area_id: areaId,
-    producto_id: productoId,
-    operador_id: usuario.id,
-    estado: 'terminado',
-    iniciado_at: trabajo.inicio,
-    terminado_at: ahora,
-    piezas,
-    porcentaje,
-    operacion: '',
-    actividad: '',
+  // Historial que ve el admin (tabla avances) y % del proyecto: después de responder
+  after(async () => {
+    const { error: errorAvance } = await supabase.from('avances').insert({
+      proyecto_id: proyectoId,
+      area_id: areaId,
+      producto_id: productoId,
+      operador_id: usuario.id,
+      estado: 'terminado',
+      iniciado_at: trabajo.inicio,
+      terminado_at: ahora,
+      piezas,
+      porcentaje,
+      operacion: '',
+      actividad: '',
+    })
+    if (errorAvance) console.error('No se pudo escribir en avances:', errorAvance)
+    await recalcularProgreso(supabase, proyectoId)
   })
-  if (errorAvance) console.error('No se pudo escribir en avances:', errorAvance)
 
-  await recalcularProgreso(supabase, proyectoId)
-  const completa = await areaCompleta(supabase, proyectoId, areaId)
-
-  return { success: true, areaCompleta: completa }
+  return { success: true }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1135,7 +1083,22 @@ export async function corregirPieza(
     }
   }
 
-  // 2. Historial que ve el administrador en el seguimiento ("registró N pzas")
+  // 3a. Proyecto por producto: el avance que ve la pantalla se corrige ya
+  if (tipo !== 'pdf') {
+    const porcentaje = meta > 0 ? Math.min(100, Math.round((total / meta) * 100)) : 0
+    const { error } = await supabase
+      .from('producto_area_avance')
+      .update({ piezas_completadas: total, porcentaje, completado: porcentaje >= 100 })
+      .eq('producto_id', id)
+      .eq('area_id', areaId)
+    if (error) {
+      console.error('Error al corregir el avance:', error)
+      return { error: 'Se corrigió el registro, pero no el avance del proyecto.' }
+    }
+  }
+
+  // 2 y 3b. Historial del admin y % del proyecto: después de responder (el operador no espera)
+  after(async () => {
   if (productoAdmin) {
     const { data: registros } = await supabase
       .from('avances')
@@ -1152,23 +1115,13 @@ export async function corregirPieza(
     }
   }
 
-  // 3. Avance que ve el administrador (por producto y área, y % del proyecto)
   if (tipo === 'pdf') {
     await actualizarProgresoPdf(supabase, proyectoId, areaId)
     if (productoAdmin) await actualizarAvanceAdmin(supabase, proyectoId)
   } else {
-    const porcentaje = meta > 0 ? Math.min(100, Math.round((total / meta) * 100)) : 0
-    const { error } = await supabase
-      .from('producto_area_avance')
-      .update({ piezas_completadas: total, porcentaje, completado: porcentaje >= 100 })
-      .eq('producto_id', id)
-      .eq('area_id', areaId)
-    if (error) {
-      console.error('Error al corregir el avance:', error)
-      return { error: 'Se corrigió el registro, pero no el avance del proyecto.' }
-    }
     await recalcularProgreso(supabase, proyectoId)
   }
+  })
 
   return { success: true }
 }
