@@ -9,6 +9,7 @@ import {
   validarClaveArea,
   validarClaveGeneral,
 } from '@/lib/operador/acceso'
+import { registrarEnAdmin, sincronizarDespiece } from '@/lib/operador/despiece'
 import { getUsuarioActual } from '../actions'
 
 type Supabase = Awaited<ReturnType<typeof createClient>>
@@ -496,6 +497,17 @@ async function actualizarProgresoPdf(
 /*  Lectura: proyecto con sus areas                                    */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Al abrir un proyecto: reparte por área las piezas del despiece de sus planos (lo que el admin
+ * analizó). Se llama una vez al entrar, no en cada actualización de la pantalla.
+ */
+export async function prepararProyecto(proyectoId: string): Promise<void> {
+  const usuario = await getUsuarioActual()
+  if (!usuario) return
+  const supabase = await createClient()
+  await sincronizarDespiece(supabase, proyectoId)
+}
+
 export async function getProyectoOperador(proyectoId: string): Promise<ProyectoOperador | null> {
   const usuario = await getUsuarioActual()
   if (!usuario) return null
@@ -952,6 +964,16 @@ export async function finalizarPieza(trabajoId: string, piezas: number): Promise
   // Piezas del PDF: el avance sale de sumar los trabajos; solo se actualiza el % del proyecto
   if (piezaId) {
     const completaPdf = await actualizarProgresoPdf(supabase, proyectoId, areaId)
+    // Piezas del despiece del plano: el admin además ve el registro y el avance por producto
+    await registrarEnAdmin(supabase, {
+      proyectoId,
+      areaId,
+      piezaId,
+      piezas,
+      inicio: trabajo.inicio as string,
+      fin: ahora,
+      operadorId: usuario.id,
+    })
     return { success: true, areaCompleta: completaPdf }
   }
 

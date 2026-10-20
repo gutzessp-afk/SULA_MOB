@@ -13,6 +13,7 @@ import {
   getAreaOperador,
   getEvidenciaDia,
   getProyectoOperador,
+  prepararProyecto,
   guardarEvidenciaDia,
   iniciarPieza,
   listarEvidencias,
@@ -310,7 +311,6 @@ function PiezaCard({
   onIniciar,
   onFinalizar,
   onReanudar,
-  despieceHref,
 }: {
   p: PiezaOperador
   ahora: number
@@ -318,8 +318,6 @@ function PiezaCard({
   onIniciar: (id: string, tipo: TipoPieza) => void
   onFinalizar: (trabajoId: string, cantidad: number) => void
   onReanudar: (trabajoId: string) => void
-  /** PRUEBA: abre los ensambles y piezas del plano de esta partida */
-  despieceHref?: string
 }) {
   const [fin, setFin] = useState(false)
   const [q, setQ] = useState('')
@@ -396,22 +394,6 @@ function PiezaCard({
           )}
           {medidasYNotas && (
             <div style={{ color: '#7c8aa5', fontSize: 13, marginTop: 2 }}>{medidasYNotas}</div>
-          )}
-          {/* PRUEBA: ensambles y subensambles (quitar este Link si no se queda) */}
-          {despieceHref && (
-            <Link
-              href={despieceHref}
-              style={{
-                display: 'inline-block',
-                marginTop: 8,
-                padding: '6px 0',
-                color: bl,
-                fontSize: 13,
-                fontWeight: 700,
-              }}
-            >
-              Trabajar por pasos ▸
-            </Link>
           )}
           <div style={{ display: 'flex', gap: 26, marginTop: 12 }}>
             <Estadistica etiqueta="Meta" valor={p.meta} color="#e2e8f0" />
@@ -762,6 +744,240 @@ function PanelAdmin({
 
 type Panel = 'pausa' | 'admin' | null
 
+/* ------------------------------------------------------------------ */
+/*  Piezas por pasos (proyectos por pieza: despiece del plano o PDF)   */
+/* ------------------------------------------------------------------ */
+
+/** "ESCRIT. MB-01 ×3 › FALDON ARMADO" → producto y subensamble */
+function partirModulo(modulo: string | null) {
+  const texto = modulo ?? ''
+  const i = texto.indexOf(' › ')
+  return i < 0
+    ? { producto: texto || 'Piezas', subensamble: '' }
+    : { producto: texto.slice(0, i), subensamble: texto.slice(i + 3) }
+}
+
+function Titulo({ children, color = '#64748b' }: { children: React.ReactNode; color?: string }) {
+  return (
+    <div style={{ color, fontSize: 11, letterSpacing: '.08em', fontWeight: 800, margin: '18px 0 8px' }}>{children}</div>
+  )
+}
+
+function PiezasPorPasos({
+  piezas,
+  ahora,
+  ocupado,
+  onIniciar,
+  onFinalizar,
+  onReanudar,
+}: {
+  piezas: PiezaOperador[]
+  ahora: number
+  ocupado: string | null
+  onIniciar: (id: string, tipo: TipoPieza) => void
+  onFinalizar: (trabajoId: string, cantidad: number) => void
+  onReanudar: (trabajoId: string) => void
+}) {
+  // La que el operador tocó en la lista; si no, la primera pendiente en el orden del plano
+  const [elegida, setElegida] = useState<string | null>(null)
+  // "Dejar para después": se van al final de la fila
+  const [saltadas, setSaltadas] = useState<string[]>([])
+  const [abiertos, setAbiertos] = useState<Record<string, boolean>>({})
+  const [verTerminadas, setVerTerminadas] = useState(false)
+
+  const enCurso = piezas.filter((p) => p.trabajo)
+  const libres = piezas.filter((p) => !p.trabajo && p.faltan > 0)
+  const enOrden = [...libres.filter((p) => !saltadas.includes(p.id)), ...libres.filter((p) => saltadas.includes(p.id))]
+  const sigue = enOrden.find((p) => p.id === elegida) ?? enOrden[0] ?? null
+  const resto = enOrden.filter((p) => p !== sigue)
+  const terminadas = piezas.filter((p) => p.faltan === 0 && !p.trabajo)
+
+  // Pendientes por producto → subensamble, en el orden del plano
+  const grupos: { producto: string; subs: { nombre: string; piezas: PiezaOperador[] }[]; total: number }[] = []
+  for (const p of resto) {
+    const { producto, subensamble } = partirModulo(p.modulo)
+    let g = grupos.find((x) => x.producto === producto)
+    if (!g) grupos.push((g = { producto, subs: [], total: 0 }))
+    let s = g.subs.find((x) => x.nombre === subensamble)
+    if (!s) g.subs.push((s = { nombre: subensamble, piezas: [] }))
+    s.piezas.push(p)
+    g.total++
+  }
+  const productoDeSigue = sigue ? partirModulo(sigue.modulo).producto : null
+  const abierto = (producto: string) => abiertos[producto] ?? producto === productoDeSigue
+
+  const tarjeta = (p: PiezaOperador) => (
+    <PiezaCard key={p.id} p={p} ahora={ahora} ocupado={ocupado} onIniciar={onIniciar} onFinalizar={onFinalizar} onReanudar={onReanudar} />
+  )
+
+  if (piezas.length === 0) {
+    return (
+      <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', padding: '34px 0' }}>
+        Todavía no hay piezas cargadas para esta área en este proyecto.
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {enCurso.length > 0 && (
+        <>
+          <Titulo color={teal}>● EN CURSO · {enCurso.length}</Titulo>
+          <div className="pz-grid">{enCurso.map(tarjeta)}</div>
+        </>
+      )}
+
+      {sigue ? (
+        <>
+          <Titulo color={bl}>{enCurso.length > 0 ? 'LA QUE SIGUE' : 'AHORA'}</Titulo>
+          <div style={{ border: `1.5px solid ${bl}66`, borderRadius: 18 }}>{tarjeta(sigue)}</div>
+          {resto.length > 0 && (
+            <button
+              onClick={() => {
+                setSaltadas((prev) => [...prev.filter((id) => id !== sigue.id), sigue.id])
+                setElegida(null)
+              }}
+              style={{ background: 'none', border: 'none', color: '#64748b', fontSize: 12.5, padding: '10px 2px', cursor: 'pointer' }}
+            >
+              ⏭ Dejar para después (falta material, máquina ocupada…)
+            </button>
+          )}
+        </>
+      ) : (
+        enCurso.length === 0 && (
+          <div
+            style={{
+              border: `1.5px solid ${green}66`,
+              background: '#0a2e24',
+              color: '#6ee7b7',
+              borderRadius: 14,
+              padding: '22px 16px',
+              textAlign: 'center',
+              fontWeight: 800,
+              marginTop: 12,
+            }}
+          >
+            ✓ Todas las piezas de esta área están completas
+          </div>
+        )
+      )}
+
+      {grupos.length > 0 && (
+        <>
+          <Titulo>PENDIENTES · {resto.length}</Titulo>
+          <div style={{ display: 'grid', gap: 8 }}>
+            {grupos.map((g) => {
+              const abre = abierto(g.producto)
+              return (
+                <div key={g.producto} style={{ background: card, border: `1px solid ${line}`, borderRadius: 14, overflow: 'hidden' }}>
+                  <button
+                    onClick={() => setAbiertos((prev) => ({ ...prev, [g.producto]: !abre }))}
+                    aria-expanded={abre}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      background: 'none',
+                      border: 'none',
+                      color: '#fff',
+                      padding: '13px 15px',
+                      minHeight: 52,
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <span style={{ color: '#64748b', width: 14 }}>{abre ? '▾' : '▸'}</span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 14.5, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {g.producto}
+                    </span>
+                    <span style={{ color: amber, fontSize: 13, fontWeight: 800 }}>{g.total}</span>
+                  </button>
+
+                  {abre &&
+                    g.subs.map((s) => (
+                      <div key={s.nombre || '—'} style={{ borderTop: `1px solid ${line}` }}>
+                        {s.nombre && (
+                          <div style={{ color: '#64748b', fontSize: 10.5, fontWeight: 800, letterSpacing: '.07em', padding: '10px 15px 4px' }}>
+                            {s.nombre.replace(' — ', ' › ').toUpperCase()}
+                          </div>
+                        )}
+                        {s.piezas.map((p) => (
+                          <button
+                            key={p.id}
+                            onClick={() => {
+                              setElegida(p.id)
+                              window.scrollTo({ top: 0, behavior: 'smooth' })
+                            }}
+                            style={{
+                              width: '100%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                              background: 'none',
+                              border: 'none',
+                              borderTop: `1px solid ${line}55`,
+                              padding: '10px 15px',
+                              minHeight: 50,
+                              cursor: 'pointer',
+                              textAlign: 'left',
+                            }}
+                          >
+                            <span style={{ flex: 1, minWidth: 0 }}>
+                              <span style={{ display: 'block', color: '#e2e8f0', fontSize: 14, fontWeight: 700 }}>{p.nombre}</span>
+                              {p.medidas && <span style={{ display: 'block', color: '#7dd3fc', fontSize: 12, fontFamily: 'monospace' }}>{p.medidas}</span>}
+                            </span>
+                            {saltadas.includes(p.id) && <span style={{ color: '#64748b', fontSize: 11 }}>⏭</span>}
+                            <span style={{ color: amber, fontSize: 14, fontWeight: 800 }}>{p.faltan}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      {terminadas.length > 0 && (
+        <div style={{ background: card, border: `1px solid ${line}`, borderRadius: 14, marginTop: 14, overflow: 'hidden' }}>
+          <button
+            onClick={() => setVerTerminadas((v) => !v)}
+            aria-expanded={verTerminadas}
+            style={{
+              width: '100%',
+              background: 'none',
+              border: 'none',
+              color: '#6ee7b7',
+              padding: '13px 15px',
+              minHeight: 50,
+              textAlign: 'left',
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: '.08em',
+              cursor: 'pointer',
+            }}
+          >
+            {verTerminadas ? '▾' : '▸'} TERMINADAS · {terminadas.length}
+          </button>
+          {verTerminadas &&
+            terminadas.map((p) => (
+              <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'center', borderTop: `1px solid ${line}`, padding: '9px 15px' }}>
+                <span style={{ color: green }}>✓</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', color: '#64748b', fontSize: 11 }}>{p.modulo}</span>
+                  <span style={{ display: 'block', color: '#cbd5e1', fontSize: 13.5 }}>{p.nombre}</span>
+                </span>
+                <span style={{ color: '#64748b', fontSize: 12.5, fontFamily: 'monospace' }}>{p.meta}</span>
+              </div>
+            ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ProyectoPage() {
   const params = useParams<{ proyectoId: string }>()
   const proyectoId = params.proyectoId
@@ -815,12 +1031,25 @@ export default function ProyectoPage() {
     [proyectoId]
   )
 
+  // Al abrir el proyecto se reparten por área las piezas del despiece de sus planos (una vez)
+  const [preparado, setPreparado] = useState(false)
+  useEffect(() => {
+    let vigente = true
+    prepararProyecto(proyectoId).finally(() => {
+      if (vigente) setPreparado(true)
+    })
+    return () => {
+      vigente = false
+    }
+  }, [proyectoId])
+
   // carga inicial y actualizacion cada 15 s (asi ves lo que hacen otros operadores)
   useEffect(() => {
+    if (!preparado) return
     void cargar(areaId)
     const intervalo = setInterval(() => void cargar(areaId), 15000)
     return () => clearInterval(intervalo)
-  }, [cargar, areaId])
+  }, [cargar, areaId, preparado])
 
   // En vivo: además de cada 15 s, se recarga al instante cuando cambia el avance de este proyecto
   useRealtimeAvances(() => void cargar(areaId), { proyectoId })
@@ -1075,7 +1304,6 @@ export default function ProyectoPage() {
   const enArea = areaId !== null && vista !== null
   const todasCompletas =
     vista !== null &&
-    !vista.usaPdf &&
     vista.piezas.length > 0 &&
     vista.piezas.every((p) => p.faltan === 0 && !p.trabajo)
 
@@ -1174,22 +1402,6 @@ export default function ProyectoPage() {
         </div>
 
         <div className="op-barra">
-          {/* PRUEBA: registro por ensambles y subensambles (quitar este Link si no se queda) */}
-          <Link
-            href={`/operator/avances/${proyectoId}/despiece/${areaId}`}
-            style={{
-              background: '#0f1b3d',
-              color: bl,
-              border: `1px solid ${bl}55`,
-              borderRadius: 10,
-              padding: '10px 15px',
-              fontSize: 14,
-              fontWeight: 700,
-              textAlign: 'center',
-            }}
-          >
-            Trabajar por pasos (prueba)
-          </Link>
           <button
             onClick={() => setPanel((v) => (v === 'pausa' ? null : 'pausa'))}
             style={{
@@ -1314,7 +1526,16 @@ export default function ProyectoPage() {
           PIEZAS DE ESTA ÁREA
         </div>
 
-        {vista.piezas.length === 0 ? (
+        {vista.usaPdf ? (
+          <PiezasPorPasos
+            piezas={vista.piezas}
+            ahora={ahora}
+            ocupado={ocupado}
+            onIniciar={iniciar}
+            onFinalizar={finalizar}
+            onReanudar={reanudar}
+          />
+        ) : vista.piezas.length === 0 ? (
           <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', padding: '34px 0' }}>
             Todavía no hay piezas cargadas para esta área en este proyecto.
           </div>
@@ -1329,11 +1550,6 @@ export default function ProyectoPage() {
                 onIniciar={iniciar}
                 onFinalizar={finalizar}
                 onReanudar={reanudar}
-                despieceHref={
-                  p.tipo === 'producto' && /^\[[^\]]+\]/.test(p.nombre)
-                    ? `/operator/avances/${proyectoId}/despiece/${areaId}#${encodeURIComponent(p.nombre.slice(1, p.nombre.indexOf(']')))}`
-                    : undefined
-                }
               />
             ))}
           </div>

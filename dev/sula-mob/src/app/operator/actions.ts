@@ -444,6 +444,25 @@ async function areaCompleta(
   proyectoId: string,
   areaId: string
 ): Promise<boolean> {
+  // Proyecto por pieza (despiece del plano o Matriz de Corte): completa cuando cada pieza llegó a su meta
+  const { data: piezas } = await supabase
+    .from('piezas_proyecto')
+    .select('id, meta')
+    .eq('proyecto_id', proyectoId)
+    .eq('area_id', areaId)
+  if (piezas && piezas.length > 0) {
+    const { data: trabajos } = await supabase
+      .from('trabajos_pieza')
+      .select('pieza_id, piezas_hechas')
+      .eq('estado', 'finalizado')
+      .in('pieza_id', piezas.map((p) => p.id as string))
+    const hechas = new Map<string, number>()
+    ;(trabajos ?? []).forEach((t) =>
+      hechas.set(t.pieza_id as string, (hechas.get(t.pieza_id as string) ?? 0) + ((t.piezas_hechas as number | null) ?? 0))
+    )
+    return piezas.every((p) => (hechas.get(p.id as string) ?? 0) >= ((p.meta as number) ?? 0))
+  }
+
   const { data: productos } = await supabase
     .from('proyecto_productos')
     .select('id, cantidad')
