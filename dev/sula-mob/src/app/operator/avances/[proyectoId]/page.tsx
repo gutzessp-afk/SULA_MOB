@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { useRealtimeAvances } from '@/hooks/useRealtimeAvances'
+import { useConsultaPeriodica } from '@/hooks/useConsultaPeriodica'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { marcarAreaTerminada } from '../../actions'
@@ -297,16 +298,33 @@ function Estadistica({ etiqueta, valor, color }: { etiqueta: string; valor: numb
   )
 }
 
+/**
+ * Hora del servidor (reloj del celular + `offset`) que avanza cada segundo SOLO mientras
+ * `activo`: así solo se redibuja la tarjeta con su cronómetro corriendo, no toda la página.
+ */
+function useAhora(offset: number, activo: boolean) {
+  const [tic, setTic] = useState(() => Date.now())
+  useEffect(() => {
+    if (!activo) return
+    const tocar = () => setTic(Date.now())
+    const primero = setTimeout(tocar, 0)
+    const intervalo = setInterval(tocar, 1000)
+    return () => { clearTimeout(primero); clearInterval(intervalo) }
+  }, [activo])
+  return tic + offset
+}
+
 function PiezaCard({
   p,
-  ahora,
+  offset,
   ocupado,
   onIniciar,
   onFinalizar,
   onReanudar,
 }: {
   p: PiezaOperador
-  ahora: number
+  /** Diferencia entre el reloj del servidor y el del celular */
+  offset: number
   ocupado: string | null
   onIniciar: (id: string, tipo: TipoPieza) => void
   onFinalizar: (trabajoId: string, cantidad: number) => void
@@ -320,6 +338,7 @@ function PiezaCard({
   const pausaReporte = t?.pausaAbierta?.tipo === 'reporte_pieza' ? t.pausaAbierta : null
   const pausaArea = t?.pausaAbierta && t.pausaAbierta.tipo !== 'reporte_pieza' ? t.pausaAbierta : null
   const corriendo = Boolean(t && !t.pausaAbierta)
+  const ahora = useAhora(offset, corriendo)
   const seg = t ? segundosTrabajo(t, congelado ?? ahora) : 0
 
   const medidasYNotas = [p.medidas, p.notas].filter(Boolean).join(' · ')
@@ -623,7 +642,7 @@ function PanelAdmin({
       }}
     >
       <div style={{ color: '#94a3b8', fontSize: 12.5, marginBottom: 10 }}>
-        Le llega al administrador y se detienen los relojes del área. Cuando se resuelva, toca "Reanudar área".
+        Le llega al administrador y se detienen los relojes del área. Cuando se resuelva, toca &ldquo;Reanudar área&rdquo;.
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -747,7 +766,6 @@ export default function ProyectoPage() {
   const [cargando, setCargando] = useState(true)
 
   const [offset, setOffset] = useState(0)
-  const [tic, setTic] = useState(() => Date.now())
 
   const [error, setError] = useState('')
   const [aviso, setAviso] = useState('')
@@ -761,8 +779,6 @@ export default function ProyectoPage() {
 
   const [fechaPdf, setFechaPdf] = useState(hoyMexico)
   const [historial, setHistorial] = useState<EvidenciaGuardada[]>([])
-
-  const ahora = tic + offset
 
   const cargar = useCallback(
     async (area: string | null) => {
@@ -789,12 +805,8 @@ export default function ProyectoPage() {
     [proyectoId]
   )
 
-  // carga inicial y actualizacion cada 15 s (asi ves lo que hacen otros operadores)
-  useEffect(() => {
-    void cargar(areaId)
-    const intervalo = setInterval(() => void cargar(areaId), 15000)
-    return () => clearInterval(intervalo)
-  }, [cargar, areaId])
+  // carga inicial y actualizacion cada 15 s con la pantalla a la vista (asi ves lo que hacen otros operadores)
+  useConsultaPeriodica(() => cargar(areaId), 15000, { recargarCon: areaId })
 
   // En vivo: además de cada 15 s, se recarga al instante cuando cambia el avance de este proyecto
   useRealtimeAvances(() => void cargar(areaId), { proyectoId })
@@ -803,15 +815,7 @@ export default function ProyectoPage() {
     setHistorial(await listarEvidencias(proyectoId))
   }, [proyectoId])
 
-  useEffect(() => {
-    void cargarHistorial()
-  }, [cargarHistorial])
-
-  // el reloj de la pantalla se mueve cada segundo
-  useEffect(() => {
-    const intervalo = setInterval(() => setTic(Date.now()), 1000)
-    return () => clearInterval(intervalo)
-  }, [])
+  useConsultaPeriodica(cargarHistorial, null, { recargarCon: proyectoId })
 
   async function ejecutar(
     clave: string,
@@ -1271,7 +1275,7 @@ export default function ProyectoPage() {
               <PiezaCard
                 key={p.id}
                 p={p}
-                ahora={ahora}
+                offset={offset}
                 ocupado={ocupado}
                 onIniciar={iniciar}
                 onFinalizar={finalizar}

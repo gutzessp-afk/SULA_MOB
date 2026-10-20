@@ -22,6 +22,9 @@ interface Retraso {
 
 type TipoReporte = 'produccion' | 'incidencias';
 
+/** Solo las fotos del almacenamiento de Supabase pasan por el optimizador de imágenes (next.config) */
+const esFotoSupabase = (url: string) => url.startsWith(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/`);
+
 // useSearchParams necesita un Suspense alrededor para que la página pueda prerenderizarse
 export default function ReportesPage() {
   return (
@@ -241,12 +244,20 @@ function Reportes() {
 
                     {r.evidencia_url && (
                       <a href={r.evidencia_url} target="_blank" rel="noreferrer" className="block pt-1 w-fit">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={r.evidencia_url}
-                          alt="Evidencia del retraso"
-                          className="w-48 rounded-xl border border-white/15 object-cover"
-                        />
+                        {/* Miniatura optimizada y diferida (fotos de Supabase); el enlace abre la foto completa */}
+                        {esFotoSupabase(r.evidencia_url) ? (
+                          <Image
+                            src={r.evidencia_url}
+                            alt="Evidencia del retraso"
+                            width={192}
+                            height={144}
+                            sizes="192px"
+                            className="h-36 w-48 rounded-xl border border-white/15 object-cover"
+                          />
+                        ) : (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={r.evidencia_url} alt="Evidencia del retraso" loading="lazy" decoding="async" className="h-36 w-48 rounded-xl border border-white/15 object-cover" />
+                        )}
                         <span className="flex items-center gap-1 text-[11px] text-blue-400 mt-1">
                           <Camera className="w-3 h-3" />
                           Ver evidencia completa

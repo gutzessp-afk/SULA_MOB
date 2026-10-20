@@ -69,7 +69,10 @@ function PanelAdmin({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  // El menú del celular recuerda en qué página se abrió: al navegar a otra queda cerrado solo
+  const [abiertoEn, setAbiertoEn] = useState<string | null>(null);
+  const mobileOpen = abiertoEn === pathname;
+  const setMobileOpen = (abrir: boolean) => setAbiertoEn(abrir ? pathname : null);
   // Nombre real del administrador para la tarjeta del menú (se actualiza al editar el perfil)
   const [miNombre, setMiNombre] = useState('');
   useEffect(() => {
@@ -83,9 +86,8 @@ function PanelAdmin({ children }: { children: React.ReactNode }) {
     return () => { clearTimeout(primero); window.removeEventListener(EVENTO_PERFIL, leer); };
   }, []);
 
-  useEffect(() => { setMobileOpen(false); }, [pathname]);
   useEffect(() => {
-    const fn = () => { if (window.innerWidth >= 1024) setMobileOpen(false); };
+    const fn = () => { if (window.innerWidth >= 1024) setAbiertoEn(null); };
     window.addEventListener('resize', fn);
     return () => window.removeEventListener('resize', fn);
   }, []);

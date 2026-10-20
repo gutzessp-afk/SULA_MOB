@@ -1,7 +1,8 @@
 ﻿
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
+import { useConsultaPeriodica } from '@/hooks/useConsultaPeriodica'
 import { useRouter } from 'next/navigation'
 import {
   Bell,
@@ -95,15 +96,8 @@ export default function NotificacionesPage() {
     setCargando(false)
   }, [])
 
-  useEffect(() => {
-    cargar()
-    const intervalo = setInterval(cargar, 30000)
-    window.addEventListener('notificaciones-actualizadas', cargar)
-    return () => {
-      clearInterval(intervalo)
-      window.removeEventListener('notificaciones-actualizadas', cargar)
-    }
-  }, [cargar])
+  // Al entrar, cada 30 s con la pantalla a la vista y cuando se marca una como leída
+  useConsultaPeriodica(cargar, 30000, { eventos: ['notificaciones-actualizadas'] })
 
   const sinLeer = notificaciones.filter((n) => !n.leida).length
   const visibles =

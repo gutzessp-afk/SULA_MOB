@@ -2,6 +2,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useConsultaPeriodica } from '@/hooks/useConsultaPeriodica'
 import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
@@ -48,15 +49,8 @@ export default function OperatorSidebar() {
     setSinLeer(await getConteoNoLeidas())
   }, [])
 
-  useEffect(() => {
-    cargarConteo()
-    const intervalo = setInterval(cargarConteo, 30000)
-    window.addEventListener('notificaciones-actualizadas', cargarConteo)
-    return () => {
-      clearInterval(intervalo)
-      window.removeEventListener('notificaciones-actualizadas', cargarConteo)
-    }
-  }, [cargarConteo, pathname])
+  // Al montar, al cambiar de pantalla, cada 30 s con la pantalla a la vista y al marcar avisos como leídos
+  useConsultaPeriodica(cargarConteo, 30000, { eventos: ['notificaciones-actualizadas'], recargarCon: pathname })
 
   const secciones: NavSection[] = [
     {

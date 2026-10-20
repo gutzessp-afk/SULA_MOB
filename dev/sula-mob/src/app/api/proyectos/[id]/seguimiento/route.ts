@@ -55,15 +55,14 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const { id } = await params
   const supabase = supabaseServidor()
 
-  const { data: proyecto, error } = await supabase
-    .from('proyectos')
-    .select('id, nombre, descripcion, progreso, fecha_maxima, created_at, estados:estado_id ( nombre )')
-    .eq('id', id)
-    .maybeSingle()
-  if (error) return NextResponse.json({ error: 'No se pudo leer el proyecto.' }, { status: 500 })
-  if (!proyecto) return NextResponse.json({ error: 'No se encontró el proyecto.' }, { status: 404 })
-
-  const [areasRes, avanceRes, avancesRes, retrasosRes] = await Promise.all([
+  // Todo en un solo viaje a la base: las consultas no dependen unas de otras
+  // (los nombres de los operadores vienen dentro de avances y retrasos)
+  const [proyectoRes, areasRes, avanceRes, avancesRes, retrasosRes] = await Promise.all([
+    supabase
+      .from('proyectos')
+      .select('id, nombre, descripcion, progreso, fecha_maxima, created_at, estados:estado_id ( nombre )')
+      .eq('id', id)
+      .maybeSingle(),
     supabase.from('areas').select('id, nombre').eq('activo', true).order('orden', { ascending: true }),
     supabase
       .from('producto_area_avance')
@@ -71,32 +70,30 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       .eq('proyecto_productos.proyecto_id', id),
     supabase
       .from('avances')
-      .select('id, area_id, piezas, operador_id, created_at, areas ( nombre ), proyecto_productos ( nombre )')
+      .select('id, area_id, piezas, operador_id, created_at, areas ( nombre ), proyecto_productos ( nombre ), usuarios ( nombre, apellidos )')
       .eq('proyecto_id', id)
       .order('created_at', { ascending: false })
       .limit(MAX_AVANCES),
     supabase
       .from('retrasos')
-      .select('id, motivo, descripcion, tiempo_estimado_retraso, operador_id, created_at, areas ( nombre )')
+      .select('id, motivo, descripcion, tiempo_estimado_retraso, operador_id, created_at, areas ( nombre ), usuarios ( nombre, apellidos )')
       .eq('proyecto_id', id)
       .order('created_at', { ascending: false }),
   ])
+  const proyecto = proyectoRes.data
+  if (proyectoRes.error) return NextResponse.json({ error: 'No se pudo leer el proyecto.' }, { status: 500 })
+  if (!proyecto) return NextResponse.json({ error: 'No se encontró el proyecto.' }, { status: 404 })
   const fallo = areasRes.error || avanceRes.error || avancesRes.error || retrasosRes.error
   if (fallo) {
     console.error('[seguimiento] Error:', fallo)
     return NextResponse.json({ error: 'No se pudo leer el seguimiento del proyecto.' }, { status: 500 })
   }
 
-  // Nombres de operadores en una consulta aparte (no depende de relaciones)
-  const idsOperadores = [
-    ...new Set([...(avancesRes.data ?? []), ...(retrasosRes.data ?? [])].map((f) => f.operador_id as string | null).filter(Boolean)),
-  ] as string[]
-  const operadores = new Map<string, string>()
-  if (idsOperadores.length) {
-    const { data } = await supabase.from('usuarios').select('id, nombre, apellidos').in('id', idsOperadores)
-    for (const u of data ?? []) operadores.set(u.id as string, `${u.nombre ?? ''} ${u.apellidos ?? ''}`.trim())
+  // Nombre del operador que viene en la misma fila (relación operador_id → usuarios)
+  const operador = (usuarios: unknown) => {
+    const u = relacion(usuarios as { nombre: string | null; apellidos: string | null } | { nombre: string | null; apellidos: string | null }[] | null)
+    return (u && `${u.nombre ?? ''} ${u.apellidos ?? ''}`.trim()) || 'Operador'
   }
-  const operador = (idOperador: unknown) => operadores.get(idOperador as string) || 'Operador'
 
   const filasAvance = (avanceRes.data ?? []) as unknown as AvanceArea[]
   const eventos: Seguimiento['eventos'] = []
@@ -135,7 +132,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       fecha: a.created_at as string,
       tipo: 'avance',
       titulo: area,
-      texto: `${operador(a.operador_id)} registró ${a.piezas ?? 0} pza${a.piezas === 1 ? '' : 's'}`,
+      texto: `${operador(a.usuarios)} registró ${a.piezas ?? 0} pza${a.piezas === 1 ? '' : 's'}`,
       detalle: producto || undefined,
     })
   }
@@ -147,7 +144,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     motivo: (r.motivo as string | null) || 'Sin motivo',
     descripcion: (r.descripcion as string | null) || '',
     horas: r.tiempo_estimado_retraso as number | null,
-    operador: operador(r.operador_id),
+    operador: operador(r.usuarios),
   }))
   for (const i of incidencias) {
     eventos.push({ id: `incidencia-${i.id}`, fecha: i.fecha, tipo: 'incidencia', titulo: i.area, texto: `${i.operador} reportó un retraso: ${i.motivo}` })
