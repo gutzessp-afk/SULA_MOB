@@ -211,6 +211,30 @@ export async function sincronizarDespiece(supabase: Supabase, proyectoId: string
   if (cambios.length > 0 || sobrantes.length > 0) await actualizarAvanceAdmin(supabase, proyectoId)
 }
 
+/** Producto del admin (proyecto_productos) al que pertenece una pieza del despiece */
+async function productoDeOrigen(supabase: Supabase, proyectoId: string, origenClave: string) {
+  const clave = partidaDeOrigen(origenClave)
+  const { data } = await supabase
+    .from('proyecto_productos')
+    .select('id')
+    .eq('proyecto_id', proyectoId)
+    .like('nombre', `[${clave}]%`)
+    .limit(1)
+    .maybeSingle()
+  return data ? { id: data.id as string } : null
+}
+
+/** Si la pieza salió del plano: el producto del admin al que pertenece (si no, null) */
+export async function productoDePiezaDespiece(supabase: Supabase, proyectoId: string, piezaId: string) {
+  const { data: pieza } = await supabase
+    .from('piezas_proyecto')
+    .select('origen, origen_clave')
+    .eq('id', piezaId)
+    .maybeSingle()
+  if (pieza?.origen !== ORIGEN_DESPIECE || !pieza.origen_clave) return null
+  return (await productoDeOrigen(supabase, proyectoId, pieza.origen_clave as string))?.id ?? null
+}
+
 /**
  * Al finalizar una pieza del despiece: deja el registro en "avances" (lo que el admin ve en el
  * seguimiento del proyecto) y actualiza su avance. No hace nada con piezas cargadas a mano.
@@ -226,14 +250,7 @@ export async function registrarEnAdmin(
     .maybeSingle()
   if (pieza?.origen !== ORIGEN_DESPIECE || !pieza.origen_clave) return
 
-  const clave = partidaDeOrigen(pieza.origen_clave as string)
-  const { data: producto } = await supabase
-    .from('proyecto_productos')
-    .select('id')
-    .eq('proyecto_id', datos.proyectoId)
-    .like('nombre', `[${clave}]%`)
-    .limit(1)
-    .maybeSingle()
+  const producto = await productoDeOrigen(supabase, datos.proyectoId, pieza.origen_clave as string)
 
   if (producto) {
     const { error } = await supabase.from('avances').insert({

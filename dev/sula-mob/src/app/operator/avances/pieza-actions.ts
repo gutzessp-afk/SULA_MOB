@@ -9,7 +9,12 @@ import {
   validarClaveArea,
   validarClaveGeneral,
 } from '@/lib/operador/acceso'
-import { registrarEnAdmin, sincronizarDespiece } from '@/lib/operador/despiece'
+import {
+  actualizarAvanceAdmin,
+  productoDePiezaDespiece,
+  registrarEnAdmin,
+  sincronizarDespiece,
+} from '@/lib/operador/despiece'
 import { getUsuarioActual } from '../actions'
 import { avisarRetrasoDespues } from '@/lib/push'
 
@@ -1018,6 +1023,157 @@ export async function finalizarPieza(trabajoId: string, piezas: number): Promise
 }
 
 /* ------------------------------------------------------------------ */
+/*  Corregir las piezas registradas (error al capturar la cantidad)     */
+/* ------------------------------------------------------------------ */
+
+/** Suma `delta` (positivo o negativo) a las filas más recientes, sin dejar ninguna en negativo */
+function repartirAjuste(filas: { id: string; piezas: number }[], delta: number) {
+  const cambios: { id: string; piezas: number }[] = []
+  if (delta > 0 && filas.length > 0) {
+    cambios.push({ id: filas[0].id, piezas: filas[0].piezas + delta })
+  } else if (delta < 0) {
+    let quitar = -delta
+    for (const f of filas) {
+      if (quitar <= 0) break
+      const menos = Math.min(quitar, f.piezas)
+      if (menos > 0) cambios.push({ id: f.id, piezas: f.piezas - menos })
+      quitar -= menos
+    }
+  }
+  return cambios
+}
+
+/**
+ * El operador escribe el TOTAL correcto de piezas hechas de una pieza en su área (0 a la meta).
+ * Se ajustan sus registros de reloj (para que el PDF de evidencia cuadre), el avance que ve el
+ * administrador y su historial de registros. Las piezas con el reloj corriendo no se tocan.
+ */
+export async function corregirPieza(
+  proyectoId: string,
+  areaId: string,
+  id: string,
+  tipo: TipoPieza,
+  total: number
+): Promise<Resultado> {
+  const usuario = await getUsuarioActual()
+  if (!usuario) return { error: 'No autenticado' }
+  if (!Number.isInteger(total) || total < 0) return { error: 'Escribe cuántas piezas van en total.' }
+
+  const supabase = await createClient()
+  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
+    return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
+  }
+
+  // Lo que hay hoy (igual que lo que ve la pantalla) y la meta
+  let meta = 0
+  let actuales = 0
+  let productoAdmin: string | null = null
+  if (tipo === 'pdf') {
+    const { data: pieza } = await supabase
+      .from('piezas_proyecto')
+      .select('meta')
+      .eq('id', id)
+      .eq('proyecto_id', proyectoId)
+      .eq('area_id', areaId)
+      .maybeSingle()
+    if (!pieza) return { error: 'No se encontró la pieza en esta área.' }
+    meta = (pieza.meta as number) ?? 0
+    actuales = (await hechasPdf(supabase, [id])).get(id) ?? 0
+    productoAdmin = await productoDePiezaDespiece(supabase, proyectoId, id)
+  } else {
+    const { fila, error } = await obtenerFila(supabase, id, areaId)
+    if (error || !fila) return { error: error ?? 'No se encontró la pieza.' }
+    meta = fila.piezas_totales ?? 0
+    actuales = fila.piezas_completadas ?? 0
+    productoAdmin = id
+  }
+
+  if (meta > 0 && total > meta) return { error: `La meta es de ${meta} piezas.` }
+  const delta = total - actuales
+  if (delta === 0) return { success: true }
+
+  // 1. Registros de reloj terminados de esta pieza (lo que cuenta el PDF de evidencia)
+  let consulta = supabase
+    .from('trabajos_pieza')
+    .select('id, piezas_hechas')
+    .eq('estado', 'finalizado')
+    .eq('area_id', areaId)
+    .order('fin', { ascending: false })
+  consulta = tipo === 'pdf' ? consulta.eq('pieza_id', id) : consulta.eq('producto_id', id)
+  const { data: trabajos } = await consulta
+  const filasTrabajo = (trabajos ?? []).map((t) => ({ id: t.id as string, piezas: (t.piezas_hechas as number | null) ?? 0 }))
+
+  if (delta > 0 && filasTrabajo.length === 0) {
+    // Nunca se registró con reloj: queda un registro sin tiempo con las piezas que faltaban
+    const ahora = ahoraISO()
+    const { error } = await supabase.from('trabajos_pieza').insert({
+      proyecto_id: proyectoId,
+      area_id: areaId,
+      operador_id: usuario.id,
+      estado: 'finalizado',
+      inicio: ahora,
+      fin: ahora,
+      piezas_hechas: delta,
+      ...(tipo === 'pdf' ? { pieza_id: id } : { producto_id: id }),
+    })
+    if (error) {
+      console.error('Error al corregir piezas:', error)
+      return { error: `No se pudo corregir${detalleError(error)}` }
+    }
+  } else {
+    for (const c of repartirAjuste(filasTrabajo, delta)) {
+      // Si queda en 0 ya no se registró nada: se borra para que no salga en el PDF de evidencia
+      if (c.piezas === 0) await supabase.from('pausas_pieza').delete().eq('trabajo_id', c.id)
+      const { error } =
+        c.piezas === 0
+          ? await supabase.from('trabajos_pieza').delete().eq('id', c.id)
+          : await supabase.from('trabajos_pieza').update({ piezas_hechas: c.piezas }).eq('id', c.id)
+      if (error) {
+        console.error('Error al corregir piezas:', error)
+        return { error: `No se pudo corregir${detalleError(error)}` }
+      }
+    }
+  }
+
+  // 2. Historial que ve el administrador en el seguimiento ("registró N pzas")
+  if (productoAdmin) {
+    const { data: registros } = await supabase
+      .from('avances')
+      .select('id, piezas')
+      .eq('proyecto_id', proyectoId)
+      .eq('area_id', areaId)
+      .eq('producto_id', productoAdmin)
+      .eq('estado', 'terminado')
+      .order('created_at', { ascending: false })
+    const filasAvance = (registros ?? []).map((r) => ({ id: r.id as string, piezas: (r.piezas as number | null) ?? 0 }))
+    for (const c of repartirAjuste(filasAvance, delta)) {
+      if (c.piezas === 0) await supabase.from('avances').delete().eq('id', c.id)
+      else await supabase.from('avances').update({ piezas: c.piezas }).eq('id', c.id)
+    }
+  }
+
+  // 3. Avance que ve el administrador (por producto y área, y % del proyecto)
+  if (tipo === 'pdf') {
+    await actualizarProgresoPdf(supabase, proyectoId, areaId)
+    if (productoAdmin) await actualizarAvanceAdmin(supabase, proyectoId)
+  } else {
+    const porcentaje = meta > 0 ? Math.min(100, Math.round((total / meta) * 100)) : 0
+    const { error } = await supabase
+      .from('producto_area_avance')
+      .update({ piezas_completadas: total, porcentaje, completado: porcentaje >= 100 })
+      .eq('producto_id', id)
+      .eq('area_id', areaId)
+    if (error) {
+      console.error('Error al corregir el avance:', error)
+      return { error: 'Se corrigió el registro, pero no el avance del proyecto.' }
+    }
+    await recalcularProgreso(supabase, proyectoId)
+  }
+
+  return { success: true }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Reporte de UNA pieza (avisa al admin y detiene solo esa pieza)     */
 /* ------------------------------------------------------------------ */
 
@@ -1355,6 +1511,7 @@ export async function getEvidenciaDia(
     .from('trabajos_pieza')
     .select('id, proyecto_id, producto_id, pieza_id, area_id, operador_id, inicio, fin, piezas_hechas')
     .eq('estado', 'finalizado')
+    .gt('piezas_hechas', 0)
     .gte('fin', desde.toISOString())
     .lt('fin', hasta.toISOString())
     .order('fin')

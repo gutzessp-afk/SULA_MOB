@@ -22,6 +22,7 @@ import {
   reanudarArea,
   reanudarPieza,
   reportarPieza,
+  corregirPieza,
   salirArea,
   subirEvidenciaReporte,
   type AreaOperador,
@@ -326,6 +327,110 @@ function useAhora(offset: number, activo: boolean) {
   return tic + offset
 }
 
+/** Corregir el TOTAL de piezas hechas de una pieza (por si se capturó mal la cantidad) */
+function CorregirPiezas({
+  hechas,
+  meta,
+  guardando,
+  onGuardar,
+  onCerrar,
+}: {
+  hechas: number
+  meta: number
+  guardando: boolean
+  onGuardar: (total: number) => void
+  onCerrar: () => void
+}) {
+  const [total, setTotal] = useState(hechas)
+  const tope = meta > 0 ? meta : Number.MAX_SAFE_INTEGER
+  const cambia = total !== hechas
+  const paso: CSSProperties = {
+    width: 46,
+    height: 46,
+    background: card2,
+    color: '#fff',
+    border: `1px solid ${line}`,
+    borderRadius: 12,
+    fontSize: 20,
+    fontWeight: 800,
+    cursor: 'pointer',
+  }
+
+  return (
+    <div style={{ marginTop: 14, borderTop: `1px solid ${line}`, paddingTop: 12 }}>
+      <div style={{ color: '#fff', fontSize: 13.5, fontWeight: 800 }}>
+        ✏️ Corregir piezas hechas{' '}
+        <span style={{ color: '#94a3b8', fontWeight: 400 }}>
+          Escribe el total correcto. Hoy dice {hechas}
+          {meta > 0 ? ` de ${meta}` : ''}.
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+        <button onClick={() => setTotal((t) => Math.max(0, t - 1))} style={paso} aria-label="Una menos">
+          −
+        </button>
+        <input
+          type="number"
+          inputMode="numeric"
+          min={0}
+          max={meta > 0 ? meta : undefined}
+          value={total}
+          onChange={(e) => setTotal(Math.max(0, Math.min(tope, Math.floor(Number(e.target.value) || 0))))}
+          aria-label="Total de piezas hechas"
+          className="op-num"
+          style={{
+            width: 86,
+            height: 46,
+            textAlign: 'center',
+            background: '#08090d',
+            border: `1px solid ${cambia ? amber : line}`,
+            borderRadius: 12,
+            fontSize: 20,
+            fontWeight: 800,
+            color: '#fff',
+          }}
+        />
+        <button onClick={() => setTotal((t) => Math.min(tope, t + 1))} style={paso} aria-label="Una más">
+          +
+        </button>
+        <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+          <button
+            onClick={() => onGuardar(total)}
+            disabled={!cambia || guardando}
+            style={{
+              background: amber,
+              color: '#2a1a00',
+              border: 'none',
+              borderRadius: 12,
+              padding: '0 18px',
+              height: 46,
+              fontWeight: 800,
+              cursor: 'pointer',
+              opacity: !cambia || guardando ? 0.45 : 1,
+            }}
+          >
+            {guardando ? 'Guardando…' : 'Guardar corrección'}
+          </button>
+          <button
+            onClick={onCerrar}
+            style={{
+              background: 'none',
+              color: '#94a3b8',
+              border: `1px solid ${line}`,
+              borderRadius: 12,
+              padding: '0 14px',
+              height: 46,
+              cursor: 'pointer',
+            }}
+          >
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function PiezaCard({
   p,
   offset,
@@ -334,6 +439,7 @@ function PiezaCard({
   onFinalizar,
   onReanudar,
   onReportar,
+  onCorregir,
 }: {
   p: PiezaOperador
   /** Diferencia entre el reloj del servidor y el del celular */
@@ -344,8 +450,11 @@ function PiezaCard({
   onReanudar: (trabajoId: string) => void
   /** Detiene el reloj SOLO de esta pieza y avisa al admin; se sigue con Reanudar */
   onReportar: (trabajoId: string, motivo: string, nota: string, foto: Blob | null) => void
+  /** Corrige el total de piezas hechas (si se capturó mal) */
+  onCorregir: (id: string, tipo: TipoPieza, total: number) => void
 }) {
   const [fin, setFin] = useState(false)
+  const [corrigiendo, setCorrigiendo] = useState(false)
   const [reporte, setReporte] = useState(false)
   const [motivo, setMotivo] = useState('')
   const [nota, setNota] = useState('')
@@ -565,6 +674,24 @@ function PiezaCard({
           {!t && p.faltan === 0 && (
             <span style={{ color: green, fontSize: 12, fontWeight: 800 }}>✓ Completo</span>
           )}
+
+          {p.hechas > 0 && !fin && !reporte && (
+            <button
+              onClick={() => setCorrigiendo((v) => !v)}
+              style={{
+                background: 'none',
+                color: '#cbd5e1',
+                border: `1px solid ${line}`,
+                borderRadius: 12,
+                padding: '9px 14px',
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              ✏️ Corregir
+            </button>
+          )}
         </div>
       </div>
 
@@ -633,6 +760,19 @@ function PiezaCard({
             ✕
           </button>
         </div>
+      )}
+
+      {corrigiendo && !fin && !reporte && (
+        <CorregirPiezas
+          hechas={p.hechas}
+          meta={p.meta}
+          guardando={ocupado === `corregir|${p.id}`}
+          onGuardar={(total) => {
+            onCorregir(p.id, p.tipo, total)
+            setCorrigiendo(false)
+          }}
+          onCerrar={() => setCorrigiendo(false)}
+        />
       )}
 
       {reporte && t && corriendo && (
@@ -814,6 +954,7 @@ function PiezasPorPasos({
   onFinalizar,
   onReanudar,
   onReportar,
+  onCorregir,
 }: {
   piezas: PiezaOperador[]
   offset: number
@@ -822,13 +963,15 @@ function PiezasPorPasos({
   onFinalizar: (trabajoId: string, cantidad: number) => void
   onReanudar: (trabajoId: string) => void
   onReportar: (trabajoId: string, motivo: string, nota: string, foto: Blob | null) => void
+  onCorregir: (id: string, tipo: TipoPieza, total: number) => void
 }) {
   // La que el operador tocó en la lista; si no, la primera pendiente en el orden del plano
   const [elegida, setElegida] = useState<string | null>(null)
   // "Dejar para después": se van al final de la fila
   const [saltadas, setSaltadas] = useState<string[]>([])
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({})
-  const [verTerminadas, setVerTerminadas] = useState(false)
+  const [verTerminadas, setVerTerminadas] = useState(true)
+  const [corrigiendo, setCorrigiendo] = useState<string | null>(null)
 
   const enCurso = piezas.filter((p) => p.trabajo)
   const libres = piezas.filter((p) => !p.trabajo && p.faltan > 0)
@@ -852,7 +995,7 @@ function PiezasPorPasos({
   const abierto = (producto: string) => abiertos[producto] ?? producto === productoDeSigue
 
   const tarjeta = (p: PiezaOperador) => (
-    <PiezaCard key={p.id} p={p} offset={offset} ocupado={ocupado} onIniciar={onIniciar} onFinalizar={onFinalizar} onReanudar={onReanudar} onReportar={onReportar} />
+    <PiezaCard key={p.id} p={p} offset={offset} ocupado={ocupado} onIniciar={onIniciar} onFinalizar={onFinalizar} onReanudar={onReanudar} onReportar={onReportar} onCorregir={onCorregir} />
   )
 
   if (piezas.length === 0) {
@@ -948,33 +1091,75 @@ function PiezasPorPasos({
                           </div>
                         )}
                         {s.piezas.map((p) => (
-                          <button
-                            key={p.id}
-                            onClick={() => {
-                              setElegida(p.id)
-                              window.scrollTo({ top: 0, behavior: 'smooth' })
-                            }}
-                            style={{
-                              width: '100%',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 10,
-                              background: 'none',
-                              border: 'none',
-                              borderTop: `1px solid ${line}55`,
-                              padding: '10px 15px',
-                              minHeight: 50,
-                              cursor: 'pointer',
-                              textAlign: 'left',
-                            }}
-                          >
-                            <span style={{ flex: 1, minWidth: 0 }}>
-                              <span style={{ display: 'block', color: '#e2e8f0', fontSize: 14, fontWeight: 700 }}>{p.nombre}</span>
-                              {p.medidas && <span style={{ display: 'block', color: '#7dd3fc', fontSize: 12, fontFamily: 'monospace' }}>{p.medidas}</span>}
-                            </span>
-                            {saltadas.includes(p.id) && <span style={{ color: '#64748b', fontSize: 11 }}>⏭</span>}
-                            <span style={{ color: amber, fontSize: 14, fontWeight: 800 }}>{p.faltan}</span>
-                          </button>
+                          <div key={p.id} style={{ borderTop: `1px solid ${line}55` }}>
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                              <button
+                                onClick={() => {
+                                  setElegida(p.id)
+                                  window.scrollTo({ top: 0, behavior: 'smooth' })
+                                }}
+                                style={{
+                                  flex: 1,
+                                  minWidth: 0,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 10,
+                                  background: 'none',
+                                  border: 'none',
+                                  padding: '10px 15px',
+                                  minHeight: 50,
+                                  cursor: 'pointer',
+                                  textAlign: 'left',
+                                }}
+                              >
+                                <span style={{ flex: 1, minWidth: 0 }}>
+                                  <span style={{ display: 'block', color: '#e2e8f0', fontSize: 14, fontWeight: 700 }}>{p.nombre}</span>
+                                  {p.medidas && <span style={{ display: 'block', color: '#7dd3fc', fontSize: 12, fontFamily: 'monospace' }}>{p.medidas}</span>}
+                                </span>
+                                {saltadas.includes(p.id) && <span style={{ color: '#64748b', fontSize: 11 }}>⏭</span>}
+                                {p.hechas > 0 ? (
+                                  <span className="op-num" style={{ color: teal, fontSize: 13.5, fontWeight: 800 }}>
+                                    {p.hechas}/{p.meta}
+                                  </span>
+                                ) : (
+                                  <span style={{ color: amber, fontSize: 14, fontWeight: 800 }}>{p.faltan}</span>
+                                )}
+                              </button>
+                              {p.hechas > 0 && (
+                                <button
+                                  onClick={() => setCorrigiendo((v) => (v === p.id ? null : p.id))}
+                                  aria-label={`Corregir piezas hechas de ${p.nombre}`}
+                                  style={{
+                                    background: 'none',
+                                    color: '#cbd5e1',
+                                    border: `1px solid ${line}`,
+                                    borderRadius: 10,
+                                    padding: '7px 11px',
+                                    margin: '0 12px 0 0',
+                                    fontSize: 12.5,
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  ✏️
+                                </button>
+                              )}
+                            </div>
+                            {corrigiendo === p.id && (
+                              <div style={{ padding: '0 15px 12px' }}>
+                                <CorregirPiezas
+                                  hechas={p.hechas}
+                                  meta={p.meta}
+                                  guardando={ocupado === `corregir|${p.id}`}
+                                  onGuardar={(total) => {
+                                    onCorregir(p.id, p.tipo, total)
+                                    setCorrigiendo(null)
+                                  }}
+                                  onCerrar={() => setCorrigiendo(null)}
+                                />
+                              </div>
+                            )}
+                          </div>
                         ))}
                       </div>
                     ))}
@@ -1008,13 +1193,42 @@ function PiezasPorPasos({
           </button>
           {verTerminadas &&
             terminadas.map((p) => (
-              <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'center', borderTop: `1px solid ${line}`, padding: '9px 15px' }}>
-                <span style={{ color: green }}>✓</span>
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: 'block', color: '#64748b', fontSize: 11 }}>{p.modulo}</span>
-                  <span style={{ display: 'block', color: '#cbd5e1', fontSize: 13.5 }}>{p.nombre}</span>
-                </span>
-                <span style={{ color: '#64748b', fontSize: 12.5, fontFamily: 'monospace' }}>{p.meta}</span>
+              <div key={p.id} style={{ borderTop: `1px solid ${line}`, padding: '9px 15px' }}>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <span style={{ color: green }}>✓</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: 'block', color: '#64748b', fontSize: 11 }}>{p.modulo}</span>
+                    <span style={{ display: 'block', color: '#cbd5e1', fontSize: 13.5 }}>{p.nombre}</span>
+                  </span>
+                  <span style={{ color: '#64748b', fontSize: 12.5, fontFamily: 'monospace' }}>{p.hechas}</span>
+                  <button
+                    onClick={() => setCorrigiendo((v) => (v === p.id ? null : p.id))}
+                    style={{
+                      background: 'none',
+                      color: '#cbd5e1',
+                      border: `1px solid ${line}`,
+                      borderRadius: 10,
+                      padding: '7px 11px',
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ✏️ Corregir
+                  </button>
+                </div>
+                {corrigiendo === p.id && (
+                  <CorregirPiezas
+                    hechas={p.hechas}
+                    meta={p.meta}
+                    guardando={ocupado === `corregir|${p.id}`}
+                    onGuardar={(total) => {
+                      onCorregir(p.id, p.tipo, total)
+                      setCorrigiendo(null)
+                    }}
+                    onCerrar={() => setCorrigiendo(null)}
+                  />
+                )}
               </div>
             ))}
         </div>
@@ -1211,12 +1425,22 @@ export default function ProyectoPage() {
     await ejecutar(
       `finalizar|${trabajoId}`,
       () => finalizarPieza(trabajoId, cantidad),
-      '✓ Avance guardado'
+      '✓ Avance guardado. Si te equivocaste en la cantidad, toca ✏️ Corregir en esa pieza.'
     )
   }
 
   async function reanudar(trabajoId: string) {
     await ejecutar(`reanudar|${trabajoId}`, () => reanudarPieza(trabajoId), '▶ Reloj reanudado')
+  }
+
+  // Corrige el total de piezas hechas de una pieza (si el operador capturó mal la cantidad)
+  async function corregir(id: string, tipo: TipoPieza, total: number) {
+    if (!areaId) return
+    await ejecutar(
+      `corregir|${id}`,
+      () => corregirPieza(proyectoId, areaId, id, tipo, total),
+      `✏️ Corregido: ahora van ${total} piezas hechas.`
+    )
   }
 
   // Detiene solo el reloj de esa pieza; el tiempo perdido se guarda al tocar Reanudar
@@ -1576,6 +1800,7 @@ export default function ProyectoPage() {
             onFinalizar={finalizar}
             onReanudar={reanudar}
             onReportar={reportar}
+            onCorregir={corregir}
           />
         ) : vista.piezas.length === 0 ? (
           <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', padding: '34px 0' }}>
@@ -1593,6 +1818,7 @@ export default function ProyectoPage() {
                 onFinalizar={finalizar}
                 onReanudar={reanudar}
                 onReportar={reportar}
+                onCorregir={corregir}
               />
             ))}
           </div>
