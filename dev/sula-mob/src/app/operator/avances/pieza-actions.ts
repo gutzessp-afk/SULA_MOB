@@ -1020,7 +1020,8 @@ export async function finalizarPieza(trabajoId: string, piezas: number): Promise
 export async function reportarPieza(
   trabajoId: string,
   motivo: string,
-  nota: string
+  nota: string,
+  evidenciaUrl?: string
 ): Promise<Resultado> {
   const usuario = await getUsuarioActual()
   if (!usuario) return { error: 'No autenticado' }
@@ -1080,6 +1081,7 @@ export async function reportarPieza(
       descripcion: `Pieza "${nombrePieza}"${modulo ? ` (${modulo})` : ''} en ${nombreArea}`,
       tiempo_estimado_retraso: 0,
       comentario: nota || null,
+      evidencia_url: evidenciaUrl || null,
     })
     .select('id')
     .single()

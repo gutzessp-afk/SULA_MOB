@@ -20,7 +20,6 @@ import {
   pausarArea,
   reanudarArea,
   reanudarPieza,
-  reportarArea,
   reportarPieza,
   salirArea,
   subirEvidenciaReporte,
@@ -50,15 +49,12 @@ const teal = '#14b8a6'
 
 const ZONA = 'America/Mexico_City'
 
-const MOTIVOS_ADMIN = [
-  'Falla de máquina',
-  'Falta de material',
-  'Falta de herramienta',
+// Motivos del reporte de una pieza (detiene su reloj y avisa al administrador)
+const MOTIVOS_REPORTE = [
+  ...MOTIVOS_PIEZA,
   'Material defectuoso',
   'Plano o medida con error',
   'Corte de energía',
-  'Falla de equipo compartido',
-  'Falta de material general',
   'Otro',
 ]
 const MOTIVOS_PAUSA_AREA = ['Comida', 'Junta', 'Limpieza', 'Cambio de herramienta']
@@ -322,12 +318,42 @@ function PiezaCard({
   onFinalizar: (trabajoId: string, cantidad: number) => void
   onReanudar: (trabajoId: string) => void
   /** Detiene el reloj SOLO de esta pieza y avisa al admin; se sigue con Reanudar */
-  onReportar: (trabajoId: string, motivo: string, nota: string) => void
+  onReportar: (trabajoId: string, motivo: string, nota: string, foto: Blob | null) => void
 }) {
   const [fin, setFin] = useState(false)
   const [reporte, setReporte] = useState(false)
   const [motivo, setMotivo] = useState('')
   const [nota, setNota] = useState('')
+  // Foto de evidencia del problema (opcional): se comprime antes de subirla
+  const [foto, setFoto] = useState<Blob | null>(null)
+  const [vistaFoto, setVistaFoto] = useState('')
+  const [falloFoto, setFalloFoto] = useState('')
+
+  useEffect(() => {
+    return () => {
+      if (vistaFoto) URL.revokeObjectURL(vistaFoto)
+    }
+  }, [vistaFoto])
+
+  async function elegirFoto(archivo: File | undefined) {
+    if (!archivo) return
+    setFalloFoto('')
+    try {
+      const b = await comprimirFoto(archivo)
+      setFoto(b)
+      setVistaFoto(URL.createObjectURL(b))
+    } catch {
+      setFalloFoto('No se pudo preparar la foto. Intenta con otra.')
+    }
+  }
+
+  function limpiarReporte() {
+    setMotivo('')
+    setNota('')
+    setFoto(null)
+    setVistaFoto('')
+    setFalloFoto('')
+  }
   const [q, setQ] = useState('')
   const [congelado, setCongelado] = useState<number | null>(null)
 
@@ -463,8 +489,7 @@ function PiezaCard({
           {t && corriendo && !fin && (
             <button
               onClick={() => {
-                setMotivo('')
-                setNota('')
+                limpiarReporte()
                 setReporte((v) => !v)
               }}
               style={{
@@ -572,7 +597,7 @@ function PiezaCard({
             ¿Qué pasó? <span style={{ color: '#94a3b8', fontWeight: 400 }}>Se detiene el reloj de esta pieza y se avisa al administrador.</span>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {[...MOTIVOS_PIEZA, 'Otro'].map((m) => (
+            {MOTIVOS_REPORTE.map((m) => (
               <button
                 key={m}
                 onClick={() => setMotivo(m)}
@@ -606,11 +631,54 @@ function PiezaCard({
               color: '#fff',
             }}
           />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
+            <label
+              style={{
+                background: '#0f1b3d',
+                color: bl,
+                border: `1px solid ${bl}66`,
+                borderRadius: 10,
+                padding: '11px 16px',
+                fontSize: 13.5,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              📷 {foto ? 'Cambiar foto' : 'Tomar foto'}
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={(e) => {
+                  void elegirFoto(e.target.files?.[0])
+                  e.target.value = ''
+                }}
+                style={{ display: 'none' }}
+              />
+            </label>
+            {vistaFoto && (
+              <>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={vistaFoto} alt="Evidencia" style={{ height: 52, borderRadius: 8, border: `1px solid ${line}` }} />
+                <button
+                  onClick={() => {
+                    setFoto(null)
+                    setVistaFoto('')
+                  }}
+                  style={{ background: 'none', color: '#94a3b8', border: `1px solid ${line}`, borderRadius: 10, padding: '8px 12px', fontSize: 12.5, cursor: 'pointer' }}
+                >
+                  Quitar
+                </button>
+              </>
+            )}
+            {falloFoto && <span style={{ color: '#fca5a5', fontSize: 12 }}>{falloFoto}</span>}
+          </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
             <button
               onClick={() => {
-                onReportar(t.id, motivo, nota.trim())
+                onReportar(t.id, motivo, nota.trim(), foto)
                 setReporte(false)
+                limpiarReporte()
               }}
               disabled={!motivo || (motivo === 'Otro' && !nota.trim()) || ocupado === `reportar|${t.id}`}
               style={{
@@ -642,7 +710,7 @@ function PiezaCard({
 }
 
 /* ------------------------------------------------------------------ */
-/*  Reporte al administrador (motivo, descripcion y foto)              */
+/*  Foto de evidencia de un reporte (se comprime antes de subirla)     */
 /* ------------------------------------------------------------------ */
 
 // Reduce la foto para que suba rapido aunque haya mala señal
@@ -669,177 +737,11 @@ async function comprimirFoto(archivo: File): Promise<Blob> {
   }
 }
 
-function PanelAdmin({
-  enviando,
-  onEnviar,
-}: {
-  enviando: boolean
-  onEnviar: (motivo: string, nota: string, foto: Blob | null) => void
-}) {
-  const [motivo, setMotivo] = useState('')
-  const [nota, setNota] = useState('')
-  const [foto, setFoto] = useState<Blob | null>(null)
-  const [vistaFoto, setVistaFoto] = useState('')
-  const [fallo, setFallo] = useState('')
-
-  useEffect(() => {
-    return () => {
-      if (vistaFoto) URL.revokeObjectURL(vistaFoto)
-    }
-  }, [vistaFoto])
-
-  async function elegirFoto(archivo: File | undefined) {
-    if (!archivo) return
-    setFallo('')
-    try {
-      const b = await comprimirFoto(archivo)
-      setFoto(b)
-      setVistaFoto(URL.createObjectURL(b))
-    } catch {
-      setFallo('No se pudo preparar la foto. Intenta con otra.')
-    }
-  }
-
-  function quitarFoto() {
-    setFoto(null)
-    setVistaFoto('')
-  }
-
-  const falta = motivo === '' ? 'Elige qué pasó.' : motivo === 'Otro' && !nota.trim() ? 'Describe qué pasó.' : ''
-
-  const chip = (activo: boolean): CSSProperties => ({
-    ...chipAmber,
-    padding: '9px 15px',
-    fontSize: 13.5,
-    background: activo ? amber : '#1f1708',
-    color: activo ? '#1a1204' : amber,
-    fontWeight: activo ? 800 : 500,
-  })
-
-  return (
-    <div
-      style={{
-        background: card,
-        border: `1px solid ${line}`,
-        borderRadius: 14,
-        padding: 14,
-        marginBottom: 12,
-      }}
-    >
-      <div style={{ color: '#94a3b8', fontSize: 12.5, marginBottom: 10 }}>
-        Le llega al administrador y se detienen los relojes del área. Cuando se resuelva, toca "Reanudar área".
-      </div>
-
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {MOTIVOS_ADMIN.map((m) => (
-          <button key={m} onClick={() => setMotivo(m)} style={chip(motivo === m)}>
-            {m}
-          </button>
-        ))}
-      </div>
-
-      <textarea
-        value={nota}
-        onChange={(e) => setNota(e.target.value)}
-        rows={3}
-        placeholder={
-          motivo === 'Otro' ? 'Describe qué pasó (obligatorio)' : 'Describe el problema (opcional)'
-        }
-        style={{
-          width: '100%',
-          marginTop: 12,
-          background: '#08090d',
-          border: `1px solid ${motivo === 'Otro' && !nota.trim() ? amber : line}`,
-          borderRadius: 10,
-          padding: '10px 12px',
-          fontSize: 15,
-          color: '#fff',
-          resize: 'vertical',
-        }}
-      />
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
-        <label
-          style={{
-            background: '#0f1b3d',
-            color: bl,
-            border: `1px solid ${bl}66`,
-            borderRadius: 10,
-            padding: '10px 16px',
-            fontSize: 13.5,
-            fontWeight: 700,
-            cursor: 'pointer',
-          }}
-        >
-          📷 {foto ? 'Cambiar foto' : 'Tomar foto'}
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={(e) => {
-              void elegirFoto(e.target.files?.[0])
-              e.target.value = ''
-            }}
-            style={{ display: 'none' }}
-          />
-        </label>
-
-        {vistaFoto && (
-          <>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={vistaFoto}
-              alt="Evidencia"
-              style={{ height: 56, borderRadius: 8, border: `1px solid ${line}` }}
-            />
-            <button
-              onClick={quitarFoto}
-              style={{
-                background: 'none',
-                color: '#94a3b8',
-                border: `1px solid ${line}`,
-                borderRadius: 10,
-                padding: '8px 12px',
-                fontSize: 12.5,
-                cursor: 'pointer',
-              }}
-            >
-              Quitar
-            </button>
-          </>
-        )}
-      </div>
-
-      {fallo && <div style={{ color: '#f87171', fontSize: 12.5, marginTop: 8 }}>{fallo}</div>}
-
-      <button
-        onClick={() => onEnviar(motivo, nota, foto)}
-        disabled={enviando || falta !== ''}
-        style={{
-          width: '100%',
-          marginTop: 14,
-          background: falta ? '#2a2f3d' : amber,
-          color: falta ? '#64748b' : '#1a1204',
-          border: 'none',
-          borderRadius: 11,
-          padding: '13px 0',
-          fontSize: 15,
-          fontWeight: 800,
-          cursor: falta ? 'default' : 'pointer',
-          opacity: enviando ? 0.6 : 1,
-        }}
-      >
-        {enviando ? 'Enviando...' : falta ? falta : 'Enviar reporte al administrador'}
-      </button>
-    </div>
-  )
-}
-
 /* ------------------------------------------------------------------ */
 /*  Pantalla                                                           */
 /* ------------------------------------------------------------------ */
 
-type Panel = 'pausa' | 'admin' | null
+type Panel = 'pausa' | null
 
 /* ------------------------------------------------------------------ */
 /*  Piezas por pasos (proyectos por pieza: despiece del plano o PDF)   */
@@ -875,7 +777,7 @@ function PiezasPorPasos({
   onIniciar: (id: string, tipo: TipoPieza) => void
   onFinalizar: (trabajoId: string, cantidad: number) => void
   onReanudar: (trabajoId: string) => void
-  onReportar: (trabajoId: string, motivo: string, nota: string) => void
+  onReportar: (trabajoId: string, motivo: string, nota: string, foto: Blob | null) => void
 }) {
   // La que el operador tocó en la lista; si no, la primera pendiente en el orden del plano
   const [elegida, setElegida] = useState<string | null>(null)
@@ -1259,10 +1161,23 @@ export default function ProyectoPage() {
   }
 
   // Detiene solo el reloj de esa pieza; el tiempo perdido se guarda al tocar Reanudar
-  async function reportar(trabajoId: string, motivo: string, nota: string) {
+  async function reportar(trabajoId: string, motivo: string, nota: string, foto: Blob | null) {
+    let evidenciaUrl: string | undefined
+    if (foto) {
+      setOcupado(`reportar|${trabajoId}`)
+      const fd = new FormData()
+      fd.append('foto', foto, 'evidencia.jpg')
+      const r = await subirEvidenciaReporte(fd)
+      if (r.error || !r.url) {
+        setOcupado(null)
+        setError(r.error ?? 'No se pudo subir la foto.')
+        return
+      }
+      evidenciaUrl = r.url
+    }
     await ejecutar(
       `reportar|${trabajoId}`,
-      () => reportarPieza(trabajoId, motivo, nota),
+      () => reportarPieza(trabajoId, motivo, nota, evidenciaUrl),
       '⏸ Reloj detenido y se avisó al administrador. Toca Reanudar cuando se resuelva.'
     )
   }
@@ -1291,28 +1206,6 @@ export default function ProyectoPage() {
     }
   }
 
-  async function enviarAdmin(motivo: string, nota: string, foto: Blob | null) {
-    if (!areaId) return
-    let evidenciaUrl: string | undefined
-    if (foto) {
-      setOcupado('admin')
-      const fd = new FormData()
-      fd.append('foto', foto, 'evidencia.jpg')
-      const r = await subirEvidenciaReporte(fd)
-      if (r.error || !r.url) {
-        setOcupado(null)
-        setError(r.error ?? 'No se pudo subir la foto.')
-        return
-      }
-      evidenciaUrl = r.url
-    }
-    const ok = await ejecutar(
-      'admin',
-      () => reportarArea(proyectoId, areaId, motivo, nota, evidenciaUrl),
-      `⏸ Administrador notificado: ${motivo}. Los relojes están detenidos; toca "Reanudar área" cuando se resuelva.`
-    )
-    if (ok) setPanel(null)
-  }
 
   async function reanudarElArea() {
     if (!areaId) return
@@ -1526,21 +1419,6 @@ export default function ProyectoPage() {
             Reporte del área
           </button>
           <button
-            onClick={() => setPanel((v) => (v === 'admin' ? null : 'admin'))}
-            style={{
-              background: 'none',
-              color: amber,
-              border: `1px solid ${amber}66`,
-              borderRadius: 10,
-              padding: '10px 15px',
-              fontSize: 14,
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            Reporte al administrador
-          </button>
-          <button
             onClick={salir}
             style={{
               background: 'none',
@@ -1580,10 +1458,6 @@ export default function ProyectoPage() {
               </button>
             </div>
           </div>
-        )}
-
-        {panel === 'admin' && (
-          <PanelAdmin enviando={ocupado === 'admin'} onEnviar={enviarAdmin} />
         )}
 
         {vista.pausa && (
