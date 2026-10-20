@@ -10,6 +10,8 @@ export interface ProyectoResumen {
   codigo: string
   nombre: string
   cliente: string
+  /** Sucursal o destino del pedido (ej. "KFC HOSPICIO"): distingue pedidos del mismo cliente */
+  referencia_sucursal: string
   prioridad: string
   progreso: number
 }
@@ -40,6 +42,7 @@ interface FilaProyecto {
   codigo: string | null
   nombre: string
   cliente: string | null
+  referencia_sucursal: string | null
   prioridad: string | null
   progreso: number | null
 }
@@ -74,7 +77,7 @@ export async function getResumenDashboard(desdeISO: string): Promise<ResumenDash
   const [proyectosRes, estadosRes, avancesRes] = await Promise.all([
     supabase
       .from('proyectos')
-      .select('id, codigo, nombre, cliente, prioridad, progreso')
+      .select('id, codigo, nombre, cliente, referencia_sucursal, prioridad, progreso')
       .order('created_at', { ascending: false }),
     supabase.from('producto_area_avance').select('porcentaje, completado'),
     supabase
@@ -95,6 +98,7 @@ export async function getResumenDashboard(desdeISO: string): Promise<ResumenDash
     codigo: p.codigo ?? '',
     nombre: p.nombre,
     cliente: p.cliente ?? '',
+    referencia_sucursal: p.referencia_sucursal ?? '',
     prioridad: p.prioridad ?? 'media',
     progreso: p.progreso ?? 0,
   }))

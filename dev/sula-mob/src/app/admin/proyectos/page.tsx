@@ -218,29 +218,41 @@ export default function ProyectosPage() {
 
     const { data: insertedProducts } = await supabase.from('proyecto_productos').insert(prodInserts).select();
 
-    if (insertedProducts && selectedAreas.length > 0) {
-      const matrizInserts: { 
-        producto_id: string; 
-        area_id: string; 
-        porcentaje: number; 
-        completado: boolean;
-        piezas_totales: number;
-        piezas_completadas: number;
-      }[] = [];
+    // Áreas por las que pasa el pedido. La base ya crea una fila por producto y área (trigger,
+    // todas pendientes); aquí se escribe la matriz completa: las elegidas quedan pendientes y
+    // las que NO se eligieron, terminadas al 100% (el pedido no pasa por ahí y su peso cuenta
+    // como avanzado). Sin áreas elegidas, todas aplican y se quedan como las dejó la base.
+    if (insertedProducts?.length && selectedAreas.length > 0) {
+      const matriz = insertedProducts.flatMap(prod => areasDisponibles.map(area => {
+        const aplica = selectedAreas.includes(area.id);
+        const piezas = prod.cantidad || 0;
+        return {
+          producto_id: prod.id,
+          area_id: area.id,
+          porcentaje: aplica ? 0 : 100,
+          completado: !aplica,
+          piezas_totales: piezas,
+          piezas_completadas: aplica ? 0 : piezas,
+        };
+      }));
+      const { error: errorAreas } = await supabase
+        .from('producto_area_avance')
+        .upsert(matriz, { onConflict: 'producto_id,area_id' });
 
-      insertedProducts.forEach(prod => {
-        selectedAreas.forEach(areaId => {
-          matrizInserts.push({ 
-            producto_id: prod.id, 
-            area_id: areaId, 
-            porcentaje: 0, 
-            completado: false,
-            piezas_totales: prod.cantidad || 0,
-            piezas_completadas: 0
-          });
-        });
-      });
-      await supabase.from('producto_area_avance').insert(matrizInserts);
+      if (errorAreas) {
+        alert('El proyecto se creó, pero no se pudieron guardar las áreas seleccionadas: ' + errorAreas.message);
+      } else {
+        // Progreso inicial con el peso de cada área (mismo cálculo que al registrar avances)
+        const pesoTotal = areasDisponibles.reduce((suma, a) => suma + (Number(a.peso) || 0), 0);
+        const pesoTerminado = areasDisponibles
+          .filter(a => !selectedAreas.includes(a.id))
+          .reduce((suma, a) => suma + (Number(a.peso) || 0), 0);
+        const progresoInicial = pesoTotal > 0 ? Math.round((pesoTerminado / pesoTotal) * 100) : 0;
+        await Promise.all([
+          supabase.from('proyecto_productos').update({ progreso: progresoInicial }).in('id', insertedProducts.map(p => p.id)),
+          supabase.from('proyectos').update({ progreso: progresoInicial }).eq('id', projectData.id),
+        ]);
+      }
     }
 
     // === Guardar también en la tabla 'partidas' (sistema BOM/Despiece) ===

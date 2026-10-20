@@ -67,6 +67,8 @@ export interface ProyectoOperador {
   codigo: string
   nombre: string
   cliente: string
+  /** Sucursal o destino del pedido (ej. "KFC HOSPICIO"): distingue pedidos del mismo cliente */
+  referencia_sucursal: string
   progreso: number
   usaPdf: boolean
   areas: AreaOperador[]
@@ -519,7 +521,7 @@ export async function getProyectoOperador(proyectoId: string): Promise<ProyectoO
     await Promise.all([
       supabase
         .from('proyectos')
-        .select('id, codigo, nombre, cliente, progreso')
+        .select('id, codigo, nombre, cliente, referencia_sucursal, progreso')
         .eq('id', proyectoId)
         .maybeSingle(),
       supabase.from('proyecto_productos').select('id, cantidad').eq('proyecto_id', proyectoId),
@@ -629,6 +631,7 @@ export async function getProyectoOperador(proyectoId: string): Promise<ProyectoO
     codigo: (proyRes.data.codigo as string | null) ?? '',
     nombre: proyRes.data.nombre as string,
     cliente: (proyRes.data.cliente as string | null) ?? '',
+    referencia_sucursal: (proyRes.data.referencia_sucursal as string | null) ?? '',
     progreso: (proyRes.data.progreso as number | null) ?? 0,
     usaPdf,
     areas,
