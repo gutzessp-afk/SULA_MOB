@@ -24,7 +24,10 @@ import { limpiarCache } from '@/lib/cache-datos';
 import InstallPWA from '@/components/InstallPWA';
 import MobiChat from '@/components/MobiChat';
 import { AlertaRetrasos } from '@/components/AlertaRetrasos';
+import { AvisoNotificaciones } from '@/components/AvisoNotificaciones';
 import { AvisosAdminProvider } from '@/components/dashboard/NotificationBellAdmin';
+import { obtenerPerfil } from '@/app/admin/perfil/actions';
+import { EVENTO_PERFIL } from '@/lib/perfil';
 
 /* ── Secciones del menú ── */
 
@@ -67,6 +70,18 @@ function PanelAdmin({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
+  // Nombre real del administrador para la tarjeta del menú (se actualiza al editar el perfil)
+  const [miNombre, setMiNombre] = useState('');
+  useEffect(() => {
+    const leer = () => {
+      void obtenerPerfil().then(p => {
+        if (p) setMiNombre(`${p.nombre} ${p.apellidos}`.trim() || p.correo);
+      });
+    };
+    const primero = setTimeout(leer, 0);
+    window.addEventListener(EVENTO_PERFIL, leer);
+    return () => { clearTimeout(primero); window.removeEventListener(EVENTO_PERFIL, leer); };
+  }, []);
 
   useEffect(() => { setMobileOpen(false); }, [pathname]);
   useEffect(() => {
@@ -105,16 +120,24 @@ function PanelAdmin({ children }: { children: React.ReactNode }) {
         </div>
       </div>
 
-      <div className="mx-4 mb-5 flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white/[0.06] cursor-pointer hover:bg-white/[0.1] transition-colors">
+      {/* Tarjeta del administrador: lleva a "Mi perfil" */}
+      <Link
+        href="/admin/perfil"
+        onClick={onNavigate}
+        title="Editar mi perfil"
+        className={`mx-4 mb-5 flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors ${
+          pathname === '/admin/perfil' ? 'bg-blue-600/30 ring-1 ring-blue-400/40' : 'bg-white/[0.06] hover:bg-white/[0.1]'
+        }`}
+      >
         <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-sm font-bold shadow-md">
-          A
+          {(miNombre[0] ?? 'A').toUpperCase()}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-white truncate">Admin</p>
-          <p className="text-[11px] text-slate-400">Administrador</p>
+          <p className="text-sm font-semibold text-white truncate">{miNombre || 'Admin'}</p>
+          <p className="text-[11px] text-slate-400">Administrador · Mi perfil</p>
         </div>
         <ChevronRight className="w-4 h-4 text-slate-500" />
-      </div>
+      </Link>
 
       <div className="mx-5 mb-4 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
 
@@ -306,6 +329,8 @@ function PanelAdmin({ children }: { children: React.ReactNode }) {
       <MobiChat />
       {/* Tono de celular y aviso cuando un operador reporta un atraso */}
       <AlertaRetrasos />
+      {/* Con la app instalada: invita a activar las notificaciones del celular */}
+      <AvisoNotificaciones />
       <InstallPWA />
     </div>
   );

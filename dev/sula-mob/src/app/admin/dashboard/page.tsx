@@ -43,6 +43,7 @@ interface Proyecto {
   nombre: string;
   progreso: number;
   cliente?: string;
+  referencia_sucursal?: string | null;
   prioridad?: string;
   created_at?: string;
   descripcion?: string;
@@ -417,7 +418,7 @@ export default function DashboardPage() {
                   <tr className="border-b border-white/[0.06]">
                     <th className="w-28 px-5 py-2.5">Código</th>
                     <th className="px-3 py-2.5">Nombre</th>
-                    <th className="hidden w-[18%] px-3 py-2.5 xl:table-cell">Cliente</th>
+                    <th className="hidden w-[18%] px-3 py-2.5 xl:table-cell">Sucursal</th>
                     <th className="w-28 px-3 py-2.5">Entrega</th>
                     <th className="w-[18%] px-3 py-2.5">Progreso</th>
                     <th className="w-28 px-5 py-2.5 text-right">Prioridad</th>
@@ -433,7 +434,7 @@ export default function DashboardPage() {
                           <Link href={`/admin/proyectos/${p.id}`} onClick={e => e.stopPropagation()}>{p.codigo}</Link>
                         </td>
                         <td className="truncate px-3 py-3 font-semibold text-white" title={p.nombre}>{p.nombre}</td>
-                        <td className="hidden truncate px-3 py-3 text-white/55 xl:table-cell" title={p.cliente}>{p.cliente || '—'}</td>
+                        <td className="hidden truncate px-3 py-3 text-white/55 xl:table-cell" title={p.cliente ? `Cliente: ${p.cliente}` : undefined}>{p.referencia_sucursal || p.cliente || '—'}</td>
                         <td className={`whitespace-nowrap px-3 py-3 text-xs ${atrasado ? 'font-bold text-red-400' : 'text-white/50'}`}>
                           {entrega ? <span className="inline-flex items-center gap-1"><Calendar className="h-3 w-3" />{fechaLegible(entrega)}</span> : '—'}
                         </td>
