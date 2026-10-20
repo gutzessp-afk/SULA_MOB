@@ -970,7 +970,7 @@ function PiezasPorPasos({
   // "Dejar para después": se van al final de la fila
   const [saltadas, setSaltadas] = useState<string[]>([])
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({})
-  const [verTerminadas, setVerTerminadas] = useState(false)
+  const [verTerminadas, setVerTerminadas] = useState(true)
   const [corrigiendo, setCorrigiendo] = useState<string | null>(null)
 
   const enCurso = piezas.filter((p) => p.trabajo)
@@ -1091,33 +1091,75 @@ function PiezasPorPasos({
                           </div>
                         )}
                         {s.piezas.map((p) => (
-                          <button
-                            key={p.id}
-                            onClick={() => {
-                              setElegida(p.id)
-                              window.scrollTo({ top: 0, behavior: 'smooth' })
-                            }}
-                            style={{
-                              width: '100%',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 10,
-                              background: 'none',
-                              border: 'none',
-                              borderTop: `1px solid ${line}55`,
-                              padding: '10px 15px',
-                              minHeight: 50,
-                              cursor: 'pointer',
-                              textAlign: 'left',
-                            }}
-                          >
-                            <span style={{ flex: 1, minWidth: 0 }}>
-                              <span style={{ display: 'block', color: '#e2e8f0', fontSize: 14, fontWeight: 700 }}>{p.nombre}</span>
-                              {p.medidas && <span style={{ display: 'block', color: '#7dd3fc', fontSize: 12, fontFamily: 'monospace' }}>{p.medidas}</span>}
-                            </span>
-                            {saltadas.includes(p.id) && <span style={{ color: '#64748b', fontSize: 11 }}>⏭</span>}
-                            <span style={{ color: amber, fontSize: 14, fontWeight: 800 }}>{p.faltan}</span>
-                          </button>
+                          <div key={p.id} style={{ borderTop: `1px solid ${line}55` }}>
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                              <button
+                                onClick={() => {
+                                  setElegida(p.id)
+                                  window.scrollTo({ top: 0, behavior: 'smooth' })
+                                }}
+                                style={{
+                                  flex: 1,
+                                  minWidth: 0,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 10,
+                                  background: 'none',
+                                  border: 'none',
+                                  padding: '10px 15px',
+                                  minHeight: 50,
+                                  cursor: 'pointer',
+                                  textAlign: 'left',
+                                }}
+                              >
+                                <span style={{ flex: 1, minWidth: 0 }}>
+                                  <span style={{ display: 'block', color: '#e2e8f0', fontSize: 14, fontWeight: 700 }}>{p.nombre}</span>
+                                  {p.medidas && <span style={{ display: 'block', color: '#7dd3fc', fontSize: 12, fontFamily: 'monospace' }}>{p.medidas}</span>}
+                                </span>
+                                {saltadas.includes(p.id) && <span style={{ color: '#64748b', fontSize: 11 }}>⏭</span>}
+                                {p.hechas > 0 ? (
+                                  <span className="op-num" style={{ color: teal, fontSize: 13.5, fontWeight: 800 }}>
+                                    {p.hechas}/{p.meta}
+                                  </span>
+                                ) : (
+                                  <span style={{ color: amber, fontSize: 14, fontWeight: 800 }}>{p.faltan}</span>
+                                )}
+                              </button>
+                              {p.hechas > 0 && (
+                                <button
+                                  onClick={() => setCorrigiendo((v) => (v === p.id ? null : p.id))}
+                                  aria-label={`Corregir piezas hechas de ${p.nombre}`}
+                                  style={{
+                                    background: 'none',
+                                    color: '#cbd5e1',
+                                    border: `1px solid ${line}`,
+                                    borderRadius: 10,
+                                    padding: '7px 11px',
+                                    margin: '0 12px 0 0',
+                                    fontSize: 12.5,
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  ✏️
+                                </button>
+                              )}
+                            </div>
+                            {corrigiendo === p.id && (
+                              <div style={{ padding: '0 15px 12px' }}>
+                                <CorregirPiezas
+                                  hechas={p.hechas}
+                                  meta={p.meta}
+                                  guardando={ocupado === `corregir|${p.id}`}
+                                  onGuardar={(total) => {
+                                    onCorregir(p.id, p.tipo, total)
+                                    setCorrigiendo(null)
+                                  }}
+                                  onCerrar={() => setCorrigiendo(null)}
+                                />
+                              </div>
+                            )}
+                          </div>
                         ))}
                       </div>
                     ))}
@@ -1383,7 +1425,7 @@ export default function ProyectoPage() {
     await ejecutar(
       `finalizar|${trabajoId}`,
       () => finalizarPieza(trabajoId, cantidad),
-      '✓ Avance guardado'
+      '✓ Avance guardado. Si te equivocaste en la cantidad, toca ✏️ Corregir en esa pieza.'
     )
   }
 
