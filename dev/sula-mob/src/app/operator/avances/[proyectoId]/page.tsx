@@ -33,19 +33,22 @@ import {
 } from '../pieza-actions'
 import { crearPdfDia, descargarPdfDia } from '../evidencia-pdf'
 import { MOTIVOS_PIEZA } from '@/lib/operador/areas'
+import { fuenteOperador } from '@/lib/operador/fuente'
 
 /* ------------------------------------------------------------------ */
 /*  Diseño (mismos colores del prototipo aprobado)                     */
 /* ------------------------------------------------------------------ */
 
-const card = '#10141f'
-const card2 = '#141927'
-const line = '#1e2433'
-const blue = '#2563eb'
-const bl = '#3b82f6'
-const green = '#10b981'
-const amber = '#f59e0b'
-const teal = '#14b8a6'
+const card = '#121a2b'
+const card2 = '#18223a'
+const line = '#26314a'
+const blue = '#2563ff'
+const bl = '#4f8cff'
+const green = '#22d39a'
+const amber = '#ffb020'
+const teal = '#2ee6c8'
+// Fondo de las tarjetas: degradado sutil para que se vean con volumen
+const fondoTarjeta = 'linear-gradient(180deg, #16203a 0%, #111929 100%)'
 
 const ZONA = 'America/Mexico_City'
 
@@ -95,7 +98,11 @@ function EstilosOperador() {
     <style>{`
       .op-wrap{width:100%;margin:0 auto;padding:0 2px 56px;box-sizing:border-box}
       .op-wrap *{box-sizing:border-box}
-      .op-wrap button{font-family:inherit;min-height:40px;touch-action:manipulation}
+      .op-wrap{letter-spacing:-.005em}
+      .op-wrap button{font-family:inherit;min-height:40px;touch-action:manipulation;transition:transform .08s ease,filter .15s ease,box-shadow .15s ease}
+      .op-wrap button:active:not(:disabled){transform:scale(.98)}
+      .op-wrap button:hover:not(:disabled){filter:brightness(1.08)}
+      .op-num{font-variant-numeric:tabular-nums;letter-spacing:.01em}
       .op-wrap input,.op-wrap textarea{font-family:inherit}
       .pz-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,460px),1fr));gap:14px}
       .ar-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,230px),1fr));gap:12px}
@@ -296,8 +303,8 @@ function Teclado({
 function Estadistica({ etiqueta, valor, color }: { etiqueta: string; valor: number; color: string }) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase' }}>{etiqueta}</div>
-      <div style={{ fontSize: 22, fontWeight: 800, color }}>{valor}</div>
+      <div style={{ fontSize: 10.5, color: '#7d8cab', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700 }}>{etiqueta}</div>
+      <div className="op-num" style={{ fontSize: 26, fontWeight: 800, color, lineHeight: 1.15 }}>{valor}</div>
     </div>
   )
 }
@@ -389,34 +396,47 @@ function PiezaCard({
     background: fondo,
     color,
     border: 'none',
-    borderRadius: 10,
-    padding: '13px 0',
+    borderRadius: 12,
+    padding: '14px 0',
     fontSize: 16,
     fontWeight: 800,
+    letterSpacing: '.01em',
     cursor: 'pointer',
+    boxShadow: fondo.startsWith('#') ? `0 8px 20px -10px ${fondo}` : 'none',
   })
+  // Franja de color según el estado: azul = por iniciar, verde = trabajando, ámbar = en pausa
+  const colorEstado = pausaReporte || pausaArea ? amber : corriendo ? teal : bl
 
   return (
     <div
       style={{
-        background: card,
-        borderRadius: 16,
-        padding: '16px 18px',
-        border: `1.5px solid ${pausaReporte || pausaArea ? amber : corriendo ? bl : line}`,
+        background: fondoTarjeta,
+        borderRadius: 18,
+        padding: '18px 20px',
+        border: `1px solid ${t ? `${colorEstado}66` : line}`,
+        borderLeft: `5px solid ${colorEstado}`,
+        boxShadow: corriendo
+          ? `0 14px 34px -16px ${teal}88`
+          : pausaReporte || pausaArea
+            ? `0 14px 34px -16px ${amber}77`
+            : '0 10px 28px -18px #000',
       }}
     >
       <div className="pz-top">
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="pz-nombre" style={{ color: '#fff', fontSize: 17, fontWeight: 800, lineHeight: 1.3 }}>{p.nombre}</span>
+            <span className="pz-nombre" style={{ color: '#fff', fontSize: 19, fontWeight: 800, lineHeight: 1.25, letterSpacing: '-.01em' }}>{p.nombre}</span>
             {p.modulo && (
               <span
                 style={{
-                  color: '#94a3b8',
+                  color: '#a9c2ff',
                   fontSize: 10.5,
-                  background: card2,
-                  padding: '2px 8px',
-                  borderRadius: 6,
+                  fontWeight: 700,
+                  letterSpacing: '.04em',
+                  background: `${bl}1f`,
+                  border: `1px solid ${bl}33`,
+                  padding: '3px 9px',
+                  borderRadius: 999,
                 }}
               >
                 {p.modulo}
@@ -424,12 +444,12 @@ function PiezaCard({
             )}
           </div>
           {p.material && (
-            <div style={{ color: '#cbd5e1', fontSize: 13.5, marginTop: 6 }}>{p.material}</div>
+            <div style={{ color: '#dbe4f5', fontSize: 14, fontWeight: 600, marginTop: 8 }}>{p.material}</div>
           )}
           {medidasYNotas && (
-            <div style={{ color: '#7c8aa5', fontSize: 13, marginTop: 2 }}>{medidasYNotas}</div>
+            <div style={{ color: '#8fa0bf', fontSize: 13, marginTop: 3 }}>{medidasYNotas}</div>
           )}
-          <div style={{ display: 'flex', gap: 26, marginTop: 12 }}>
+          <div style={{ display: 'flex', gap: 30, marginTop: 14 }}>
             <Estadistica etiqueta="Meta" valor={p.meta} color="#e2e8f0" />
             <Estadistica etiqueta="Hechas" valor={p.hechas} color={teal} />
             <Estadistica etiqueta="Faltan" valor={p.faltan} color={p.faltan ? amber : green} />
@@ -439,11 +459,16 @@ function PiezaCard({
         <div className="pz-side">
           {t && corriendo && (
             <span
+              className="op-num"
               style={{
-                color: bl,
-                fontSize: 24,
+                color: teal,
+                fontSize: 26,
                 fontWeight: 800,
-                fontVariantNumeric: 'tabular-nums',
+                background: `${teal}14`,
+                border: `1px solid ${teal}55`,
+                borderRadius: 999,
+                padding: '6px 16px',
+                textShadow: `0 0 18px ${teal}66`,
               }}
             >
               {reloj(seg)}
@@ -1364,7 +1389,7 @@ export default function ProyectoPage() {
   /* ---------------- Pantalla del area ---------------- */
   if (enArea && vista) {
     return (
-      <div className="op-wrap" style={{ maxWidth: 1500 }}>
+      <div className={`op-wrap ${fuenteOperador.className}`} style={{ maxWidth: 1500 }}>
         <EstilosOperador />
         {banners}
 
@@ -1565,7 +1590,7 @@ export default function ProyectoPage() {
 
   /* ---------------- Pantalla del proyecto ---------------- */
   return (
-    <div className="op-wrap" style={{ maxWidth: 1500 }}>
+    <div className={`op-wrap ${fuenteOperador.className}`} style={{ maxWidth: 1500 }}>
       <EstilosOperador />
       {teclado && (
         <Teclado
