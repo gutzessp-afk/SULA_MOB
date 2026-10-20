@@ -21,6 +21,7 @@ import {
   reanudarArea,
   reanudarPieza,
   reportarArea,
+  reportarPieza,
   salirArea,
   subirEvidenciaReporte,
   type AreaOperador,
@@ -32,6 +33,7 @@ import {
   type TrabajoEnCurso,
 } from '../pieza-actions'
 import { crearPdfDia, descargarPdfDia } from '../evidencia-pdf'
+import { MOTIVOS_PIEZA } from '@/lib/operador/areas'
 
 /* ------------------------------------------------------------------ */
 /*  Diseño (mismos colores del prototipo aprobado)                     */
@@ -311,6 +313,7 @@ function PiezaCard({
   onIniciar,
   onFinalizar,
   onReanudar,
+  onReportar,
 }: {
   p: PiezaOperador
   ahora: number
@@ -318,8 +321,13 @@ function PiezaCard({
   onIniciar: (id: string, tipo: TipoPieza) => void
   onFinalizar: (trabajoId: string, cantidad: number) => void
   onReanudar: (trabajoId: string) => void
+  /** Detiene el reloj SOLO de esta pieza y avisa al admin; se sigue con Reanudar */
+  onReportar: (trabajoId: string, motivo: string, nota: string) => void
 }) {
   const [fin, setFin] = useState(false)
+  const [reporte, setReporte] = useState(false)
+  const [motivo, setMotivo] = useState('')
+  const [nota, setNota] = useState('')
   const [q, setQ] = useState('')
   const [congelado, setCongelado] = useState<number | null>(null)
 
@@ -452,6 +460,24 @@ function PiezaCard({
             </button>
           )}
 
+          {t && corriendo && !fin && (
+            <button
+              onClick={() => {
+                setMotivo('')
+                setNota('')
+                setReporte((v) => !v)
+              }}
+              style={{
+                ...boton('none', amber),
+                border: `1px solid ${amber}66`,
+                padding: '10px 0',
+                fontSize: 13,
+              }}
+            >
+              ⚠ Reportar problema
+            </button>
+          )}
+
           {t && pausaReporte && (
             <button
               onClick={() => onReanudar(t.id)}
@@ -540,6 +566,77 @@ function PiezaCard({
         </div>
       )}
 
+      {reporte && t && corriendo && (
+        <div style={{ marginTop: 14, borderTop: `1px solid ${line}`, paddingTop: 12 }}>
+          <div style={{ color: '#fff', fontSize: 13.5, fontWeight: 800, marginBottom: 8 }}>
+            ¿Qué pasó? <span style={{ color: '#94a3b8', fontWeight: 400 }}>Se detiene el reloj de esta pieza y se avisa al administrador.</span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {[...MOTIVOS_PIEZA, 'Otro'].map((m) => (
+              <button
+                key={m}
+                onClick={() => setMotivo(m)}
+                style={{
+                  background: motivo === m ? '#3a2a07' : card2,
+                  color: motivo === m ? amber : '#cbd5e1',
+                  border: `1px solid ${motivo === m ? amber : line}`,
+                  borderRadius: 10,
+                  padding: '11px 14px',
+                  fontSize: 13.5,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          <input
+            value={nota}
+            onChange={(e) => setNota(e.target.value)}
+            placeholder={motivo === 'Otro' ? 'Escribe qué pasó (obligatorio)' : 'Nota (opcional)'}
+            style={{
+              width: '100%',
+              marginTop: 10,
+              background: '#08090d',
+              border: `1px solid ${line}`,
+              borderRadius: 10,
+              padding: '11px 12px',
+              fontSize: 14,
+              color: '#fff',
+            }}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button
+              onClick={() => {
+                onReportar(t.id, motivo, nota.trim())
+                setReporte(false)
+              }}
+              disabled={!motivo || (motivo === 'Otro' && !nota.trim()) || ocupado === `reportar|${t.id}`}
+              style={{
+                ...boton(amber, '#2a1a00'),
+                flex: 1,
+                opacity: !motivo || (motivo === 'Otro' && !nota.trim()) ? 0.45 : 1,
+              }}
+            >
+              ⏸ Detener reloj y avisar
+            </button>
+            <button
+              onClick={() => setReporte(false)}
+              style={{
+                background: 'none',
+                color: '#94a3b8',
+                border: `1px solid ${line}`,
+                borderRadius: 10,
+                padding: '0 16px',
+                cursor: 'pointer',
+              }}
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -770,6 +867,7 @@ function PiezasPorPasos({
   onIniciar,
   onFinalizar,
   onReanudar,
+  onReportar,
 }: {
   piezas: PiezaOperador[]
   ahora: number
@@ -777,6 +875,7 @@ function PiezasPorPasos({
   onIniciar: (id: string, tipo: TipoPieza) => void
   onFinalizar: (trabajoId: string, cantidad: number) => void
   onReanudar: (trabajoId: string) => void
+  onReportar: (trabajoId: string, motivo: string, nota: string) => void
 }) {
   // La que el operador tocó en la lista; si no, la primera pendiente en el orden del plano
   const [elegida, setElegida] = useState<string | null>(null)
@@ -807,7 +906,7 @@ function PiezasPorPasos({
   const abierto = (producto: string) => abiertos[producto] ?? producto === productoDeSigue
 
   const tarjeta = (p: PiezaOperador) => (
-    <PiezaCard key={p.id} p={p} ahora={ahora} ocupado={ocupado} onIniciar={onIniciar} onFinalizar={onFinalizar} onReanudar={onReanudar} />
+    <PiezaCard key={p.id} p={p} ahora={ahora} ocupado={ocupado} onIniciar={onIniciar} onFinalizar={onFinalizar} onReanudar={onReanudar} onReportar={onReportar} />
   )
 
   if (piezas.length === 0) {
@@ -1157,6 +1256,15 @@ export default function ProyectoPage() {
 
   async function reanudar(trabajoId: string) {
     await ejecutar(`reanudar|${trabajoId}`, () => reanudarPieza(trabajoId), '▶ Reloj reanudado')
+  }
+
+  // Detiene solo el reloj de esa pieza; el tiempo perdido se guarda al tocar Reanudar
+  async function reportar(trabajoId: string, motivo: string, nota: string) {
+    await ejecutar(
+      `reportar|${trabajoId}`,
+      () => reportarPieza(trabajoId, motivo, nota),
+      '⏸ Reloj detenido y se avisó al administrador. Toca Reanudar cuando se resuelva.'
+    )
   }
 
   /* ---- Area ---- */
@@ -1534,6 +1642,7 @@ export default function ProyectoPage() {
             onIniciar={iniciar}
             onFinalizar={finalizar}
             onReanudar={reanudar}
+            onReportar={reportar}
           />
         ) : vista.piezas.length === 0 ? (
           <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', padding: '34px 0' }}>
@@ -1550,6 +1659,7 @@ export default function ProyectoPage() {
                 onIniciar={iniciar}
                 onFinalizar={finalizar}
                 onReanudar={reanudar}
+                onReportar={reportar}
               />
             ))}
           </div>
