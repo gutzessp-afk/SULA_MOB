@@ -16,7 +16,7 @@ import { estadoEntrega, fechaEntrega as entregaDe, fechaLegible } from '@/lib/en
 const POR_PAGINA = 20;
 
 /** Barra de avance con su estado: gris sin iniciar, degradado en proceso, verde completado */
-function BarraProgresoConEstado({ progreso, ancho = 'flex-1' }: { progreso: number; ancho?: string }) {
+function BarraProgresoConEstado({ progreso, ancho = 'flex-1', estadoVisible = 'hidden sm:inline' }: { progreso: number; ancho?: string; estadoVisible?: string }) {
   const estado = progreso >= 100 ? 'COMPLETADO' : progreso > 0 ? 'EN PROCESO' : 'SIN INICIAR';
   const colorBadge = progreso >= 100
     ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30'
@@ -34,7 +34,7 @@ function BarraProgresoConEstado({ progreso, ancho = 'flex-1' }: { progreso: numb
       <span className={`font-mono text-xs font-bold w-10 text-right ${progreso >= 100 ? 'text-emerald-400' : progreso > 0 ? 'text-blue-400' : 'text-white/40'}`}>
         {progreso}%
       </span>
-      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border whitespace-nowrap ${colorBadge} hidden sm:inline`}>{estado}</span>
+      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border whitespace-nowrap ${colorBadge} ${estadoVisible}`}>{estado}</span>
     </div>
   );
 }
@@ -45,7 +45,7 @@ function FechaEntrega({ p }: { p: { progreso: number; fecha_maxima?: string | nu
   if (!entrega) return null;
   const atrasado = estadoEntrega(Number(p.progreso) || 0, entrega) === 'atrasado';
   return (
-    <span className={`inline-flex items-center gap-1 text-[11px] ${atrasado ? 'text-red-400' : 'text-white/45'}`}>
+    <span className={`inline-flex items-center gap-1 whitespace-nowrap text-[11px] ${atrasado ? 'text-red-400' : 'text-white/45'}`}>
       <Calendar className="w-3 h-3" />
       {fechaLegible(entrega)}
       {atrasado && <span className="font-bold ml-1">ATRASADO</span>}
@@ -75,6 +75,8 @@ interface Proyecto {
   codigo: string;
   nombre: string;
   cliente?: string;
+  /** Sucursal o destino del pedido (ej. "VENTO"): distingue los pedidos de un mismo cliente */
+  referencia_sucursal?: string | null;
   descripcion?: string;
   prioridad: string;
   progreso: number;
@@ -186,6 +188,7 @@ export default function ProyectosPage() {
         codigo: codigoLimpio,
         nombre,
         cliente,
+        referencia_sucursal: referencia.trim() || null,
         prioridad,
         progreso: 0,
         descripcion: [
@@ -371,7 +374,8 @@ export default function ProyectosPage() {
     return proyectos.filter(p =>
       p.nombre?.toLowerCase().includes(term) ||
       p.codigo?.toLowerCase().includes(term) ||
-      p.cliente?.toLowerCase().includes(term)
+      p.cliente?.toLowerCase().includes(term) ||
+      p.referencia_sucursal?.toLowerCase().includes(term)
     );
   }, [proyectos, searchDebounced]);
   const totalPaginas = Math.max(1, Math.ceil(filtrados.length / POR_PAGINA));
@@ -420,7 +424,7 @@ export default function ProyectosPage() {
             <Search className="w-4 h-4 text-white/50 flex-shrink-0" />
             <input
               type="text"
-              placeholder="Buscar por código, cliente o proyecto..."
+              placeholder="Buscar por código, sucursal, cliente o proyecto..."
               value={search}
               onChange={e => { setSearch(e.target.value); setPagina(0); }}
               className="max-sm:text-base max-sm:min-h-[44px] bg-transparent text-sm text-white outline-none w-full placeholder:text-white/40"
@@ -440,12 +444,12 @@ export default function ProyectosPage() {
                 {/* Nombre del proyecto */}
                 <p className="text-white font-semibold text-[15px] leading-snug">{p.nombre}</p>
 
-                {/* Cliente y entrega */}
-                {(p.cliente || entregaDe(p)) && (
+                {/* Sucursal (o el cliente si no la tiene) y entrega */}
+                {(p.referencia_sucursal || p.cliente || entregaDe(p)) && (
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                    {p.cliente && (
-                      <p className="text-white/50 text-xs flex items-center gap-1.5">
-                        <User className="w-3 h-3" /> {p.cliente}
+                    {(p.referencia_sucursal || p.cliente) && (
+                      <p className="text-white/50 text-xs flex items-center gap-1.5" title={p.cliente ? `Cliente: ${p.cliente}` : undefined}>
+                        <MapPin className="w-3 h-3" /> {p.referencia_sucursal || p.cliente}
                       </p>
                     )}
                     <FechaEntrega p={p} />
@@ -489,26 +493,28 @@ export default function ProyectosPage() {
             <table className="w-full text-left text-sm text-white/80">
               <thead className="bg-white/[0.07] text-white/60 uppercase text-[11px] font-bold tracking-wider">
                 <tr>
-                  <th className="p-4">Código</th>
-                  <th className="p-4">Proyecto</th>
-                  <th className="p-4">Cliente</th>
-                  <th className="p-4">Prioridad</th>
-                  <th className="p-4">Entrega</th>
-                  <th className="p-4">Progreso Global</th>
-                  <th className="p-4 text-right">Acciones</th>
+                  <th className="px-2.5 py-3 min-[1600px]:px-3 whitespace-nowrap">Código</th>
+                  <th className="px-2.5 py-3 min-[1600px]:px-3 whitespace-nowrap">Proyecto</th>
+                  <th className="px-2.5 py-3 min-[1600px]:px-3 whitespace-nowrap">Sucursal</th>
+                  <th className="px-2.5 py-3 min-[1600px]:px-3 whitespace-nowrap">Prioridad</th>
+                  <th className="px-2.5 py-3 min-[1600px]:px-3 whitespace-nowrap">Entrega</th>
+                  <th className="px-2.5 py-3 min-[1600px]:px-3 whitespace-nowrap">Progreso Global</th>
+                  <th className="px-2.5 py-3 min-[1600px]:px-3 text-right">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
                 {visibles.map(p => (
                   <tr key={p.id} className="hover:bg-white/[0.06] transition-colors">
-                    <td className="p-4 font-mono text-blue-400 font-bold">{p.codigo}</td>
-                    <td className="p-4 font-semibold text-white">{p.nombre}</td>
-                    <td className="p-4 text-white/60">{p.cliente || '—'}</td>
-                    <td className="p-4"><BadgePrioridad prioridad={p.prioridad} /></td>
-                    <td className="p-4">{entregaDe(p) ? <FechaEntrega p={p} /> : <span className="text-white/30">—</span>}</td>
-                    <td className="p-4"><BarraProgresoConEstado progreso={p.progreso} ancho="w-28" /></td>
-                    <td className="p-4 text-right">
-                      <div className="flex justify-end items-center gap-2">
+                    <td className="px-2.5 py-3 min-[1600px]:px-3 whitespace-nowrap font-mono text-blue-400 font-bold">{p.codigo}</td>
+                    <td className="px-2.5 py-3 min-[1600px]:px-3 whitespace-nowrap font-semibold text-white">{p.nombre}</td>
+                    <td className="px-2.5 py-3 min-[1600px]:px-3 text-white/60" title={[p.referencia_sucursal, p.cliente && `Cliente: ${p.cliente}`].filter(Boolean).join(' · ') || undefined}>
+                      <span className="block max-w-[130px] truncate min-[1600px]:max-w-[240px]">{p.referencia_sucursal || p.cliente || '—'}</span>
+                    </td>
+                    <td className="px-2.5 py-3 min-[1600px]:px-3"><BadgePrioridad prioridad={p.prioridad} /></td>
+                    <td className="px-2.5 py-3 min-[1600px]:px-3">{entregaDe(p) ? <FechaEntrega p={p} /> : <span className="text-white/30">—</span>}</td>
+                    <td className="px-2.5 py-3 min-[1600px]:px-3"><BarraProgresoConEstado progreso={p.progreso} ancho="w-20 min-[1600px]:w-28" estadoVisible="hidden min-[1600px]:inline" /></td>
+                    <td className="px-2.5 py-3 min-[1600px]:px-3 text-right">
+                      <div className="flex justify-end items-center gap-1.5 whitespace-nowrap">
                         <button
                           onClick={() => openVistaPedido(p)}
                           className="max-sm:min-h-[44px] w-8 h-8 bg-blue-500/15 hover:bg-blue-500/30 text-blue-300 border border-blue-400/30 rounded-lg inline-flex items-center justify-center backdrop-blur-md transition-all"
@@ -518,15 +524,17 @@ export default function ProyectosPage() {
                         </button>
                         <button
                           onClick={() => router.push(`/admin/proyectos/${p.id}`)}
-                          className="max-sm:min-h-[44px] bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-400/30 text-xs px-3.5 py-1.5 rounded-xl inline-flex items-center gap-1.5 backdrop-blur-md transition-all"
+                          className="max-sm:min-h-[44px] h-8 bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-400/30 text-xs px-3 rounded-xl inline-flex items-center gap-1.5 backdrop-blur-md transition-all"
                         >
                           <Layers className="w-3.5 h-3.5 text-cyan-400" /> Despiece
                         </button>
                         <button
                           onClick={() => handleEliminarProyecto(p)}
-                          className="max-sm:min-h-[44px] bg-red-500/20 hover:bg-red-500/35 text-red-200 border border-red-400/30 text-xs px-3 py-1.5 rounded-xl inline-flex items-center gap-1.5 backdrop-blur-md transition-all"
+                          title="Dar de baja"
+                          aria-label={`Dar de baja ${p.codigo}`}
+                          className="max-sm:min-h-[44px] h-8 bg-red-500/20 hover:bg-red-500/35 text-red-200 border border-red-400/30 text-xs px-2.5 min-[1600px]:px-3 rounded-xl inline-flex items-center gap-1.5 backdrop-blur-md transition-all"
                         >
-                          <Trash2 className="w-3.5 h-3.5 text-red-400" /> Dar de Baja
+                          <Trash2 className="w-3.5 h-3.5 text-red-400" /> <span className="hidden min-[1600px]:inline">Dar de Baja</span>
                         </button>
                       </div>
                     </td>
@@ -813,6 +821,13 @@ export default function ProyectosPage() {
                 <p className="text-[10px] text-white/40 uppercase font-bold mb-1">Cliente</p>
                 <p className="text-sm text-white font-semibold">{viewProyecto.cliente || '—'}</p>
               </div>
+              {/* La descripción ya trae "Ref: …" en los pedidos del PDF: aquí solo si no la trae */}
+              {viewProyecto.referencia_sucursal && !viewProyecto.descripcion?.includes('Ref:') && (
+                <div className="bg-white/[0.04] border border-white/10 rounded-xl p-3.5">
+                  <p className="text-[10px] text-white/40 uppercase font-bold mb-1">Sucursal</p>
+                  <p className="text-sm text-white font-semibold">{viewProyecto.referencia_sucursal}</p>
+                </div>
+              )}
               <div className="bg-white/[0.04] border border-white/10 rounded-xl p-3.5">
                 <p className="text-[10px] text-white/40 uppercase font-bold mb-1">Prioridad</p>
                 <p className={`text-sm font-bold uppercase ${

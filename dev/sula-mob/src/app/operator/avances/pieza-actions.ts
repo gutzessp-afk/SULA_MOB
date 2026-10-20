@@ -11,6 +11,7 @@ import {
 } from '@/lib/operador/acceso'
 import { registrarEnAdmin, sincronizarDespiece } from '@/lib/operador/despiece'
 import { getUsuarioActual } from '../actions'
+import { avisarRetrasoDespues } from '@/lib/push'
 
 type Supabase = Awaited<ReturnType<typeof createClient>>
 
@@ -1090,6 +1091,8 @@ export async function reportarPieza(
     console.error('Error al crear reporte:', errorRetraso)
     return { error: `No se pudo enviar el reporte al administrador${detalleError(errorRetraso)}` }
   }
+  // Notificación en el celular de los administradores (después de responder)
+  avisarRetrasoDespues(retraso.id as string)
 
   const { error } = await supabase.from('pausas_pieza').insert({
     trabajo_id: trabajoId,
@@ -1230,6 +1233,8 @@ export async function reportarArea(
     console.error('Error al reportar area:', error)
     return { error: `No se pudo enviar el reporte al administrador${detalleError(error)}` }
   }
+  // Notificación en el celular de los administradores (después de responder)
+  avisarRetrasoDespues(retraso.id as string)
 
   // detiene los relojes de las piezas en curso de esta area (las que ya estan en pausa se quedan igual)
   const { data: trabajos } = await supabase

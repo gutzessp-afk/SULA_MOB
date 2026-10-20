@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { useRealtimeAvances } from '@/hooks/useRealtimeAvances'
+import { useConsultaPeriodica } from '@/hooks/useConsultaPeriodica'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
@@ -309,9 +310,25 @@ function Estadistica({ etiqueta, valor, color }: { etiqueta: string; valor: numb
   )
 }
 
+/**
+ * Hora del servidor (reloj del celular + `offset`) que avanza cada segundo SOLO mientras
+ * `activo`: así solo se redibuja la tarjeta con su cronómetro corriendo, no toda la página.
+ */
+function useAhora(offset: number, activo: boolean) {
+  const [tic, setTic] = useState(() => Date.now())
+  useEffect(() => {
+    if (!activo) return
+    const tocar = () => setTic(Date.now())
+    const primero = setTimeout(tocar, 0)
+    const intervalo = setInterval(tocar, 1000)
+    return () => { clearTimeout(primero); clearInterval(intervalo) }
+  }, [activo])
+  return tic + offset
+}
+
 function PiezaCard({
   p,
-  ahora,
+  offset,
   ocupado,
   onIniciar,
   onFinalizar,
@@ -319,7 +336,8 @@ function PiezaCard({
   onReportar,
 }: {
   p: PiezaOperador
-  ahora: number
+  /** Diferencia entre el reloj del servidor y el del celular */
+  offset: number
   ocupado: string | null
   onIniciar: (id: string, tipo: TipoPieza) => void
   onFinalizar: (trabajoId: string, cantidad: number) => void
@@ -368,6 +386,7 @@ function PiezaCard({
   const pausaReporte = t?.pausaAbierta?.tipo === 'reporte_pieza' ? t.pausaAbierta : null
   const pausaArea = t?.pausaAbierta && t.pausaAbierta.tipo !== 'reporte_pieza' ? t.pausaAbierta : null
   const corriendo = Boolean(t && !t.pausaAbierta)
+  const ahora = useAhora(offset, corriendo)
   const seg = t ? segundosTrabajo(t, congelado ?? ahora) : 0
 
   const medidasYNotas = [p.medidas, p.notas].filter(Boolean).join(' · ')
@@ -789,7 +808,7 @@ function Titulo({ children, color = '#64748b' }: { children: React.ReactNode; co
 
 function PiezasPorPasos({
   piezas,
-  ahora,
+  offset,
   ocupado,
   onIniciar,
   onFinalizar,
@@ -797,7 +816,7 @@ function PiezasPorPasos({
   onReportar,
 }: {
   piezas: PiezaOperador[]
-  ahora: number
+  offset: number
   ocupado: string | null
   onIniciar: (id: string, tipo: TipoPieza) => void
   onFinalizar: (trabajoId: string, cantidad: number) => void
@@ -833,7 +852,7 @@ function PiezasPorPasos({
   const abierto = (producto: string) => abiertos[producto] ?? producto === productoDeSigue
 
   const tarjeta = (p: PiezaOperador) => (
-    <PiezaCard key={p.id} p={p} ahora={ahora} ocupado={ocupado} onIniciar={onIniciar} onFinalizar={onFinalizar} onReanudar={onReanudar} onReportar={onReportar} />
+    <PiezaCard key={p.id} p={p} offset={offset} ocupado={ocupado} onIniciar={onIniciar} onFinalizar={onFinalizar} onReanudar={onReanudar} onReportar={onReportar} />
   )
 
   if (piezas.length === 0) {
@@ -1041,7 +1060,6 @@ export default function ProyectoPage() {
   const [cargando, setCargando] = useState(true)
 
   const [offset, setOffset] = useState(0)
-  const [tic, setTic] = useState(() => Date.now())
 
   const [error, setError] = useState('')
   const [aviso, setAviso] = useState('')
@@ -1057,7 +1075,6 @@ export default function ProyectoPage() {
   const [fechaPdf, setFechaPdf] = useState(hoyMexico)
   const [historial, setHistorial] = useState<EvidenciaGuardada[]>([])
 
-  const ahora = tic + offset
 
   const cargar = useCallback(
     async (area: string | null) => {
@@ -1096,13 +1113,11 @@ export default function ProyectoPage() {
     }
   }, [proyectoId])
 
-  // carga inicial y actualizacion cada 15 s (asi ves lo que hacen otros operadores)
-  useEffect(() => {
-    if (!preparado) return
-    void cargar(areaId)
-    const intervalo = setInterval(() => void cargar(areaId), 15000)
-    return () => clearInterval(intervalo)
-  }, [cargar, areaId, preparado])
+  // carga inicial y actualizacion cada 15 s con la pantalla a la vista (asi ves lo que hacen otros operadores);
+  // espera a que se repartan las piezas del despiece
+  useConsultaPeriodica(() => (preparado ? cargar(areaId) : undefined), 15000, {
+    recargarCon: `${areaId}|${preparado}`,
+  })
 
   // En vivo: además de cada 15 s, se recarga al instante cuando cambia el avance de este proyecto
   useRealtimeAvances(() => void cargar(areaId), { proyectoId })
@@ -1111,15 +1126,7 @@ export default function ProyectoPage() {
     setHistorial(await listarEvidencias(proyectoId))
   }, [proyectoId])
 
-  useEffect(() => {
-    void cargarHistorial()
-  }, [cargarHistorial])
-
-  // el reloj de la pantalla se mueve cada segundo
-  useEffect(() => {
-    const intervalo = setInterval(() => setTic(Date.now()), 1000)
-    return () => clearInterval(intervalo)
-  }, [])
+  useConsultaPeriodica(cargarHistorial, null, { recargarCon: proyectoId })
 
   async function ejecutar(
     clave: string,
@@ -1563,7 +1570,7 @@ export default function ProyectoPage() {
         {vista.usaPdf ? (
           <PiezasPorPasos
             piezas={vista.piezas}
-            ahora={ahora}
+            offset={offset}
             ocupado={ocupado}
             onIniciar={iniciar}
             onFinalizar={finalizar}
@@ -1580,7 +1587,7 @@ export default function ProyectoPage() {
               <PiezaCard
                 key={p.id}
                 p={p}
-                ahora={ahora}
+                offset={offset}
                 ocupado={ocupado}
                 onIniciar={iniciar}
                 onFinalizar={finalizar}

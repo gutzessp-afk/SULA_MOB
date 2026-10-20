@@ -3,6 +3,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { getUsuarioActual } from './actions'
+import { avisarRetrasoDespues } from '@/lib/push'
 
 // Pega aquí el rol_id del administrador (ver Paso 4). Si está vacío, no se envía el aviso.
 const ADMIN_ROL_ID = 'a8e49af9-e975-43e2-9db4-d54cf301a33e'
@@ -170,7 +171,7 @@ export async function crearRetraso(
     evidenciaUrl = supabase.storage.from('evidencias').getPublicUrl(ruta).data.publicUrl
   }
 
-  const { error } = await supabase.from('retrasos').insert({
+  const { data: nuevo, error } = await supabase.from('retrasos').insert({
     proyecto_id: proyectoId,
     area_id: areaId || null,
     operador_id: usuario.id,
@@ -178,12 +179,14 @@ export async function crearRetraso(
     descripcion: descripcion || null,
     tiempo_estimado_retraso: horas,
     evidencia_url: evidenciaUrl,
-  })
+  }).select('id').single()
 
   if (error) {
     console.error('Error al guardar retraso:', error)
     return { ok: false, error: 'No se pudo guardar el retraso. Intenta de nuevo.' }
   }
+  // Notificación en el celular de los administradores (después de responder)
+  if (nuevo?.id) avisarRetrasoDespues(nuevo.id as string)
 
   // Aviso al administrador
   let avisado = false

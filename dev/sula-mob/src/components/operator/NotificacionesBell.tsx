@@ -2,6 +2,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useConsultaPeriodica } from '@/hooks/useConsultaPeriodica'
 import { useRouter } from 'next/navigation'
 import { Bell, FolderPlus, CheckCheck } from 'lucide-react'
 import {
@@ -32,11 +33,8 @@ export default function NotificacionesBell() {
     setNotificaciones(data)
   }, [])
 
-  useEffect(() => {
-    cargar()
-    const intervalo = setInterval(cargar, 30000)
-    return () => clearInterval(intervalo)
-  }, [cargar])
+  // Al montar y cada 30 s con la pantalla a la vista
+  useConsultaPeriodica(cargar, 30000)
 
   useEffect(() => {
     function alHacerClicFuera(e: MouseEvent) {

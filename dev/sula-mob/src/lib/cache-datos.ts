@@ -101,13 +101,26 @@ export async function cargarProyectos<T>(): Promise<T[]> {
   return (data ?? []) as T[]
 }
 
-/** Todas las filas de una tabla: Supabase entrega máximo 1000 por petición */
+/**
+ * Todas las filas de una tabla. Supabase entrega máximo 1000 por petición: la primera
+ * también trae el total y las páginas restantes se piden al mismo tiempo (no una tras otra).
+ */
 export async function cargarTodas<T>(tabla: string, columnas = '*'): Promise<T[]> {
-  const filas: T[] = []
-  for (let desde = 0; ; desde += 1000) {
-    const { data, error } = await supabase.from(tabla).select(columnas).order('id').range(desde, desde + 999)
-    if (error) throw new Error(error.message)
-    filas.push(...((data ?? []) as T[]))
-    if (!data || data.length < 1000) return filas
+  const POR_PAGINA = 1000
+  const pagina = (desde: number) => supabase.from(tabla).select(columnas).order('id').range(desde, desde + POR_PAGINA - 1)
+
+  const primera = await supabase.from(tabla).select(columnas, { count: 'exact' }).order('id').range(0, POR_PAGINA - 1)
+  if (primera.error) throw new Error(primera.error.message)
+  const filas = (primera.data ?? []) as T[]
+  const total = primera.count ?? filas.length
+  if (filas.length >= total) return filas
+
+  const resto = await Promise.all(
+    Array.from({ length: Math.ceil((total - POR_PAGINA) / POR_PAGINA) }, (_, i) => pagina((i + 1) * POR_PAGINA)),
+  )
+  for (const r of resto) {
+    if (r.error) throw new Error(r.error.message)
+    filas.push(...((r.data ?? []) as T[]))
   }
+  return filas
 }
