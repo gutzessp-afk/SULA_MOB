@@ -1004,6 +1004,33 @@ function PiezasPorPasos({
   )
 }
 
+/** Anillo con el % de avance general del proyecto */
+function AnilloAvance({ pct }: { pct: number }) {
+  const r = 26
+  const c = 2 * Math.PI * r
+  const color = pct >= 100 ? green : teal
+  return (
+    <div className="relative h-[76px] w-[76px] flex-shrink-0">
+      <svg viewBox="0 0 64 64" className="h-full w-full -rotate-90" aria-hidden="true">
+        <circle cx="32" cy="32" r={r} fill="none" stroke="#26314a" strokeWidth="7" />
+        <circle
+          cx="32"
+          cy="32"
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth="7"
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - Math.min(100, Math.max(0, pct)) / 100)}
+          style={{ filter: `drop-shadow(0 0 6px ${color}88)` }}
+        />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center text-base font-extrabold tabular-nums text-white">{pct}%</span>
+    </div>
+  )
+}
+
 export default function ProyectoPage() {
   const params = useParams<{ proyectoId: string }>()
   const proyectoId = params.proyectoId
@@ -1603,229 +1630,174 @@ export default function ProyectoPage() {
         />
       )}
 
-      <Link
-        href="/operator/avances"
-        style={{ color: '#94a3b8', fontSize: 12.5, display: 'inline-block', marginBottom: 8 }}
-      >
+      <Link href="/operator/avances" className="inline-flex items-center gap-1.5 min-h-[44px] text-sm font-semibold text-[#8fa0bf] hover:text-white">
         ← Proyectos
       </Link>
 
       {banners}
 
-      <div
-        style={{
-          ...gradiente,
-          padding: '16px 20px',
-          marginBottom: 14,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 12,
-          flexWrap: 'wrap',
-        }}
-        className="op-cab"
-      >
-        <div>
-          <div style={{ color: bl, fontSize: 10.5, fontWeight: 700 }}>{detalle.codigo}</div>
-          <div style={{ color: '#fff', fontSize: 19, fontWeight: 800 }}>{detalle.nombre}</div>
-          <div style={{ color: '#94a3b8', fontSize: 12 }}>
-            {detalle.cliente || 'Sin cliente'} · Avance general {detalle.progreso}%
+      {/* Encabezado del proyecto */}
+      <div className="op-cab relative overflow-hidden rounded-3xl border border-[#26314a] bg-gradient-to-br from-[#1a2a55] via-[#121a2b] to-[#0d1220] p-5 sm:p-7 mb-6 shadow-[0_24px_60px_-30px_#2563ff] flex flex-wrap items-center justify-between gap-5">
+        <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-[#2563ff]/25 blur-3xl" />
+        <div className="relative flex items-center gap-5 min-w-0">
+          <AnilloAvance pct={detalle.progreso} />
+          <div className="min-w-0">
+            <span className="inline-block rounded-full border border-[#4f8cff]/30 bg-[#4f8cff]/15 px-2.5 py-0.5 text-[11px] font-bold tracking-wide text-[#a9c2ff]">
+              {detalle.codigo || 'Sin código'}
+            </span>
+            <h1 className="mt-2 text-2xl sm:text-3xl font-extrabold leading-tight tracking-tight text-white">{detalle.nombre}</h1>
+            <p className="mt-1 text-sm font-medium text-[#a9b6cf]">
+              {detalle.cliente || 'Sin cliente'} · Avance general <span className="font-extrabold text-white">{detalle.progreso}%</span>
+            </p>
           </div>
         </div>
         <button
           onClick={() => abrirTeclado(null, null)}
-          style={{
-            background: blue,
-            color: '#fff',
-            border: 'none',
-            borderRadius: 11,
-            padding: '12px 22px',
-            fontSize: 14,
-            fontWeight: 800,
-            cursor: 'pointer',
-          }}
+          className="relative min-h-[54px] rounded-2xl px-7 text-base font-extrabold text-white"
+          style={{ background: `linear-gradient(180deg, ${bl}, ${blue})`, boxShadow: `0 12px 28px -12px ${blue}` }}
         >
-          Entrar a mi área
+          🔒 Entrar a mi área
         </button>
       </div>
 
-      <div
-        style={{
-          color: '#64748b',
-          fontSize: 11,
-          letterSpacing: '.08em',
-          fontWeight: 700,
-          marginBottom: 8,
-        }}
-      >
-        ÁREAS DEL PROYECTO
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <p className="text-[11px] font-extrabold uppercase tracking-[0.16em] text-[#7d8cab]">Áreas del proyecto</p>
+        <p className="text-xs text-[#6b7a99]">Toca tu área y escribe su contraseña de 3 dígitos</p>
       </div>
 
       {detalle.areas.length === 0 ? (
-        <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', padding: '34px 0' }}>
+        <div className="rounded-3xl border border-[#26314a] bg-[#121a2b] p-10 text-center text-sm text-[#a9b6cf]">
           Este proyecto todavía no tiene piezas asignadas a ningún área.
         </div>
       ) : (
-        <div className="ar-grid">
-          {detalle.areas.map((a) => (
-            <div
-              key={a.areaId}
-              onClick={() => tocarArea(a)}
-              style={{
-                background: card,
-                border: `1px solid ${a.desbloqueada ? bl : line}`,
-                borderRadius: 14,
-                padding: '13px 15px',
-                cursor: a.cerrada ? 'default' : 'pointer',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ color: '#fff', fontSize: 15, fontWeight: 700 }}>{a.nombre}</div>
-                  <div style={{ color: '#7c8aa5', fontSize: 12, marginTop: 2 }}>
-                    {a.piezas > 0
-                      ? `${a.piezas} ${a.piezas === 1 ? 'pieza' : 'piezas'} por hacer${a.cerrada ? ' · terminada' : ''}`
-                      : 'Sin piezas en este proyecto'}
-                  </div>
-                </div>
-                <IconoCandado abierto={a.desbloqueada} />
-              </div>
-
-              <div
+        <div className="grid gap-4 grid-cols-1 min-[420px]:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+          {detalle.areas.map((a) => {
+            // Color según el estado del área
+            const estado = a.cerrada
+              ? { color: green, texto: '✓ Terminada' }
+              : a.pausa
+                ? { color: amber, texto: `⏸ En pausa: ${a.pausa.motivo}` }
+                : a.enCurso > 0
+                  ? { color: teal, texto: `● ${a.enCurso} ${a.enCurso === 1 ? 'pieza' : 'piezas'} en curso` }
+                  : a.desbloqueada
+                    ? { color: bl, texto: 'Abierta en este dispositivo' }
+                    : { color: '#3b4a6b', texto: '' }
+            const barra = a.porcentaje >= 100 ? green : teal
+            return (
+              <button
+                key={a.areaId}
+                onClick={() => tocarArea(a)}
+                disabled={a.cerrada}
+                className="group relative flex flex-col gap-3 overflow-hidden rounded-3xl border border-[#26314a] bg-gradient-to-b from-[#16203a] to-[#111929] p-5 text-left transition hover:-translate-y-0.5 hover:border-[#3a4d78] disabled:cursor-default disabled:hover:translate-y-0"
                 style={{
-                  height: 5,
-                  background: '#0a0d16',
-                  borderRadius: 3,
-                  marginTop: 10,
-                  overflow: 'hidden',
+                  borderLeft: `6px solid ${estado.color}`,
+                  boxShadow: a.desbloqueada || a.enCurso > 0 ? `0 18px 40px -24px ${estado.color}` : '0 12px 30px -22px #000',
                 }}
               >
-                <div style={{ width: `${a.porcentaje}%`, height: '100%', background: teal }} />
-              </div>
-              <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 5 }}>
-                {a.porcentaje}% de avance
-              </div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-lg font-extrabold leading-tight tracking-tight text-white">{a.nombre}</p>
+                    <p className="mt-1 text-sm text-[#a9b6cf]">
+                      {a.piezas > 0 ? `${a.piezas} ${a.piezas === 1 ? 'pieza' : 'piezas'} por hacer` : 'Sin piezas en este proyecto'}
+                    </p>
+                  </div>
+                  <span
+                    className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl"
+                    style={{ background: a.desbloqueada ? `${bl}22` : '#1c2640', border: `1px solid ${a.desbloqueada ? `${bl}55` : '#2c3a58'}` }}
+                    aria-label={a.desbloqueada ? 'Abierta' : 'Bloqueada'}
+                  >
+                    <IconoCandado abierto={a.desbloqueada} />
+                  </span>
+                </div>
 
-              {a.pausa ? (
-                <div style={{ color: amber, fontSize: 12, fontWeight: 700, marginTop: 6 }}>
-                  ⏸ En pausa: {a.pausa.motivo}
+                <div className="mt-auto space-y-1.5">
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xs font-semibold text-[#8fa0bf]">Avance</span>
+                    <span className="text-lg font-extrabold tabular-nums" style={{ color: a.porcentaje > 0 ? barra : '#cbd6ea' }}>
+                      {a.porcentaje}%
+                    </span>
+                  </div>
+                  <div className="h-2.5 w-full overflow-hidden rounded-full bg-[#0b1120]">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{ width: `${a.porcentaje}%`, background: `linear-gradient(90deg, ${barra}aa, ${barra})`, boxShadow: `0 0 10px ${barra}88` }}
+                    />
+                  </div>
                 </div>
-              ) : a.enCurso > 0 ? (
-                <div style={{ color: green, fontSize: 12, fontWeight: 700, marginTop: 6 }}>
-                  ● {a.enCurso} {a.enCurso === 1 ? 'pieza' : 'piezas'} en curso
-                </div>
-              ) : null}
-            </div>
-          ))}
+
+                {estado.texto && (
+                  <span
+                    className="self-start rounded-full px-2.5 py-1 text-[11px] font-bold"
+                    style={{ color: estado.color, background: `${estado.color}1a`, border: `1px solid ${estado.color}44` }}
+                  >
+                    {estado.texto}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </div>
       )}
 
-      <div style={{ color: '#475569', fontSize: 11, marginTop: 12 }}>
-        Toca «Entrar a mi área» (o toca tu área) y escribe su contraseña de 3 dígitos.
-      </div>
-      <div style={{ color: '#334155', fontSize: 10, marginTop: 4 }}>
-        {detalle.usaPdf ? 'Piezas: matriz de corte (PDF)' : 'Piezas: productos del pedido'}
-      </div>
-
-      <div
-        style={{
-          background: card,
-          border: `1px solid ${line}`,
-          borderRadius: 14,
-          padding: '14px 16px',
-          marginTop: 18,
-        }}
-      >
-        <div style={{ color: '#fff', fontSize: 14, fontWeight: 700 }}>Evidencia del día</div>
-        <div style={{ color: '#7c8aa5', fontSize: 12, marginTop: 2, marginBottom: 12 }}>
-          Un solo PDF con todas las áreas: avance, piezas por hora, pausas y reportes.
+      {/* Evidencia del día */}
+      <div className="mt-7 rounded-3xl border border-[#26314a] bg-gradient-to-b from-[#16203a] to-[#111929] p-5 sm:p-6">
+        <div className="flex items-start gap-3">
+          <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-[#ff5a6e]/15 text-xl">📄</span>
+          <div>
+            <p className="text-lg font-extrabold text-white">Evidencia del día</p>
+            <p className="text-sm text-[#a9b6cf]">Un solo PDF con todas las áreas: avance, piezas por hora, pausas y reportes.</p>
+          </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
           <input
             type="date"
             value={fechaPdf}
             onChange={(e) => setFechaPdf(e.target.value)}
-            style={{
-              background: '#08090d',
-              border: `1px solid ${line}`,
-              borderRadius: 10,
-              padding: '10px 12px',
-              fontSize: 14,
-              color: '#fff',
-            }}
+            aria-label="Fecha de la evidencia"
+            className="h-12 rounded-2xl border border-[#2c3a58] bg-[#0b1120] px-4 text-[15px] text-white outline-none focus:border-[#4f8cff] [color-scheme:dark]"
           />
           <button
             onClick={bajarPdf}
             disabled={ocupado === 'pdf' || !fechaPdf}
-            style={{
-              background: '#fff',
-              color: '#0a0e1a',
-              border: 'none',
-              borderRadius: 10,
-              padding: '11px 18px',
-              fontSize: 13.5,
-              fontWeight: 800,
-              cursor: 'pointer',
-              opacity: ocupado === 'pdf' ? 0.5 : 1,
-            }}
+            className="h-12 rounded-2xl bg-white px-5 text-sm font-extrabold text-[#0b1120] shadow-[0_10px_24px_-14px_#fff] disabled:opacity-50"
           >
-            {ocupado === 'pdf' ? 'Generando...' : 'Descargar PDF'}
+            {ocupado === 'pdf' ? 'Generando...' : '⬇ Descargar PDF'}
           </button>
           <button
             onClick={() => void enviarEvidencia()}
             disabled={ocupado === 'evidencia'}
-            style={{
-              background: blue,
-              color: '#fff',
-              border: 'none',
-              borderRadius: 10,
-              padding: '11px 18px',
-              fontSize: 13.5,
-              fontWeight: 800,
-              cursor: 'pointer',
-              opacity: ocupado === 'evidencia' ? 0.5 : 1,
-            }}
+            className="h-12 rounded-2xl px-5 text-sm font-extrabold text-white disabled:opacity-50"
+            style={{ background: `linear-gradient(180deg, ${bl}, ${blue})`, boxShadow: `0 12px 26px -14px ${blue}` }}
           >
             {ocupado === 'evidencia' ? 'Enviando...' : 'Enviar al historial y al administrador'}
           </button>
         </div>
 
         {historial.length > 0 && (
-          <div style={{ marginTop: 14 }}>
-            <div style={{ color: '#64748b', fontSize: 11, letterSpacing: '.08em', fontWeight: 700, marginBottom: 6 }}>
-              HISTORIAL
+          <div className="mt-5">
+            <p className="mb-2 text-[11px] font-extrabold uppercase tracking-[0.16em] text-[#7d8cab]">Enviadas</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {historial.map((h) => (
+                <a
+                  key={h.id}
+                  href={h.pdfUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex min-h-[52px] items-center gap-3 rounded-2xl border border-[#26314a] bg-[#0b1120]/60 px-4 py-2.5 transition hover:border-[#4f8cff]"
+                >
+                  <span className="text-lg">📄</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-bold text-white">Evidencia del {h.fecha}</span>
+                    <span className="block truncate text-xs text-[#8fa0bf]">
+                      {h.creadoPor} ·{' '}
+                      {new Date(h.creadoEn).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short', timeZone: ZONA })}
+                    </span>
+                  </span>
+                  <span className="text-sm font-bold text-[#7fa8ff]">Abrir ›</span>
+                </a>
+              ))}
             </div>
-            {historial.map((h) => (
-              <a
-                key={h.id}
-                href={h.pdfUrl}
-                target="_blank"
-                rel="noreferrer"
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: 10,
-                  flexWrap: 'wrap',
-                  padding: '9px 0',
-                  borderTop: `1px solid ${line}`,
-                  color: '#cbd5e1',
-                  fontSize: 13,
-                }}
-              >
-                <span>
-                  📄 Evidencia del {h.fecha}
-                </span>
-                <span style={{ color: '#7c8aa5', fontSize: 12 }}>
-                  {h.creadoPor} ·{' '}
-                  {new Date(h.creadoEn).toLocaleString('es-MX', {
-                    dateStyle: 'short',
-                    timeStyle: 'short',
-                    timeZone: ZONA,
-                  })}
-                </span>
-              </a>
-            ))}
           </div>
         )}
       </div>
