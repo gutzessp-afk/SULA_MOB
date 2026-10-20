@@ -310,6 +310,7 @@ function PiezaCard({
   onIniciar,
   onFinalizar,
   onReanudar,
+  despieceHref,
 }: {
   p: PiezaOperador
   ahora: number
@@ -317,6 +318,8 @@ function PiezaCard({
   onIniciar: (id: string, tipo: TipoPieza) => void
   onFinalizar: (trabajoId: string, cantidad: number) => void
   onReanudar: (trabajoId: string) => void
+  /** PRUEBA: abre los ensambles y piezas del plano de esta partida */
+  despieceHref?: string
 }) {
   const [fin, setFin] = useState(false)
   const [q, setQ] = useState('')
@@ -393,6 +396,22 @@ function PiezaCard({
           )}
           {medidasYNotas && (
             <div style={{ color: '#7c8aa5', fontSize: 13, marginTop: 2 }}>{medidasYNotas}</div>
+          )}
+          {/* PRUEBA: ensambles y subensambles (quitar este Link si no se queda) */}
+          {despieceHref && (
+            <Link
+              href={despieceHref}
+              style={{
+                display: 'inline-block',
+                marginTop: 8,
+                padding: '6px 0',
+                color: bl,
+                fontSize: 13,
+                fontWeight: 700,
+              }}
+            >
+              Trabajar por pasos ▸
+            </Link>
           )}
           <div style={{ display: 'flex', gap: 26, marginTop: 12 }}>
             <Estadistica etiqueta="Meta" valor={p.meta} color="#e2e8f0" />
@@ -1155,6 +1174,22 @@ export default function ProyectoPage() {
         </div>
 
         <div className="op-barra">
+          {/* PRUEBA: registro por ensambles y subensambles (quitar este Link si no se queda) */}
+          <Link
+            href={`/operator/avances/${proyectoId}/despiece/${areaId}`}
+            style={{
+              background: '#0f1b3d',
+              color: bl,
+              border: `1px solid ${bl}55`,
+              borderRadius: 10,
+              padding: '10px 15px',
+              fontSize: 14,
+              fontWeight: 700,
+              textAlign: 'center',
+            }}
+          >
+            Trabajar por pasos (prueba)
+          </Link>
           <button
             onClick={() => setPanel((v) => (v === 'pausa' ? null : 'pausa'))}
             style={{
@@ -1294,6 +1329,11 @@ export default function ProyectoPage() {
                 onIniciar={iniciar}
                 onFinalizar={finalizar}
                 onReanudar={reanudar}
+                despieceHref={
+                  p.tipo === 'producto' && /^\[[^\]]+\]/.test(p.nombre)
+                    ? `/operator/avances/${proyectoId}/despiece/${areaId}#${encodeURIComponent(p.nombre.slice(1, p.nombre.indexOf(']')))}`
+                    : undefined
+                }
               />
             ))}
           </div>
