@@ -1119,7 +1119,12 @@ export async function corregirPieza(
     }
   } else {
     for (const c of repartirAjuste(filasTrabajo, delta)) {
-      const { error } = await supabase.from('trabajos_pieza').update({ piezas_hechas: c.piezas }).eq('id', c.id)
+      // Si queda en 0 ya no se registró nada: se borra para que no salga en el PDF de evidencia
+      if (c.piezas === 0) await supabase.from('pausas_pieza').delete().eq('trabajo_id', c.id)
+      const { error } =
+        c.piezas === 0
+          ? await supabase.from('trabajos_pieza').delete().eq('id', c.id)
+          : await supabase.from('trabajos_pieza').update({ piezas_hechas: c.piezas }).eq('id', c.id)
       if (error) {
         console.error('Error al corregir piezas:', error)
         return { error: `No se pudo corregir${detalleError(error)}` }
@@ -1139,7 +1144,8 @@ export async function corregirPieza(
       .order('created_at', { ascending: false })
     const filasAvance = (registros ?? []).map((r) => ({ id: r.id as string, piezas: (r.piezas as number | null) ?? 0 }))
     for (const c of repartirAjuste(filasAvance, delta)) {
-      await supabase.from('avances').update({ piezas: c.piezas }).eq('id', c.id)
+      if (c.piezas === 0) await supabase.from('avances').delete().eq('id', c.id)
+      else await supabase.from('avances').update({ piezas: c.piezas }).eq('id', c.id)
     }
   }
 
@@ -1502,6 +1508,7 @@ export async function getEvidenciaDia(
     .from('trabajos_pieza')
     .select('id, proyecto_id, producto_id, pieza_id, area_id, operador_id, inicio, fin, piezas_hechas')
     .eq('estado', 'finalizado')
+    .gt('piezas_hechas', 0)
     .gte('fin', desde.toISOString())
     .lt('fin', hasta.toISOString())
     .order('fin')
