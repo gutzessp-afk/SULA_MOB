@@ -115,6 +115,8 @@ export interface ProyectoLista {
   codigo: string
   nombre: string
   cliente: string
+  /** Sucursal o destino del pedido (ej. "KFC HOSPICIO"): distingue pedidos del mismo cliente */
+  referencia_sucursal: string
   prioridad: string
   progreso: number
 }
@@ -127,7 +129,7 @@ export async function getProyectosLista(): Promise<ProyectoLista[]> {
 
   const { data, error } = await supabase
     .from('proyectos')
-    .select('id, codigo, nombre, cliente, prioridad, progreso')
+    .select('id, codigo, nombre, cliente, referencia_sucursal, prioridad, progreso')
     .order('created_at', { ascending: false })
 
   if (error) {
@@ -140,6 +142,7 @@ export async function getProyectosLista(): Promise<ProyectoLista[]> {
     codigo: (p.codigo as string | null) ?? '',
     nombre: p.nombre as string,
     cliente: (p.cliente as string | null) ?? '',
+    referencia_sucursal: (p.referencia_sucursal as string | null) ?? '',
     prioridad: (p.prioridad as string | null) ?? 'media',
     progreso: (p.progreso as number | null) ?? 0,
   }))
@@ -241,6 +244,8 @@ export interface DetalleProyecto {
   codigo: string
   nombre: string
   cliente: string
+  /** Sucursal o destino del pedido (ej. "KFC HOSPICIO"): distingue pedidos del mismo cliente */
+  referencia_sucursal: string
   progreso: number
   areas: AreaProyecto[]
   activo: RegistroActivo | null
@@ -262,7 +267,7 @@ export async function getDetalleProyecto(proyectoId: string): Promise<DetallePro
   const [proyRes, prodRes, areasRes, cierresRes, abiertas, activo] = await Promise.all([
     supabase
       .from('proyectos')
-      .select('id, codigo, nombre, cliente, progreso')
+      .select('id, codigo, nombre, cliente, referencia_sucursal, progreso')
       .eq('id', proyectoId)
       .maybeSingle(),
     supabase
@@ -336,6 +341,7 @@ export async function getDetalleProyecto(proyectoId: string): Promise<DetallePro
     codigo: (proyRes.data.codigo as string | null) ?? '',
     nombre: proyRes.data.nombre as string,
     cliente: (proyRes.data.cliente as string | null) ?? '',
+    referencia_sucursal: (proyRes.data.referencia_sucursal as string | null) ?? '',
     progreso: (proyRes.data.progreso as number | null) ?? 0,
     areas,
     activo,

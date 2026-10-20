@@ -81,7 +81,7 @@ export default function AvancesPage() {
     return proyectos.filter(
       (p) =>
         (filtro === 'todos' || estadoDe(p) === filtro) &&
-        (!q || `${p.codigo} ${p.nombre} ${p.cliente}`.toLowerCase().includes(q))
+        (!q || `${p.codigo} ${p.nombre} ${p.referencia_sucursal} ${p.cliente}`.toLowerCase().includes(q))
     )
   }, [proyectos, buscar, filtro])
 
@@ -109,7 +109,7 @@ export default function AvancesPage() {
             <input
               value={buscar}
               onChange={(e) => setBuscar(e.target.value)}
-              placeholder="Buscar pedido o cliente"
+              placeholder="Buscar pedido o sucursal"
               aria-label="Buscar proyecto"
               className="h-12 w-full rounded-2xl border border-[#2c3a58] bg-[#0b1120]/80 pl-10 pr-4 text-[15px] text-white outline-none placeholder:text-[#6b7a99] focus:border-[#4f8cff] focus:ring-4 focus:ring-[#4f8cff]/20"
             />
@@ -171,7 +171,7 @@ export default function AvancesPage() {
                       {p.codigo || 'Sin código'}
                     </span>
                     <h2 className="mt-2 text-xl sm:text-[22px] font-extrabold leading-tight tracking-tight text-white">{p.nombre}</h2>
-                    <p className="mt-1 truncate text-sm font-medium text-[#a9b6cf]">{p.cliente || 'Sin cliente'}</p>
+                    <p className="mt-1 truncate text-sm font-medium text-[#a9b6cf]">{p.referencia_sucursal || p.cliente || 'Sin cliente'}</p>
                   </div>
                   <Anillo pct={p.progreso} color={estado.color} />
                 </div>

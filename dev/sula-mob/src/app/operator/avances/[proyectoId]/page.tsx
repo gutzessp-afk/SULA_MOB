@@ -1624,7 +1624,7 @@ export default function ProyectoPage() {
           <div>
             <div style={{ color: bl, fontSize: 10.5, fontWeight: 700 }}>
               {detalle.codigo}
-              {detalle.cliente ? ` · ${detalle.cliente}` : ''}
+              {detalle.referencia_sucursal || detalle.cliente ? ` · ${detalle.referencia_sucursal || detalle.cliente}` : ''}
             </div>
             <div style={{ color: '#fff', fontSize: 15, fontWeight: 800 }}>{detalle.nombre}</div>
           </div>
@@ -1838,7 +1838,7 @@ export default function ProyectoPage() {
             </span>
             <h1 className="mt-2 text-2xl sm:text-3xl font-extrabold leading-tight tracking-tight text-white">{detalle.nombre}</h1>
             <p className="mt-1 text-sm font-medium text-[#a9b6cf]">
-              {detalle.cliente || 'Sin cliente'} · Avance general <span className="font-extrabold text-white">{detalle.progreso}%</span>
+              {detalle.referencia_sucursal || detalle.cliente || 'Sin cliente'} · Avance general <span className="font-extrabold text-white">{detalle.progreso}%</span>
             </p>
           </div>
         </div>
