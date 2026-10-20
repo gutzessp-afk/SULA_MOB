@@ -15,6 +15,25 @@ export interface Notificacion {
   createdAt: string
 }
 
+type Supabase = Awaited<ReturnType<typeof createClient>>
+
+/**
+ * A quién se le pudo mandar un aviso "al operador": el usuario de la sesión y cualquier
+ * usuario con rol operador (el compartido de planta y las cuentas individuales de antes).
+ * Así llega aquí todo lo que el admin le mande a un operador, sin importar a cuál.
+ */
+async function destinatariosOperador(supabase: Supabase, usuarioId: string): Promise<string[]> {
+  const { data } = await supabase.from('usuarios').select('id, roles ( nombre )')
+  const ids = (data ?? [])
+    .filter((u) => {
+      const rol = u.roles as unknown as { nombre: string } | { nombre: string }[] | null
+      const nombre = Array.isArray(rol) ? rol[0]?.nombre : rol?.nombre
+      return nombre?.toLowerCase() === 'operador'
+    })
+    .map((u) => u.id as string)
+  return Array.from(new Set([usuarioId, ...ids]))
+}
+
 interface FilaNotificacion {
   id: string
   tipo: string | null
@@ -34,7 +53,7 @@ export async function getNotificaciones(limite = 50): Promise<Notificacion[]> {
   const { data, error } = await supabase
     .from('notificaciones')
     .select('id, tipo, mensaje, leida, proyecto_id, remitente_id, created_at')
-    .eq('destinatario_id', usuario.id)
+    .in('destinatario_id', await destinatariosOperador(supabase, usuario.id))
     .order('created_at', { ascending: false })
     .limit(limite)
 
@@ -95,7 +114,7 @@ export async function getConteoNoLeidas(): Promise<number> {
   const { count, error } = await supabase
     .from('notificaciones')
     .select('id', { count: 'exact', head: true })
-    .eq('destinatario_id', usuario.id)
+    .in('destinatario_id', await destinatariosOperador(supabase, usuario.id))
     .or('leida.eq.false,leida.is.null')
 
   if (error) {
@@ -116,7 +135,7 @@ export async function marcarNotificacionLeida(id: string): Promise<void> {
     .from('notificaciones')
     .update({ leida: true })
     .eq('id', id)
-    .eq('destinatario_id', usuario.id)
+    .in('destinatario_id', await destinatariosOperador(supabase, usuario.id))
 }
 
 export async function marcarTodasLeidas(): Promise<void> {
@@ -128,6 +147,6 @@ export async function marcarTodasLeidas(): Promise<void> {
   await supabase
     .from('notificaciones')
     .update({ leida: true })
-    .eq('destinatario_id', usuario.id)
+    .in('destinatario_id', await destinatariosOperador(supabase, usuario.id))
     .or('leida.eq.false,leida.is.null')
 }

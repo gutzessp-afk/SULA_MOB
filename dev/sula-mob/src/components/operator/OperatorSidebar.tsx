@@ -8,12 +8,12 @@ import { usePathname, useRouter } from 'next/navigation'
 import { logoutAction } from '@/app/(auth)/login/actions'
 import {
   ClipboardList,
-  AlertOctagon,
   Bell,
   LogOut,
   Menu,
   X,
   ChevronRight,
+  History,
   type LucideIcon,
 } from 'lucide-react'
 import { getUsuarioActual } from '@/app/operator/actions'
@@ -69,7 +69,7 @@ export default function OperatorSidebar() {
       title: 'Producción',
       items: [
         { name: 'Registrar avance', href: '/operator/avances', icon: ClipboardList },
-        { name: 'Reportar retraso', href: '/operator/retrasos', icon: AlertOctagon },
+        { name: 'Historial', href: '/operator/historial', icon: History },
       ],
     },
   ]

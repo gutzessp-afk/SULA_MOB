@@ -7,25 +7,31 @@ import {
   Mail, Lock, Eye, EyeOff, ArrowRight, Check, Loader2, AlertCircle,
   ShieldCheck, HardHat,
 } from 'lucide-react'
-import { loginAction } from './actions'
+import { entrarComoOperador, loginAction } from './actions'
 
 const inputClass =
   'h-[46px] w-full rounded-2xl border border-white/20 bg-white/[0.07] text-base text-white outline-none backdrop-blur-sm transition-colors placeholder:text-white/50 hover:border-white/30 focus:border-blue-400/60 focus:bg-white/[0.12] focus:ring-4 focus:ring-blue-500/15 sm:h-[48px] sm:text-[14.5px] ' +
   'autofill:shadow-[inset_0_0_0_1000px_rgba(255,255,255,0.08)] autofill:[-webkit-text-fill-color:#ffffff] ' +
   '[&:-webkit-autofill]:shadow-[inset_0_0_0_1000px_rgba(255,255,255,0.08)] [&:-webkit-autofill]:[-webkit-text-fill-color:#ffffff] [&:-webkit-autofill]:[caret-color:#ffffff] [&:-webkit-autofill]:[transition:background-color_600000s_0s]'
 
-type Rol = 'admin' | 'operador'
-
-const ROLES = [
-  { id: 'admin', label: 'Administrador', Icon: ShieldCheck },
-  { id: 'operador', label: 'Operador', Icon: HardHat },
-] as const
-
 export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
-  const [role, setRole] = useState<Rol>('admin')
+  const [entrandoOperador, setEntrandoOperador] = useState(false)
+
+  // Operador: entra directo a la lista de proyectos; la clave se pide al abrir cada área
+  async function entrarOperador() {
+    setEntrandoOperador(true)
+    setError(null)
+    const result = await entrarComoOperador()
+    if (result?.success && result.redirectUrl) {
+      window.location.assign(result.redirectUrl)
+    } else {
+      setError(result?.error ?? 'Respuesta no válida del servidor.')
+      setEntrandoOperador(false)
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -78,40 +84,36 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
 
-          {/* Rol elegido — se envía a loginAction como "role" */}
-          <input type="hidden" name="role" value={role} />
+          {/* El formulario es solo del Administrador */}
+          <input type="hidden" name="role" value="admin" />
 
-          {/* Selector de perfil */}
+          {/* Selector de perfil: Operador no usa formulario, entra con un toque */}
           <div>
             <p className="mb-1.5 text-[12.5px] font-medium text-white/70">Selecciona tu perfil:</p>
             <div
-              role="tablist"
               aria-label="Tipo de acceso"
               className="grid grid-cols-2 gap-1 rounded-2xl border border-white/15 bg-black/30 p-1"
             >
-              {ROLES.map(({ id, label, Icon }) => {
-                const activo = role === id
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    role="tab"
-                    aria-selected={activo}
-                    onClick={() => {
-                      setRole(id)
-                      setError(null)
-                    }}
-                    className={`max-sm:min-h-[44px] flex h-[38px] cursor-pointer items-center justify-center gap-2 rounded-xl text-[13px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 ${
-                      activo
-                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/40'
-                        : 'text-white/55 hover:text-white'
-                    }`}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {label}
-                  </button>
-                )
-              })}
+              <div
+                aria-current="true"
+                className="max-sm:min-h-[44px] flex h-[38px] items-center justify-center gap-2 rounded-xl bg-blue-600 text-[13px] font-semibold text-white shadow-lg shadow-blue-600/40"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                Administrador
+              </div>
+              <button
+                type="button"
+                onClick={entrarOperador}
+                disabled={entrandoOperador || loading}
+                className="max-sm:min-h-[44px] flex h-[38px] cursor-pointer items-center justify-center gap-2 rounded-xl text-[13px] font-semibold text-white/55 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {entrandoOperador ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <HardHat className="h-4 w-4" />
+                )}
+                {entrandoOperador ? 'Entrando…' : 'Operador'}
+              </button>
             </div>
           </div>
 
@@ -204,7 +206,7 @@ export default function LoginPage() {
           {/* Botón principal — azul */}
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || entrandoOperador}
             className="max-sm:min-h-[44px] group mt-1 flex h-[46px] w-full cursor-pointer items-center justify-center gap-2 rounded-2xl bg-blue-600 text-[15px] font-semibold text-white shadow-lg shadow-blue-950/40 transition hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-400/30 disabled:cursor-not-allowed disabled:opacity-60 sm:h-[48px]"
           >
             {loading ? (

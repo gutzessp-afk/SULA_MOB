@@ -1,8 +1,14 @@
 
 'use server'
 
-import bcrypt from 'bcryptjs'
 import { createClient } from '@/lib/supabase/server'
+import {
+  areasAbiertas,
+  cerrarAccesoArea,
+  tieneAccesoArea,
+  validarClaveArea,
+  validarClaveGeneral,
+} from '@/lib/operador/acceso'
 import { getUsuarioActual } from '../actions'
 
 type Supabase = Awaited<ReturnType<typeof createClient>>
@@ -29,10 +35,6 @@ const ORDEN_AREAS = [
 // Las 9 areas de siempre: un producto sin ruta definida aparece en todas ellas
 const AREAS_BASE = ORDEN_AREAS.slice(0, 9)
 const TIPOS_PAUSA_AREA = ['pausa_area', 'cambio_turno']
-
-const MAX_INTENTOS = 5
-const MINUTOS_BLOQUEO = 5
-const HORAS_ACCESO = 12
 
 /* ------------------------------------------------------------------ */
 /*  Tipos que usa la pantalla                                          */
@@ -218,17 +220,6 @@ interface PausaFila {
   inicio: string
   fin: string | null
   retraso_id: string | null
-}
-
-async function tieneAcceso(supabase: Supabase, usuarioId: string, areaId: string) {
-  const { data } = await supabase
-    .from('area_accesos')
-    .select('area_id')
-    .eq('operador_id', usuarioId)
-    .eq('area_id', areaId)
-    .gt('expira_at', ahoraISO())
-    .maybeSingle()
-  return Boolean(data)
 }
 
 async function cargarFilas(supabase: Supabase, productoIds: string[]): Promise<FilaAvance[]> {
@@ -511,7 +502,7 @@ export async function getProyectoOperador(proyectoId: string): Promise<ProyectoO
 
   const supabase = await createClient()
 
-  const [proyRes, prodRes, areasRes, cierresRes, accesosRes, trabRes, piezasPdf] =
+  const [proyRes, prodRes, areasRes, cierresRes, abiertas, trabRes, piezasPdf] =
     await Promise.all([
       supabase
         .from('proyectos')
@@ -521,11 +512,7 @@ export async function getProyectoOperador(proyectoId: string): Promise<ProyectoO
       supabase.from('proyecto_productos').select('id, cantidad').eq('proyecto_id', proyectoId),
       supabase.from('areas').select('id, nombre').eq('activo', true),
       supabase.from('area_cierres').select('area_id').eq('proyecto_id', proyectoId),
-      supabase
-        .from('area_accesos')
-        .select('area_id')
-        .eq('operador_id', usuario.id)
-        .gt('expira_at', ahoraISO()),
+      areasAbiertas(supabase, usuario),
       supabase
         .from('trabajos_pieza')
         .select('id, area_id')
@@ -565,7 +552,6 @@ export async function getProyectoOperador(proyectoId: string): Promise<ProyectoO
     : new Map<string, number>()
 
   const cerradas = new Set((cierresRes.data ?? []).map((c) => c.area_id as string))
-  const abiertas = new Set((accesosRes.data ?? []).map((a) => a.area_id as string))
 
   const trabajos = (trabRes.data ?? []) as { id: string; area_id: string }[]
   const pausas = (await pausasDe(supabase, trabajos.map((t) => t.id))).filter((p) => p.fin === null)
@@ -650,7 +636,7 @@ export async function getAreaOperador(
 
   const supabase = await createClient()
 
-  if (!(await tieneAcceso(supabase, usuario.id, areaId))) {
+  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
     return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
   }
 
@@ -772,107 +758,29 @@ export async function getAreaOperador(
 /*  Clave de area (teclado)                                            */
 /* ------------------------------------------------------------------ */
 
-export async function entrarConClave(clave: string): Promise<{ error?: string; areaId?: string }> {
+// Con areaId: el operador tocó un área y escribe SU clave (los fallos cuentan solo en esa área).
+// Sin areaId: botón "Entrar a mi área", la clave sola dice cuál es el área.
+export async function entrarConClave(
+  clave: string,
+  areaId?: string
+): Promise<{ error?: string; areaId?: string }> {
   const usuario = await getUsuarioActual()
   if (!usuario) return { error: 'No autenticado' }
 
-  const pin = clave.trim()
-  if (!pin) return { error: 'Escribe tu clave.' }
-
   const supabase = await createClient()
+  if (!areaId) return validarClaveGeneral(supabase, usuario, clave)
 
-  const [areasRes, usuRes] = await Promise.all([
-    supabase.from('areas').select('id, nombre, pin_hash').eq('activo', true),
-    supabase.from('usuarios').select('area_id').eq('id', usuario.id).maybeSingle(),
-  ])
-
-  const areas = areasRes.data ?? []
-  if (areas.length === 0) return { error: 'No hay áreas disponibles.' }
-
-  // Para contar intentos fallidos usamos el area propia del operador (o la primera)
-  const areaContador = (usuRes.data?.area_id as string | null | undefined) ?? (areas[0].id as string)
-
-  const { data: intento } = await supabase
-    .from('area_intentos')
-    .select('fallidos, bloqueado_hasta')
-    .eq('operador_id', usuario.id)
-    .eq('area_id', areaContador)
-    .maybeSingle()
-
-  if (intento?.bloqueado_hasta && new Date(intento.bloqueado_hasta as string) > new Date()) {
-    const minutos = Math.ceil(
-      (new Date(intento.bloqueado_hasta as string).getTime() - Date.now()) / 60000
-    )
-    return { error: `Demasiados intentos. Intenta de nuevo en ${minutos} min.` }
-  }
-
-  let areaId: string | null = null
-  for (const a of areas) {
-    if (!a.pin_hash) continue
-    const hash = (a.pin_hash as string).replace(/^\$2a\$/, '$2b$')
-    if (await bcrypt.compare(pin, hash)) {
-      areaId = a.id as string
-      break
-    }
-  }
-
-  if (!areaId) {
-    const fallidos = ((intento?.fallidos as number | null) ?? 0) + 1
-    const bloquear = fallidos >= MAX_INTENTOS
-
-    await supabase.from('area_intentos').upsert(
-      {
-        operador_id: usuario.id,
-        area_id: areaContador,
-        fallidos: bloquear ? 0 : fallidos,
-        bloqueado_hasta: bloquear
-          ? new Date(Date.now() + MINUTOS_BLOQUEO * 60000).toISOString()
-          : null,
-      },
-      { onConflict: 'operador_id,area_id' }
-    )
-
-    return {
-      error: bloquear
-        ? `Demasiados intentos. Intenta de nuevo en ${MINUTOS_BLOQUEO} min.`
-        : 'Clave incorrecta.',
-    }
-  }
-
-  await supabase
-    .from('area_intentos')
-    .delete()
-    .eq('operador_id', usuario.id)
-    .eq('area_id', areaContador)
-
-  const { error } = await supabase.from('area_accesos').upsert(
-    {
-      operador_id: usuario.id,
-      area_id: areaId,
-      expira_at: new Date(Date.now() + HORAS_ACCESO * 3600000).toISOString(),
-    },
-    { onConflict: 'operador_id,area_id' }
-  )
-
-  if (error) {
-    console.error('Error al desbloquear:', error)
-    return { error: 'No se pudo entrar al área.' }
-  }
-
-  return { areaId }
+  const r = await validarClaveArea(supabase, usuario, areaId, clave)
+  return r.error ? r : { areaId }
 }
 
-// Salir NO detiene ningun reloj: solo cierra tu acceso al area
+// Salir NO detiene ningun reloj: solo cierra el acceso de este dispositivo al area
 export async function salirArea(areaId: string): Promise<Resultado> {
   const usuario = await getUsuarioActual()
   if (!usuario) return { error: 'No autenticado' }
 
   const supabase = await createClient()
-  await supabase
-    .from('area_accesos')
-    .delete()
-    .eq('operador_id', usuario.id)
-    .eq('area_id', areaId)
+  await cerrarAccesoArea(supabase, usuario, areaId)
 
   return { success: true }
 }
@@ -892,7 +800,7 @@ export async function iniciarPieza(
 
   const supabase = await createClient()
 
-  if (!(await tieneAcceso(supabase, usuario.id, areaId))) {
+  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
     return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
   }
 
@@ -994,7 +902,7 @@ export async function finalizarPieza(trabajoId: string, piezas: number): Promise
   const productoId = trabajo.producto_id as string | null
   const piezaId = trabajo.pieza_id as string | null
 
-  if (!(await tieneAcceso(supabase, usuario.id, areaId))) {
+  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
     return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
   }
 
@@ -1108,7 +1016,7 @@ export async function reportarPieza(
   }
 
   const areaId = trabajo.area_id as string
-  if (!(await tieneAcceso(supabase, usuario.id, areaId))) {
+  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
     return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
   }
 
@@ -1200,7 +1108,7 @@ export async function pausarArea(
 
   const supabase = await createClient()
 
-  if (!(await tieneAcceso(supabase, usuario.id, areaId))) {
+  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
     return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
   }
 
@@ -1236,7 +1144,7 @@ export async function reanudarArea(proyectoId: string, areaId: string): Promise<
 
   const supabase = await createClient()
 
-  if (!(await tieneAcceso(supabase, usuario.id, areaId))) {
+  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
     return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
   }
 
@@ -1273,7 +1181,7 @@ export async function reportarArea(
 
   const supabase = await createClient()
 
-  if (!(await tieneAcceso(supabase, usuario.id, areaId))) {
+  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
     return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
   }
 
@@ -1599,30 +1507,34 @@ export async function getEvidenciaDia(
 /*  Historial de evidencias (PDF guardado + aviso al administrador)    */
 /* ------------------------------------------------------------------ */
 
+// El PDF lo sube el navegador directo a Storage (las acciones de servidor solo aceptan 1 MB
+// y el PDF del día suele pesar más). Aquí solo se revisa que el archivo exista en la carpeta
+// de ese proyecto y se registra en el historial.
 export async function guardarEvidenciaDia(
   proyectoId: string,
   fecha: string,
-  formData: FormData
+  ruta: string
 ): Promise<{ url?: string; error?: string; avisados?: boolean }> {
   const usuario = await getUsuarioActual()
   if (!usuario) return { error: 'No autenticado' }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return { error: 'Fecha no válida.' }
 
-  const pdf = formData.get('pdf')
-  if (!(pdf instanceof Blob) || pdf.size === 0) return { error: 'No se recibió el PDF.' }
-  if (pdf.size > 8 * 1024 * 1024) return { error: 'El PDF es demasiado pesado.' }
+  const carpeta = `evidencia-dia/${proyectoId}`
+  const archivo = ruta.slice(carpeta.length + 1)
+  if (!ruta.startsWith(`${carpeta}/`) || !new RegExp(`^${fecha}-\\d+\\.pdf$`).test(archivo)) {
+    return { error: 'Ruta del PDF no válida.' }
+  }
 
   const supabase = await createClient()
-  const ruta = `evidencia-dia/${proyectoId}/${fecha}-${Date.now()}.pdf`
-  const bytes = new Uint8Array(await pdf.arrayBuffer())
 
-  const { error: errorSubida } = await supabase.storage
+  const { data: encontrados, error: errorLista } = await supabase.storage
     .from('evidencias')
-    .upload(ruta, bytes, { contentType: 'application/pdf', upsert: false })
-  if (errorSubida) {
-    console.error('Error al subir PDF:', errorSubida)
-    return { error: `No se pudo guardar el PDF (${errorSubida.message}). Revisa el SQL de evidencias.` }
+    .list(carpeta, { search: archivo, limit: 1 })
+  if (errorLista || !encontrados?.some((f) => f.name === archivo)) {
+    console.error('No se encontró el PDF subido:', errorLista)
+    return { error: 'No se encontró el PDF en el almacén. Intenta de nuevo.' }
   }
+
   const { data: publico } = supabase.storage.from('evidencias').getPublicUrl(ruta)
   const url = publico.publicUrl
 

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { useRealtimeAvances } from '@/hooks/useRealtimeAvances'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
 import { marcarAreaTerminada } from '../../actions'
 import {
   entrarConClave,
@@ -160,12 +161,14 @@ function IconoCandado({ abierto }: { abierto?: boolean }) {
 /* ------------------------------------------------------------------ */
 
 function Teclado({
+  area,
   error,
   fallos,
   validando,
   onCerrar,
   onEntrar,
 }: {
+  area: string | null
   error: string
   fallos: number
   validando: boolean
@@ -211,9 +214,12 @@ function Teclado({
           textAlign: 'center',
         }}
       >
-        <div style={{ color: '#fff', fontSize: 15, fontWeight: 700, marginBottom: 14 }}>
-          Contraseña de tu área
+        <div style={{ color: '#fff', fontSize: 15, fontWeight: 700, marginBottom: area ? 0 : 14 }}>
+          {area ? 'Contraseña del área' : 'Contraseña de tu área'}
         </div>
+        {area && (
+          <div style={{ color: '#94a3b8', fontSize: 13, marginTop: 2, marginBottom: 14 }}>{area}</div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'center', gap: 12, marginBottom: 12 }}>
           {[0, 1, 2].map((i) => (
@@ -753,7 +759,8 @@ export default function ProyectoPage() {
   const [aviso, setAviso] = useState('')
   const [ocupado, setOcupado] = useState<string | null>(null)
 
-  const [teclado, setTeclado] = useState(false)
+  // null = cerrado; areaId null = botón "Entrar a mi área" (la clave dice cuál es el área)
+  const [teclado, setTeclado] = useState<{ areaId: string | null; nombre: string | null } | null>(null)
   const [errorClave, setErrorClave] = useState('')
   const [fallos, setFallos] = useState(0)
   const [validando, setValidando] = useState(false)
@@ -836,9 +843,10 @@ export default function ProyectoPage() {
   /* ---- Entrar / salir ---- */
 
   async function enviarClave(clave: string) {
+    if (!teclado) return
     setValidando(true)
     setErrorClave('')
-    const r = await entrarConClave(clave)
+    const r = await entrarConClave(clave, teclado.areaId ?? undefined)
     setValidando(false)
 
     if (r.error || !r.areaId) {
@@ -847,10 +855,10 @@ export default function ProyectoPage() {
       return
     }
 
-    setTeclado(false)
     setError('')
     setPanel(null)
     setAreaId(r.areaId)
+    setTeclado(null)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -864,21 +872,24 @@ export default function ProyectoPage() {
     await cargar(null)
   }
 
-  function abrirTeclado() {
+  function abrirTeclado(areaId: string | null, nombre: string | null) {
     setError('')
     setAviso('')
     setErrorClave('')
     setFallos(0)
-    setTeclado(true)
+    setTeclado({ areaId, nombre })
   }
 
+  // Área abierta en este dispositivo: entra directo. Bloqueada: pide su clave de 3 dígitos
   function tocarArea(a: AreaOperador) {
     if (a.cerrada) return
     if (a.desbloqueada) {
       setError('')
       setAviso('')
       setAreaId(a.areaId)
+      return
     }
+    abrirTeclado(a.areaId, a.nombre)
   }
 
   /* ---- Piezas ---- */
@@ -997,10 +1008,17 @@ export default function ProyectoPage() {
       const fecha = hoyMexico()
       const r = await getEvidenciaDia(proyectoId, fecha)
       if (r.error || !r.data) throw new Error(r.error ?? 'No se pudo preparar la evidencia.')
-      const { blob, nombre } = await crearPdfDia(r.data)
-      const fd = new FormData()
-      fd.append('pdf', blob, nombre)
-      const g = await guardarEvidenciaDia(proyectoId, fecha, fd)
+      const { blob } = await crearPdfDia(r.data)
+      if (blob.size > 20 * 1024 * 1024) throw new Error('El PDF es demasiado pesado.')
+
+      // Se sube directo a Storage: las acciones de servidor solo aceptan 1 MB
+      const ruta = `evidencia-dia/${proyectoId}/${fecha}-${Date.now()}.pdf`
+      const { error: errorSubida } = await supabase.storage
+        .from('evidencias')
+        .upload(ruta, blob, { contentType: 'application/pdf', upsert: false })
+      if (errorSubida) throw new Error(`No se pudo subir el PDF (${errorSubida.message}).`)
+
+      const g = await guardarEvidenciaDia(proyectoId, fecha, ruta)
       if (g.error) throw new Error(g.error)
       await cargarHistorial()
       if (!silencioso) setAviso('✓ Evidencia del día guardada en el historial y enviada al administrador.')
@@ -1311,10 +1329,11 @@ export default function ProyectoPage() {
       <EstilosOperador />
       {teclado && (
         <Teclado
+          area={teclado.nombre}
           error={errorClave}
           fallos={fallos}
           validando={validando}
-          onCerrar={() => setTeclado(false)}
+          onCerrar={() => setTeclado(null)}
           onEntrar={enviarClave}
         />
       )}
@@ -1349,7 +1368,7 @@ export default function ProyectoPage() {
           </div>
         </div>
         <button
-          onClick={abrirTeclado}
+          onClick={() => abrirTeclado(null, null)}
           style={{
             background: blue,
             color: '#fff',
@@ -1392,7 +1411,7 @@ export default function ProyectoPage() {
                 border: `1px solid ${a.desbloqueada ? bl : line}`,
                 borderRadius: 14,
                 padding: '13px 15px',
-                cursor: a.desbloqueada ? 'pointer' : 'default',
+                cursor: a.cerrada ? 'default' : 'pointer',
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -1437,7 +1456,7 @@ export default function ProyectoPage() {
       )}
 
       <div style={{ color: '#475569', fontSize: 11, marginTop: 12 }}>
-        Ves el avance de todas las áreas, pero solo puedes registrar en la tuya con su contraseña.
+        Toca «Entrar a mi área» (o toca tu área) y escribe su contraseña de 3 dígitos.
       </div>
       <div style={{ color: '#334155', fontSize: 10, marginTop: 4 }}>
         {detalle.usaPdf ? 'Piezas: matriz de corte (PDF)' : 'Piezas: productos del pedido'}

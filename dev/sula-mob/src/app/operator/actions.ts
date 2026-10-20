@@ -2,8 +2,13 @@
 'use server'
 
 import { cookies } from 'next/headers'
-import bcrypt from 'bcryptjs'
 import { createClient } from '@/lib/supabase/server'
+import {
+  areasAbiertas,
+  cerrarAccesoArea,
+  tieneAccesoArea,
+  validarClaveArea,
+} from '@/lib/operador/acceso'
 
 type Supabase = Awaited<ReturnType<typeof createClient>>
 
@@ -13,6 +18,8 @@ export interface UsuarioSesion {
   correo: string
   username?: string
   rol: string
+  /** Solo en la sesión del operador compartido: identifica la tableta/celular */
+  dispositivo?: string
 }
 
 export async function getUsuarioActual(): Promise<UsuarioSesion | null> {
@@ -252,7 +259,7 @@ export async function getDetalleProyecto(proyectoId: string): Promise<DetallePro
 
   const supabase = await createClient()
 
-  const [proyRes, prodRes, areasRes, cierresRes, accesosRes, activo] = await Promise.all([
+  const [proyRes, prodRes, areasRes, cierresRes, abiertas, activo] = await Promise.all([
     supabase
       .from('proyectos')
       .select('id, codigo, nombre, cliente, progreso')
@@ -265,11 +272,7 @@ export async function getDetalleProyecto(proyectoId: string): Promise<DetallePro
       .order('created_at'),
     supabase.from('areas').select('id, nombre, peso').eq('activo', true).order('orden', { ascending: true }),
     supabase.from('area_cierres').select('area_id').eq('proyecto_id', proyectoId),
-    supabase
-      .from('area_accesos')
-      .select('area_id')
-      .eq('operador_id', usuario.id)
-      .gt('expira_at', ahoraISO()),
+    areasAbiertas(supabase, usuario),
     buscarActivo(supabase, usuario.id),
   ])
 
@@ -299,7 +302,6 @@ export async function getDetalleProyecto(proyectoId: string): Promise<DetallePro
   filas.forEach((f) => porClave.set(`${f.producto_id}|${f.area_id}`, f))
 
   const cerradas = new Set((cierresRes.data ?? []).map((c) => c.area_id as string))
-  const abiertas = new Set((accesosRes.data ?? []).map((a) => a.area_id as string))
   if (activo) abiertas.add(activo.areaId)
 
   const areas: AreaProyecto[] = (areasRes.data ?? []).map((area) => {
@@ -344,22 +346,10 @@ export async function getDetalleProyecto(proyectoId: string): Promise<DetallePro
 /*  Contraseña de área                                                 */
 /* ------------------------------------------------------------------ */
 
-const MAX_INTENTOS = 5
-const MINUTOS_BLOQUEO = 5
-const HORAS_MAXIMAS_DESBLOQUEO = 12
+async function tieneAcceso(supabase: Supabase, usuario: UsuarioSesion, areaId: string) {
+  if (await tieneAccesoArea(supabase, usuario, areaId)) return true
 
-async function tieneAcceso(supabase: Supabase, usuarioId: string, areaId: string) {
-  const { data } = await supabase
-    .from('area_accesos')
-    .select('area_id')
-    .eq('operador_id', usuarioId)
-    .eq('area_id', areaId)
-    .gt('expira_at', ahoraISO())
-    .maybeSingle()
-
-  if (data) return true
-
-  const activo = await buscarActivo(supabase, usuarioId)
+  const activo = await buscarActivo(supabase, usuario.id)
   return activo?.areaId === areaId
 }
 
@@ -367,83 +357,9 @@ export async function desbloquearArea(areaId: string, pin: string): Promise<Resu
   const usuario = await getUsuarioActual()
   if (!usuario) return { error: 'No autenticado' }
 
-  const clave = pin.trim()
-  if (!clave) return { error: 'Escribe la contraseña del área.' }
-
   const supabase = await createClient()
-
-  const { data: area } = await supabase
-    .from('areas')
-    .select('id, pin_hash')
-    .eq('id', areaId)
-    .maybeSingle()
-
-  if (!area) return { error: 'No se encontró el área.' }
-  if (!area.pin_hash) {
-    return { error: 'Esta área todavía no tiene contraseña. Avisa al administrador.' }
-  }
-
-  const { data: intento } = await supabase
-    .from('area_intentos')
-    .select('fallidos, bloqueado_hasta')
-    .eq('operador_id', usuario.id)
-    .eq('area_id', areaId)
-    .maybeSingle()
-
-  if (intento?.bloqueado_hasta && new Date(intento.bloqueado_hasta as string) > new Date()) {
-    const minutos = Math.ceil(
-      (new Date(intento.bloqueado_hasta as string).getTime() - Date.now()) / 60000
-    )
-    return { error: `Demasiados intentos. Intenta de nuevo en ${minutos} min.` }
-  }
-
-  const hash = (area.pin_hash as string).replace(/^\$2a\$/, '$2b$')
-  const correcta = await bcrypt.compare(clave, hash)
-
-  if (!correcta) {
-    const fallidos = ((intento?.fallidos as number | null) ?? 0) + 1
-    const bloquear = fallidos >= MAX_INTENTOS
-
-    await supabase.from('area_intentos').upsert(
-      {
-        operador_id: usuario.id,
-        area_id: areaId,
-        fallidos: bloquear ? 0 : fallidos,
-        bloqueado_hasta: bloquear
-          ? new Date(Date.now() + MINUTOS_BLOQUEO * 60000).toISOString()
-          : null,
-      },
-      { onConflict: 'operador_id,area_id' }
-    )
-
-    return {
-      error: bloquear
-        ? `Demasiados intentos. Intenta de nuevo en ${MINUTOS_BLOQUEO} min.`
-        : 'Contraseña incorrecta.',
-    }
-  }
-
-  await supabase
-    .from('area_intentos')
-    .delete()
-    .eq('operador_id', usuario.id)
-    .eq('area_id', areaId)
-
-  const { error } = await supabase.from('area_accesos').upsert(
-    {
-      operador_id: usuario.id,
-      area_id: areaId,
-      expira_at: new Date(Date.now() + HORAS_MAXIMAS_DESBLOQUEO * 3600000).toISOString(),
-    },
-    { onConflict: 'operador_id,area_id' }
-  )
-
-  if (error) {
-    console.error('Error al desbloquear:', error)
-    return { error: 'No se pudo desbloquear el área.' }
-  }
-
-  return { success: true }
+  const { error } = await validarClaveArea(supabase, usuario, areaId, pin)
+  return error ? { error } : { success: true }
 }
 
 export async function bloquearArea(areaId: string): Promise<Resultado> {
@@ -457,11 +373,7 @@ export async function bloquearArea(areaId: string): Promise<Resultado> {
     return { error: 'Termina primero el registro que tienes en producción.' }
   }
 
-  await supabase
-    .from('area_accesos')
-    .delete()
-    .eq('operador_id', usuario.id)
-    .eq('area_id', areaId)
+  await cerrarAccesoArea(supabase, usuario, areaId)
 
   return { success: true }
 }
@@ -649,7 +561,7 @@ export async function iniciarProduccion(params: IniciarProduccionParams): Promis
 
   const supabase = await createClient()
 
-  if (!(await tieneAcceso(supabase, usuario.id, params.areaId))) {
+  if (!(await tieneAcceso(supabase, usuario, params.areaId))) {
     return { error: 'Esta área está bloqueada. Escribe su contraseña para entrar.' }
   }
 
@@ -770,11 +682,7 @@ export async function terminarProduccion(avanceId: string, piezas: number): Prom
   // Si el área llegó a su meta, queda abierta para que marques "Área terminada".
   // Si todavía faltan piezas, se bloquea otra vez.
   if (!completa) {
-    await supabase
-      .from('area_accesos')
-      .delete()
-      .eq('operador_id', usuario.id)
-      .eq('area_id', avance.area_id)
+    await cerrarAccesoArea(supabase, usuario, avance.area_id as string)
   }
 
   return { success: true, areaCompleta: completa }
@@ -807,7 +715,7 @@ export async function marcarAreaTerminada(proyectoId: string, areaId: string): P
 
   const supabase = await createClient()
 
-  if (!(await tieneAcceso(supabase, usuario.id, areaId))) {
+  if (!(await tieneAcceso(supabase, usuario, areaId))) {
     return { error: 'Esta área está bloqueada. Escribe su contraseña para entrar.' }
   }
 
@@ -832,11 +740,7 @@ export async function marcarAreaTerminada(proyectoId: string, areaId: string): P
     return { error: 'No se pudo marcar el área como terminada.' }
   }
 
-  await supabase
-    .from('area_accesos')
-    .delete()
-    .eq('operador_id', usuario.id)
-    .eq('area_id', areaId)
+  await cerrarAccesoArea(supabase, usuario, areaId)
 
   const [areaRes, proyectoRes] = await Promise.all([
     supabase.from('areas').select('nombre').eq('id', areaId).maybeSingle(),

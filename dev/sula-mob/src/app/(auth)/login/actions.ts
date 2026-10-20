@@ -136,6 +136,71 @@ export async function loginAction(prevState: unknown, formData: FormData) {
   return { error: 'Credenciales incorrectas. Verifica tu usuario y contraseña.' }
 }
 
+// Usuario compartido de planta (se crea una vez con sql/operador_acceso_directo.sql)
+const USUARIO_OPERADOR = 'operador.planta'
+
+/**
+ * Botón "Operador" del login: entra sin correo ni contraseña.
+ * No recibe nada del navegador: siempre usa el usuario compartido y siempre con rol operador.
+ * La protección real es la clave de 3 dígitos de cada área.
+ */
+export async function entrarComoOperador(): Promise<{ error?: string; success?: boolean; redirectUrl?: string }> {
+  const cookieStore = await cookies()
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
+        },
+        setAll() {},
+      },
+    }
+  )
+
+  const { data: usuario, error } = await supabase
+    .from('usuarios')
+    .select('id, nombre, apellidos, correo, username, activo, roles ( nombre )')
+    .eq('username', USUARIO_OPERADOR)
+    .maybeSingle()
+
+  if (error) {
+    console.error('Error al buscar el usuario operador:', error)
+    return { error: 'No se pudo entrar. Intenta de nuevo.' }
+  }
+  if (!usuario || !usuario.activo) {
+    return { error: 'El acceso de operador no está configurado. Avisa al administrador.' }
+  }
+
+  // Candado extra: si alguien cambiara el rol de este usuario a admin, el botón deja de funcionar
+  const roleRelation = usuario.roles as unknown as RoleData | RoleData[] | null
+  const rol = (Array.isArray(roleRelation) ? roleRelation[0]?.nombre : roleRelation?.nombre)?.toLowerCase()
+  if (rol !== 'operador') {
+    console.error(`El usuario ${USUARIO_OPERADOR} no tiene rol operador (tiene "${rol}")`)
+    return { error: 'El acceso de operador no está configurado. Avisa al administrador.' }
+  }
+
+  cookieStore.set('sula_session', JSON.stringify({
+    id: usuario.id,
+    nombre: `${usuario.nombre} ${usuario.apellidos || ''}`.trim(),
+    correo: usuario.correo,
+    username: usuario.username,
+    rol: 'operador',
+    // Cada tableta/celular abre sus áreas por separado aunque todos usen el mismo usuario
+    dispositivo: crypto.randomUUID(),
+  }), {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+    maxAge: SIETE_DIAS,
+  })
+
+  return { success: true, redirectUrl: '/operator/avances' }
+}
+
 /** Cierra la sesión: borra la cookie (es httpOnly, el navegador no puede borrarla) y sale de Supabase Auth */
 export async function logoutAction() {
   const cookieStore = await cookies()
