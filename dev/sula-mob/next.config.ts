@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  reactCompiler: true,
+  // React Compiler solo en producción (Vercel): en `next dev` corre con Babel en procesos de Node
+  // aparte por cada componente y en PCs con poca memoria tumba el servidor de desarrollo
+  reactCompiler: process.env.NODE_ENV === 'production',
   // pdf-parse y @napi-rs/canvas son módulos nativos de Node.js
   // que NO deben ser bundleados por webpack — se cargan directo.
   serverExternalPackages: ['pdf-parse', '@napi-rs/canvas'],
