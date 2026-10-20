@@ -6,6 +6,7 @@ import { useRealtimeAvances } from '@/hooks/useRealtimeAvances'
 import { useConsultaPeriodica } from '@/hooks/useConsultaPeriodica'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
 import { marcarAreaTerminada } from '../../actions'
 import {
   entrarConClave,
@@ -13,13 +14,14 @@ import {
   getAreaOperador,
   getEvidenciaDia,
   getProyectoOperador,
+  prepararProyecto,
   guardarEvidenciaDia,
   iniciarPieza,
   listarEvidencias,
   pausarArea,
   reanudarArea,
   reanudarPieza,
-  reportarArea,
+  reportarPieza,
   salirArea,
   subirEvidenciaReporte,
   type AreaOperador,
@@ -31,31 +33,32 @@ import {
   type TrabajoEnCurso,
 } from '../pieza-actions'
 import { crearPdfDia, descargarPdfDia } from '../evidencia-pdf'
+import { MOTIVOS_PIEZA } from '@/lib/operador/areas'
+import { fuenteOperador } from '@/lib/operador/fuente'
 
 /* ------------------------------------------------------------------ */
 /*  Diseño (mismos colores del prototipo aprobado)                     */
 /* ------------------------------------------------------------------ */
 
-const card = '#10141f'
-const card2 = '#141927'
-const line = '#1e2433'
-const blue = '#2563eb'
-const bl = '#3b82f6'
-const green = '#10b981'
-const amber = '#f59e0b'
-const teal = '#14b8a6'
+const card = '#121a2b'
+const card2 = '#18223a'
+const line = '#26314a'
+const blue = '#2563ff'
+const bl = '#4f8cff'
+const green = '#22d39a'
+const amber = '#ffb020'
+const teal = '#2ee6c8'
+// Fondo de las tarjetas: degradado sutil para que se vean con volumen
+const fondoTarjeta = 'linear-gradient(180deg, #16203a 0%, #111929 100%)'
 
 const ZONA = 'America/Mexico_City'
 
-const MOTIVOS_ADMIN = [
-  'Falla de máquina',
-  'Falta de material',
-  'Falta de herramienta',
+// Motivos del reporte de una pieza (detiene su reloj y avisa al administrador)
+const MOTIVOS_REPORTE = [
+  ...MOTIVOS_PIEZA,
   'Material defectuoso',
   'Plano o medida con error',
   'Corte de energía',
-  'Falla de equipo compartido',
-  'Falta de material general',
   'Otro',
 ]
 const MOTIVOS_PAUSA_AREA = ['Comida', 'Junta', 'Limpieza', 'Cambio de herramienta']
@@ -96,7 +99,11 @@ function EstilosOperador() {
     <style>{`
       .op-wrap{width:100%;margin:0 auto;padding:0 2px 56px;box-sizing:border-box}
       .op-wrap *{box-sizing:border-box}
-      .op-wrap button{font-family:inherit;min-height:40px;touch-action:manipulation}
+      .op-wrap{letter-spacing:-.005em}
+      .op-wrap button{font-family:inherit;min-height:40px;touch-action:manipulation;transition:transform .08s ease,filter .15s ease,box-shadow .15s ease}
+      .op-wrap button:active:not(:disabled){transform:scale(.98)}
+      .op-wrap button:hover:not(:disabled){filter:brightness(1.08)}
+      .op-num{font-variant-numeric:tabular-nums;letter-spacing:.01em}
       .op-wrap input,.op-wrap textarea{font-family:inherit}
       .pz-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,460px),1fr));gap:14px}
       .ar-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,230px),1fr));gap:12px}
@@ -161,12 +168,14 @@ function IconoCandado({ abierto }: { abierto?: boolean }) {
 /* ------------------------------------------------------------------ */
 
 function Teclado({
+  area,
   error,
   fallos,
   validando,
   onCerrar,
   onEntrar,
 }: {
+  area: string | null
   error: string
   fallos: number
   validando: boolean
@@ -212,9 +221,12 @@ function Teclado({
           textAlign: 'center',
         }}
       >
-        <div style={{ color: '#fff', fontSize: 15, fontWeight: 700, marginBottom: 14 }}>
-          Contraseña de tu área
+        <div style={{ color: '#fff', fontSize: 15, fontWeight: 700, marginBottom: area ? 0 : 14 }}>
+          {area ? 'Contraseña del área' : 'Contraseña de tu área'}
         </div>
+        {area && (
+          <div style={{ color: '#94a3b8', fontSize: 13, marginTop: 2, marginBottom: 14 }}>{area}</div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'center', gap: 12, marginBottom: 12 }}>
           {[0, 1, 2].map((i) => (
@@ -292,8 +304,8 @@ function Teclado({
 function Estadistica({ etiqueta, valor, color }: { etiqueta: string; valor: number; color: string }) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase' }}>{etiqueta}</div>
-      <div style={{ fontSize: 22, fontWeight: 800, color }}>{valor}</div>
+      <div style={{ fontSize: 10.5, color: '#7d8cab', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700 }}>{etiqueta}</div>
+      <div className="op-num" style={{ fontSize: 26, fontWeight: 800, color, lineHeight: 1.15 }}>{valor}</div>
     </div>
   )
 }
@@ -321,6 +333,7 @@ function PiezaCard({
   onIniciar,
   onFinalizar,
   onReanudar,
+  onReportar,
 }: {
   p: PiezaOperador
   /** Diferencia entre el reloj del servidor y el del celular */
@@ -329,8 +342,43 @@ function PiezaCard({
   onIniciar: (id: string, tipo: TipoPieza) => void
   onFinalizar: (trabajoId: string, cantidad: number) => void
   onReanudar: (trabajoId: string) => void
+  /** Detiene el reloj SOLO de esta pieza y avisa al admin; se sigue con Reanudar */
+  onReportar: (trabajoId: string, motivo: string, nota: string, foto: Blob | null) => void
 }) {
   const [fin, setFin] = useState(false)
+  const [reporte, setReporte] = useState(false)
+  const [motivo, setMotivo] = useState('')
+  const [nota, setNota] = useState('')
+  // Foto de evidencia del problema (opcional): se comprime antes de subirla
+  const [foto, setFoto] = useState<Blob | null>(null)
+  const [vistaFoto, setVistaFoto] = useState('')
+  const [falloFoto, setFalloFoto] = useState('')
+
+  useEffect(() => {
+    return () => {
+      if (vistaFoto) URL.revokeObjectURL(vistaFoto)
+    }
+  }, [vistaFoto])
+
+  async function elegirFoto(archivo: File | undefined) {
+    if (!archivo) return
+    setFalloFoto('')
+    try {
+      const b = await comprimirFoto(archivo)
+      setFoto(b)
+      setVistaFoto(URL.createObjectURL(b))
+    } catch {
+      setFalloFoto('No se pudo preparar la foto. Intenta con otra.')
+    }
+  }
+
+  function limpiarReporte() {
+    setMotivo('')
+    setNota('')
+    setFoto(null)
+    setVistaFoto('')
+    setFalloFoto('')
+  }
   const [q, setQ] = useState('')
   const [congelado, setCongelado] = useState<number | null>(null)
 
@@ -367,34 +415,47 @@ function PiezaCard({
     background: fondo,
     color,
     border: 'none',
-    borderRadius: 10,
-    padding: '13px 0',
+    borderRadius: 12,
+    padding: '14px 0',
     fontSize: 16,
     fontWeight: 800,
+    letterSpacing: '.01em',
     cursor: 'pointer',
+    boxShadow: fondo.startsWith('#') ? `0 8px 20px -10px ${fondo}` : 'none',
   })
+  // Franja de color según el estado: azul = por iniciar, verde = trabajando, ámbar = en pausa
+  const colorEstado = pausaReporte || pausaArea ? amber : corriendo ? teal : bl
 
   return (
     <div
       style={{
-        background: card,
-        borderRadius: 16,
-        padding: '16px 18px',
-        border: `1.5px solid ${pausaReporte || pausaArea ? amber : corriendo ? bl : line}`,
+        background: fondoTarjeta,
+        borderRadius: 18,
+        padding: '18px 20px',
+        border: `1px solid ${t ? `${colorEstado}66` : line}`,
+        borderLeft: `5px solid ${colorEstado}`,
+        boxShadow: corriendo
+          ? `0 14px 34px -16px ${teal}88`
+          : pausaReporte || pausaArea
+            ? `0 14px 34px -16px ${amber}77`
+            : '0 10px 28px -18px #000',
       }}
     >
       <div className="pz-top">
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="pz-nombre" style={{ color: '#fff', fontSize: 17, fontWeight: 800, lineHeight: 1.3 }}>{p.nombre}</span>
+            <span className="pz-nombre" style={{ color: '#fff', fontSize: 19, fontWeight: 800, lineHeight: 1.25, letterSpacing: '-.01em' }}>{p.nombre}</span>
             {p.modulo && (
               <span
                 style={{
-                  color: '#94a3b8',
+                  color: '#a9c2ff',
                   fontSize: 10.5,
-                  background: card2,
-                  padding: '2px 8px',
-                  borderRadius: 6,
+                  fontWeight: 700,
+                  letterSpacing: '.04em',
+                  background: `${bl}1f`,
+                  border: `1px solid ${bl}33`,
+                  padding: '3px 9px',
+                  borderRadius: 999,
                 }}
               >
                 {p.modulo}
@@ -402,12 +463,12 @@ function PiezaCard({
             )}
           </div>
           {p.material && (
-            <div style={{ color: '#cbd5e1', fontSize: 13.5, marginTop: 6 }}>{p.material}</div>
+            <div style={{ color: '#dbe4f5', fontSize: 14, fontWeight: 600, marginTop: 8 }}>{p.material}</div>
           )}
           {medidasYNotas && (
-            <div style={{ color: '#7c8aa5', fontSize: 13, marginTop: 2 }}>{medidasYNotas}</div>
+            <div style={{ color: '#8fa0bf', fontSize: 13, marginTop: 3 }}>{medidasYNotas}</div>
           )}
-          <div style={{ display: 'flex', gap: 26, marginTop: 12 }}>
+          <div style={{ display: 'flex', gap: 30, marginTop: 14 }}>
             <Estadistica etiqueta="Meta" valor={p.meta} color="#e2e8f0" />
             <Estadistica etiqueta="Hechas" valor={p.hechas} color={teal} />
             <Estadistica etiqueta="Faltan" valor={p.faltan} color={p.faltan ? amber : green} />
@@ -417,11 +478,16 @@ function PiezaCard({
         <div className="pz-side">
           {t && corriendo && (
             <span
+              className="op-num"
               style={{
-                color: bl,
-                fontSize: 24,
+                color: teal,
+                fontSize: 26,
                 fontWeight: 800,
-                fontVariantNumeric: 'tabular-nums',
+                background: `${teal}14`,
+                border: `1px solid ${teal}55`,
+                borderRadius: 999,
+                padding: '6px 16px',
+                textShadow: `0 0 18px ${teal}66`,
               }}
             >
               {reloj(seg)}
@@ -461,6 +527,23 @@ function PiezaCard({
           {t && corriendo && (
             <button onClick={abrirFinalizar} style={boton('#fff', '#0a0e1a')}>
               Finalizar
+            </button>
+          )}
+
+          {t && corriendo && !fin && (
+            <button
+              onClick={() => {
+                limpiarReporte()
+                setReporte((v) => !v)
+              }}
+              style={{
+                ...boton('none', amber),
+                border: `1px solid ${amber}66`,
+                padding: '10px 0',
+                fontSize: 13,
+              }}
+            >
+              ⚠ Reportar problema
             </button>
           )}
 
@@ -552,12 +635,126 @@ function PiezaCard({
         </div>
       )}
 
+      {reporte && t && corriendo && (
+        <div style={{ marginTop: 14, borderTop: `1px solid ${line}`, paddingTop: 12 }}>
+          <div style={{ color: '#fff', fontSize: 13.5, fontWeight: 800, marginBottom: 8 }}>
+            ¿Qué pasó? <span style={{ color: '#94a3b8', fontWeight: 400 }}>Se detiene el reloj de esta pieza y se avisa al administrador.</span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {MOTIVOS_REPORTE.map((m) => (
+              <button
+                key={m}
+                onClick={() => setMotivo(m)}
+                style={{
+                  background: motivo === m ? '#3a2a07' : card2,
+                  color: motivo === m ? amber : '#cbd5e1',
+                  border: `1px solid ${motivo === m ? amber : line}`,
+                  borderRadius: 10,
+                  padding: '11px 14px',
+                  fontSize: 13.5,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          <input
+            value={nota}
+            onChange={(e) => setNota(e.target.value)}
+            placeholder={motivo === 'Otro' ? 'Escribe qué pasó (obligatorio)' : 'Nota (opcional)'}
+            style={{
+              width: '100%',
+              marginTop: 10,
+              background: '#08090d',
+              border: `1px solid ${line}`,
+              borderRadius: 10,
+              padding: '11px 12px',
+              fontSize: 14,
+              color: '#fff',
+            }}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
+            <label
+              style={{
+                background: '#0f1b3d',
+                color: bl,
+                border: `1px solid ${bl}66`,
+                borderRadius: 10,
+                padding: '11px 16px',
+                fontSize: 13.5,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              📷 {foto ? 'Cambiar foto' : 'Tomar foto'}
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={(e) => {
+                  void elegirFoto(e.target.files?.[0])
+                  e.target.value = ''
+                }}
+                style={{ display: 'none' }}
+              />
+            </label>
+            {vistaFoto && (
+              <>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={vistaFoto} alt="Evidencia" style={{ height: 52, borderRadius: 8, border: `1px solid ${line}` }} />
+                <button
+                  onClick={() => {
+                    setFoto(null)
+                    setVistaFoto('')
+                  }}
+                  style={{ background: 'none', color: '#94a3b8', border: `1px solid ${line}`, borderRadius: 10, padding: '8px 12px', fontSize: 12.5, cursor: 'pointer' }}
+                >
+                  Quitar
+                </button>
+              </>
+            )}
+            {falloFoto && <span style={{ color: '#fca5a5', fontSize: 12 }}>{falloFoto}</span>}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button
+              onClick={() => {
+                onReportar(t.id, motivo, nota.trim(), foto)
+                setReporte(false)
+                limpiarReporte()
+              }}
+              disabled={!motivo || (motivo === 'Otro' && !nota.trim()) || ocupado === `reportar|${t.id}`}
+              style={{
+                ...boton(amber, '#2a1a00'),
+                flex: 1,
+                opacity: !motivo || (motivo === 'Otro' && !nota.trim()) ? 0.45 : 1,
+              }}
+            >
+              ⏸ Detener reloj y avisar
+            </button>
+            <button
+              onClick={() => setReporte(false)}
+              style={{
+                background: 'none',
+                color: '#94a3b8',
+                border: `1px solid ${line}`,
+                borderRadius: 10,
+                padding: '0 16px',
+                cursor: 'pointer',
+              }}
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 /* ------------------------------------------------------------------ */
-/*  Reporte al administrador (motivo, descripcion y foto)              */
+/*  Foto de evidencia de un reporte (se comprime antes de subirla)     */
 /* ------------------------------------------------------------------ */
 
 // Reduce la foto para que suba rapido aunque haya mala señal
@@ -584,177 +781,274 @@ async function comprimirFoto(archivo: File): Promise<Blob> {
   }
 }
 
-function PanelAdmin({
-  enviando,
-  onEnviar,
-}: {
-  enviando: boolean
-  onEnviar: (motivo: string, nota: string, foto: Blob | null) => void
-}) {
-  const [motivo, setMotivo] = useState('')
-  const [nota, setNota] = useState('')
-  const [foto, setFoto] = useState<Blob | null>(null)
-  const [vistaFoto, setVistaFoto] = useState('')
-  const [fallo, setFallo] = useState('')
-
-  useEffect(() => {
-    return () => {
-      if (vistaFoto) URL.revokeObjectURL(vistaFoto)
-    }
-  }, [vistaFoto])
-
-  async function elegirFoto(archivo: File | undefined) {
-    if (!archivo) return
-    setFallo('')
-    try {
-      const b = await comprimirFoto(archivo)
-      setFoto(b)
-      setVistaFoto(URL.createObjectURL(b))
-    } catch {
-      setFallo('No se pudo preparar la foto. Intenta con otra.')
-    }
-  }
-
-  function quitarFoto() {
-    setFoto(null)
-    setVistaFoto('')
-  }
-
-  const falta = motivo === '' ? 'Elige qué pasó.' : motivo === 'Otro' && !nota.trim() ? 'Describe qué pasó.' : ''
-
-  const chip = (activo: boolean): CSSProperties => ({
-    ...chipAmber,
-    padding: '9px 15px',
-    fontSize: 13.5,
-    background: activo ? amber : '#1f1708',
-    color: activo ? '#1a1204' : amber,
-    fontWeight: activo ? 800 : 500,
-  })
-
-  return (
-    <div
-      style={{
-        background: card,
-        border: `1px solid ${line}`,
-        borderRadius: 14,
-        padding: 14,
-        marginBottom: 12,
-      }}
-    >
-      <div style={{ color: '#94a3b8', fontSize: 12.5, marginBottom: 10 }}>
-        Le llega al administrador y se detienen los relojes del área. Cuando se resuelva, toca &ldquo;Reanudar área&rdquo;.
-      </div>
-
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {MOTIVOS_ADMIN.map((m) => (
-          <button key={m} onClick={() => setMotivo(m)} style={chip(motivo === m)}>
-            {m}
-          </button>
-        ))}
-      </div>
-
-      <textarea
-        value={nota}
-        onChange={(e) => setNota(e.target.value)}
-        rows={3}
-        placeholder={
-          motivo === 'Otro' ? 'Describe qué pasó (obligatorio)' : 'Describe el problema (opcional)'
-        }
-        style={{
-          width: '100%',
-          marginTop: 12,
-          background: '#08090d',
-          border: `1px solid ${motivo === 'Otro' && !nota.trim() ? amber : line}`,
-          borderRadius: 10,
-          padding: '10px 12px',
-          fontSize: 15,
-          color: '#fff',
-          resize: 'vertical',
-        }}
-      />
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
-        <label
-          style={{
-            background: '#0f1b3d',
-            color: bl,
-            border: `1px solid ${bl}66`,
-            borderRadius: 10,
-            padding: '10px 16px',
-            fontSize: 13.5,
-            fontWeight: 700,
-            cursor: 'pointer',
-          }}
-        >
-          📷 {foto ? 'Cambiar foto' : 'Tomar foto'}
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={(e) => {
-              void elegirFoto(e.target.files?.[0])
-              e.target.value = ''
-            }}
-            style={{ display: 'none' }}
-          />
-        </label>
-
-        {vistaFoto && (
-          <>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={vistaFoto}
-              alt="Evidencia"
-              style={{ height: 56, borderRadius: 8, border: `1px solid ${line}` }}
-            />
-            <button
-              onClick={quitarFoto}
-              style={{
-                background: 'none',
-                color: '#94a3b8',
-                border: `1px solid ${line}`,
-                borderRadius: 10,
-                padding: '8px 12px',
-                fontSize: 12.5,
-                cursor: 'pointer',
-              }}
-            >
-              Quitar
-            </button>
-          </>
-        )}
-      </div>
-
-      {fallo && <div style={{ color: '#f87171', fontSize: 12.5, marginTop: 8 }}>{fallo}</div>}
-
-      <button
-        onClick={() => onEnviar(motivo, nota, foto)}
-        disabled={enviando || falta !== ''}
-        style={{
-          width: '100%',
-          marginTop: 14,
-          background: falta ? '#2a2f3d' : amber,
-          color: falta ? '#64748b' : '#1a1204',
-          border: 'none',
-          borderRadius: 11,
-          padding: '13px 0',
-          fontSize: 15,
-          fontWeight: 800,
-          cursor: falta ? 'default' : 'pointer',
-          opacity: enviando ? 0.6 : 1,
-        }}
-      >
-        {enviando ? 'Enviando...' : falta ? falta : 'Enviar reporte al administrador'}
-      </button>
-    </div>
-  )
-}
-
 /* ------------------------------------------------------------------ */
 /*  Pantalla                                                           */
 /* ------------------------------------------------------------------ */
 
-type Panel = 'pausa' | 'admin' | null
+type Panel = 'pausa' | null
+
+/* ------------------------------------------------------------------ */
+/*  Piezas por pasos (proyectos por pieza: despiece del plano o PDF)   */
+/* ------------------------------------------------------------------ */
+
+/** "ESCRIT. MB-01 ×3 › FALDON ARMADO" → producto y subensamble */
+function partirModulo(modulo: string | null) {
+  const texto = modulo ?? ''
+  const i = texto.indexOf(' › ')
+  return i < 0
+    ? { producto: texto || 'Piezas', subensamble: '' }
+    : { producto: texto.slice(0, i), subensamble: texto.slice(i + 3) }
+}
+
+function Titulo({ children, color = '#64748b' }: { children: React.ReactNode; color?: string }) {
+  return (
+    <div style={{ color, fontSize: 11, letterSpacing: '.08em', fontWeight: 800, margin: '18px 0 8px' }}>{children}</div>
+  )
+}
+
+function PiezasPorPasos({
+  piezas,
+  offset,
+  ocupado,
+  onIniciar,
+  onFinalizar,
+  onReanudar,
+  onReportar,
+}: {
+  piezas: PiezaOperador[]
+  offset: number
+  ocupado: string | null
+  onIniciar: (id: string, tipo: TipoPieza) => void
+  onFinalizar: (trabajoId: string, cantidad: number) => void
+  onReanudar: (trabajoId: string) => void
+  onReportar: (trabajoId: string, motivo: string, nota: string, foto: Blob | null) => void
+}) {
+  // La que el operador tocó en la lista; si no, la primera pendiente en el orden del plano
+  const [elegida, setElegida] = useState<string | null>(null)
+  // "Dejar para después": se van al final de la fila
+  const [saltadas, setSaltadas] = useState<string[]>([])
+  const [abiertos, setAbiertos] = useState<Record<string, boolean>>({})
+  const [verTerminadas, setVerTerminadas] = useState(false)
+
+  const enCurso = piezas.filter((p) => p.trabajo)
+  const libres = piezas.filter((p) => !p.trabajo && p.faltan > 0)
+  const enOrden = [...libres.filter((p) => !saltadas.includes(p.id)), ...libres.filter((p) => saltadas.includes(p.id))]
+  const sigue = enOrden.find((p) => p.id === elegida) ?? enOrden[0] ?? null
+  const resto = enOrden.filter((p) => p !== sigue)
+  const terminadas = piezas.filter((p) => p.faltan === 0 && !p.trabajo)
+
+  // Pendientes por producto → subensamble, en el orden del plano
+  const grupos: { producto: string; subs: { nombre: string; piezas: PiezaOperador[] }[]; total: number }[] = []
+  for (const p of resto) {
+    const { producto, subensamble } = partirModulo(p.modulo)
+    let g = grupos.find((x) => x.producto === producto)
+    if (!g) grupos.push((g = { producto, subs: [], total: 0 }))
+    let s = g.subs.find((x) => x.nombre === subensamble)
+    if (!s) g.subs.push((s = { nombre: subensamble, piezas: [] }))
+    s.piezas.push(p)
+    g.total++
+  }
+  const productoDeSigue = sigue ? partirModulo(sigue.modulo).producto : null
+  const abierto = (producto: string) => abiertos[producto] ?? producto === productoDeSigue
+
+  const tarjeta = (p: PiezaOperador) => (
+    <PiezaCard key={p.id} p={p} offset={offset} ocupado={ocupado} onIniciar={onIniciar} onFinalizar={onFinalizar} onReanudar={onReanudar} onReportar={onReportar} />
+  )
+
+  if (piezas.length === 0) {
+    return (
+      <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', padding: '34px 0' }}>
+        Todavía no hay piezas cargadas para esta área en este proyecto.
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {enCurso.length > 0 && (
+        <>
+          <Titulo color={teal}>● EN CURSO · {enCurso.length}</Titulo>
+          <div className="pz-grid">{enCurso.map(tarjeta)}</div>
+        </>
+      )}
+
+      {sigue ? (
+        <>
+          <Titulo color={bl}>{enCurso.length > 0 ? 'LA QUE SIGUE' : 'AHORA'}</Titulo>
+          <div style={{ border: `1.5px solid ${bl}66`, borderRadius: 18 }}>{tarjeta(sigue)}</div>
+          {resto.length > 0 && (
+            <button
+              onClick={() => {
+                setSaltadas((prev) => [...prev.filter((id) => id !== sigue.id), sigue.id])
+                setElegida(null)
+              }}
+              style={{ background: 'none', border: 'none', color: '#64748b', fontSize: 12.5, padding: '10px 2px', cursor: 'pointer' }}
+            >
+              ⏭ Dejar para después (falta material, máquina ocupada…)
+            </button>
+          )}
+        </>
+      ) : (
+        enCurso.length === 0 && (
+          <div
+            style={{
+              border: `1.5px solid ${green}66`,
+              background: '#0a2e24',
+              color: '#6ee7b7',
+              borderRadius: 14,
+              padding: '22px 16px',
+              textAlign: 'center',
+              fontWeight: 800,
+              marginTop: 12,
+            }}
+          >
+            ✓ Todas las piezas de esta área están completas
+          </div>
+        )
+      )}
+
+      {grupos.length > 0 && (
+        <>
+          <Titulo>PENDIENTES · {resto.length}</Titulo>
+          <div style={{ display: 'grid', gap: 8 }}>
+            {grupos.map((g) => {
+              const abre = abierto(g.producto)
+              return (
+                <div key={g.producto} style={{ background: card, border: `1px solid ${line}`, borderRadius: 14, overflow: 'hidden' }}>
+                  <button
+                    onClick={() => setAbiertos((prev) => ({ ...prev, [g.producto]: !abre }))}
+                    aria-expanded={abre}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      background: 'none',
+                      border: 'none',
+                      color: '#fff',
+                      padding: '13px 15px',
+                      minHeight: 52,
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <span style={{ color: '#64748b', width: 14 }}>{abre ? '▾' : '▸'}</span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 14.5, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {g.producto}
+                    </span>
+                    <span style={{ color: amber, fontSize: 13, fontWeight: 800 }}>{g.total}</span>
+                  </button>
+
+                  {abre &&
+                    g.subs.map((s) => (
+                      <div key={s.nombre || '—'} style={{ borderTop: `1px solid ${line}` }}>
+                        {s.nombre && (
+                          <div style={{ color: '#64748b', fontSize: 10.5, fontWeight: 800, letterSpacing: '.07em', padding: '10px 15px 4px' }}>
+                            {s.nombre.replace(' — ', ' › ').toUpperCase()}
+                          </div>
+                        )}
+                        {s.piezas.map((p) => (
+                          <button
+                            key={p.id}
+                            onClick={() => {
+                              setElegida(p.id)
+                              window.scrollTo({ top: 0, behavior: 'smooth' })
+                            }}
+                            style={{
+                              width: '100%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                              background: 'none',
+                              border: 'none',
+                              borderTop: `1px solid ${line}55`,
+                              padding: '10px 15px',
+                              minHeight: 50,
+                              cursor: 'pointer',
+                              textAlign: 'left',
+                            }}
+                          >
+                            <span style={{ flex: 1, minWidth: 0 }}>
+                              <span style={{ display: 'block', color: '#e2e8f0', fontSize: 14, fontWeight: 700 }}>{p.nombre}</span>
+                              {p.medidas && <span style={{ display: 'block', color: '#7dd3fc', fontSize: 12, fontFamily: 'monospace' }}>{p.medidas}</span>}
+                            </span>
+                            {saltadas.includes(p.id) && <span style={{ color: '#64748b', fontSize: 11 }}>⏭</span>}
+                            <span style={{ color: amber, fontSize: 14, fontWeight: 800 }}>{p.faltan}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      {terminadas.length > 0 && (
+        <div style={{ background: card, border: `1px solid ${line}`, borderRadius: 14, marginTop: 14, overflow: 'hidden' }}>
+          <button
+            onClick={() => setVerTerminadas((v) => !v)}
+            aria-expanded={verTerminadas}
+            style={{
+              width: '100%',
+              background: 'none',
+              border: 'none',
+              color: '#6ee7b7',
+              padding: '13px 15px',
+              minHeight: 50,
+              textAlign: 'left',
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: '.08em',
+              cursor: 'pointer',
+            }}
+          >
+            {verTerminadas ? '▾' : '▸'} TERMINADAS · {terminadas.length}
+          </button>
+          {verTerminadas &&
+            terminadas.map((p) => (
+              <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'center', borderTop: `1px solid ${line}`, padding: '9px 15px' }}>
+                <span style={{ color: green }}>✓</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', color: '#64748b', fontSize: 11 }}>{p.modulo}</span>
+                  <span style={{ display: 'block', color: '#cbd5e1', fontSize: 13.5 }}>{p.nombre}</span>
+                </span>
+                <span style={{ color: '#64748b', fontSize: 12.5, fontFamily: 'monospace' }}>{p.meta}</span>
+              </div>
+            ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Anillo con el % de avance general del proyecto */
+function AnilloAvance({ pct }: { pct: number }) {
+  const r = 26
+  const c = 2 * Math.PI * r
+  const color = pct >= 100 ? green : teal
+  return (
+    <div className="relative h-[76px] w-[76px] flex-shrink-0">
+      <svg viewBox="0 0 64 64" className="h-full w-full -rotate-90" aria-hidden="true">
+        <circle cx="32" cy="32" r={r} fill="none" stroke="#26314a" strokeWidth="7" />
+        <circle
+          cx="32"
+          cy="32"
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth="7"
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - Math.min(100, Math.max(0, pct)) / 100)}
+          style={{ filter: `drop-shadow(0 0 6px ${color}88)` }}
+        />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center text-base font-extrabold tabular-nums text-white">{pct}%</span>
+    </div>
+  )
+}
 
 export default function ProyectoPage() {
   const params = useParams<{ proyectoId: string }>()
@@ -771,7 +1065,8 @@ export default function ProyectoPage() {
   const [aviso, setAviso] = useState('')
   const [ocupado, setOcupado] = useState<string | null>(null)
 
-  const [teclado, setTeclado] = useState(false)
+  // null = cerrado; areaId null = botón "Entrar a mi área" (la clave dice cuál es el área)
+  const [teclado, setTeclado] = useState<{ areaId: string | null; nombre: string | null } | null>(null)
   const [errorClave, setErrorClave] = useState('')
   const [fallos, setFallos] = useState(0)
   const [validando, setValidando] = useState(false)
@@ -779,6 +1074,7 @@ export default function ProyectoPage() {
 
   const [fechaPdf, setFechaPdf] = useState(hoyMexico)
   const [historial, setHistorial] = useState<EvidenciaGuardada[]>([])
+
 
   const cargar = useCallback(
     async (area: string | null) => {
@@ -805,8 +1101,23 @@ export default function ProyectoPage() {
     [proyectoId]
   )
 
-  // carga inicial y actualizacion cada 15 s con la pantalla a la vista (asi ves lo que hacen otros operadores)
-  useConsultaPeriodica(() => cargar(areaId), 15000, { recargarCon: areaId })
+  // Al abrir el proyecto se reparten por área las piezas del despiece de sus planos (una vez)
+  const [preparado, setPreparado] = useState(false)
+  useEffect(() => {
+    let vigente = true
+    prepararProyecto(proyectoId).finally(() => {
+      if (vigente) setPreparado(true)
+    })
+    return () => {
+      vigente = false
+    }
+  }, [proyectoId])
+
+  // carga inicial y actualizacion cada 15 s con la pantalla a la vista (asi ves lo que hacen otros operadores);
+  // espera a que se repartan las piezas del despiece
+  useConsultaPeriodica(() => (preparado ? cargar(areaId) : undefined), 15000, {
+    recargarCon: `${areaId}|${preparado}`,
+  })
 
   // En vivo: además de cada 15 s, se recarga al instante cuando cambia el avance de este proyecto
   useRealtimeAvances(() => void cargar(areaId), { proyectoId })
@@ -840,9 +1151,10 @@ export default function ProyectoPage() {
   /* ---- Entrar / salir ---- */
 
   async function enviarClave(clave: string) {
+    if (!teclado) return
     setValidando(true)
     setErrorClave('')
-    const r = await entrarConClave(clave)
+    const r = await entrarConClave(clave, teclado.areaId ?? undefined)
     setValidando(false)
 
     if (r.error || !r.areaId) {
@@ -851,10 +1163,10 @@ export default function ProyectoPage() {
       return
     }
 
-    setTeclado(false)
     setError('')
     setPanel(null)
     setAreaId(r.areaId)
+    setTeclado(null)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -868,21 +1180,24 @@ export default function ProyectoPage() {
     await cargar(null)
   }
 
-  function abrirTeclado() {
+  function abrirTeclado(areaId: string | null, nombre: string | null) {
     setError('')
     setAviso('')
     setErrorClave('')
     setFallos(0)
-    setTeclado(true)
+    setTeclado({ areaId, nombre })
   }
 
+  // Área abierta en este dispositivo: entra directo. Bloqueada: pide su clave de 3 dígitos
   function tocarArea(a: AreaOperador) {
     if (a.cerrada) return
     if (a.desbloqueada) {
       setError('')
       setAviso('')
       setAreaId(a.areaId)
+      return
     }
+    abrirTeclado(a.areaId, a.nombre)
   }
 
   /* ---- Piezas ---- */
@@ -902,6 +1217,28 @@ export default function ProyectoPage() {
 
   async function reanudar(trabajoId: string) {
     await ejecutar(`reanudar|${trabajoId}`, () => reanudarPieza(trabajoId), '▶ Reloj reanudado')
+  }
+
+  // Detiene solo el reloj de esa pieza; el tiempo perdido se guarda al tocar Reanudar
+  async function reportar(trabajoId: string, motivo: string, nota: string, foto: Blob | null) {
+    let evidenciaUrl: string | undefined
+    if (foto) {
+      setOcupado(`reportar|${trabajoId}`)
+      const fd = new FormData()
+      fd.append('foto', foto, 'evidencia.jpg')
+      const r = await subirEvidenciaReporte(fd)
+      if (r.error || !r.url) {
+        setOcupado(null)
+        setError(r.error ?? 'No se pudo subir la foto.')
+        return
+      }
+      evidenciaUrl = r.url
+    }
+    await ejecutar(
+      `reportar|${trabajoId}`,
+      () => reportarPieza(trabajoId, motivo, nota, evidenciaUrl),
+      '⏸ Reloj detenido y se avisó al administrador. Toca Reanudar cuando se resuelva.'
+    )
   }
 
   /* ---- Area ---- */
@@ -928,28 +1265,6 @@ export default function ProyectoPage() {
     }
   }
 
-  async function enviarAdmin(motivo: string, nota: string, foto: Blob | null) {
-    if (!areaId) return
-    let evidenciaUrl: string | undefined
-    if (foto) {
-      setOcupado('admin')
-      const fd = new FormData()
-      fd.append('foto', foto, 'evidencia.jpg')
-      const r = await subirEvidenciaReporte(fd)
-      if (r.error || !r.url) {
-        setOcupado(null)
-        setError(r.error ?? 'No se pudo subir la foto.')
-        return
-      }
-      evidenciaUrl = r.url
-    }
-    const ok = await ejecutar(
-      'admin',
-      () => reportarArea(proyectoId, areaId, motivo, nota, evidenciaUrl),
-      `⏸ Administrador notificado: ${motivo}. Los relojes están detenidos; toca "Reanudar área" cuando se resuelva.`
-    )
-    if (ok) setPanel(null)
-  }
 
   async function reanudarElArea() {
     if (!areaId) return
@@ -1001,10 +1316,17 @@ export default function ProyectoPage() {
       const fecha = hoyMexico()
       const r = await getEvidenciaDia(proyectoId, fecha)
       if (r.error || !r.data) throw new Error(r.error ?? 'No se pudo preparar la evidencia.')
-      const { blob, nombre } = await crearPdfDia(r.data)
-      const fd = new FormData()
-      fd.append('pdf', blob, nombre)
-      const g = await guardarEvidenciaDia(proyectoId, fecha, fd)
+      const { blob } = await crearPdfDia(r.data)
+      if (blob.size > 20 * 1024 * 1024) throw new Error('El PDF es demasiado pesado.')
+
+      // Se sube directo a Storage: las acciones de servidor solo aceptan 1 MB
+      const ruta = `evidencia-dia/${proyectoId}/${fecha}-${Date.now()}.pdf`
+      const { error: errorSubida } = await supabase.storage
+        .from('evidencias')
+        .upload(ruta, blob, { contentType: 'application/pdf', upsert: false })
+      if (errorSubida) throw new Error(`No se pudo subir el PDF (${errorSubida.message}).`)
+
+      const g = await guardarEvidenciaDia(proyectoId, fecha, ruta)
       if (g.error) throw new Error(g.error)
       await cargarHistorial()
       if (!silencioso) setAviso('✓ Evidencia del día guardada en el historial y enviada al administrador.')
@@ -1042,7 +1364,6 @@ export default function ProyectoPage() {
   const enArea = areaId !== null && vista !== null
   const todasCompletas =
     vista !== null &&
-    !vista.usaPdf &&
     vista.piezas.length > 0 &&
     vista.piezas.every((p) => p.faltan === 0 && !p.trabajo)
 
@@ -1102,7 +1423,7 @@ export default function ProyectoPage() {
   /* ---------------- Pantalla del area ---------------- */
   if (enArea && vista) {
     return (
-      <div className="op-wrap" style={{ maxWidth: 1500 }}>
+      <div className={`op-wrap ${fuenteOperador.className}`} style={{ maxWidth: 1500 }}>
         <EstilosOperador />
         {banners}
 
@@ -1157,21 +1478,6 @@ export default function ProyectoPage() {
             Reporte del área
           </button>
           <button
-            onClick={() => setPanel((v) => (v === 'admin' ? null : 'admin'))}
-            style={{
-              background: 'none',
-              color: amber,
-              border: `1px solid ${amber}66`,
-              borderRadius: 10,
-              padding: '10px 15px',
-              fontSize: 14,
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            Reporte al administrador
-          </button>
-          <button
             onClick={salir}
             style={{
               background: 'none',
@@ -1211,10 +1517,6 @@ export default function ProyectoPage() {
               </button>
             </div>
           </div>
-        )}
-
-        {panel === 'admin' && (
-          <PanelAdmin enviando={ocupado === 'admin'} onEnviar={enviarAdmin} />
         )}
 
         {vista.pausa && (
@@ -1265,7 +1567,17 @@ export default function ProyectoPage() {
           PIEZAS DE ESTA ÁREA
         </div>
 
-        {vista.piezas.length === 0 ? (
+        {vista.usaPdf ? (
+          <PiezasPorPasos
+            piezas={vista.piezas}
+            offset={offset}
+            ocupado={ocupado}
+            onIniciar={iniciar}
+            onFinalizar={finalizar}
+            onReanudar={reanudar}
+            onReportar={reportar}
+          />
+        ) : vista.piezas.length === 0 ? (
           <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', padding: '34px 0' }}>
             Todavía no hay piezas cargadas para esta área en este proyecto.
           </div>
@@ -1280,6 +1592,7 @@ export default function ProyectoPage() {
                 onIniciar={iniciar}
                 onFinalizar={finalizar}
                 onReanudar={reanudar}
+                onReportar={reportar}
               />
             ))}
           </div>
@@ -1311,241 +1624,187 @@ export default function ProyectoPage() {
 
   /* ---------------- Pantalla del proyecto ---------------- */
   return (
-    <div className="op-wrap" style={{ maxWidth: 1500 }}>
+    <div className={`op-wrap ${fuenteOperador.className}`} style={{ maxWidth: 1500 }}>
       <EstilosOperador />
       {teclado && (
         <Teclado
+          area={teclado.nombre}
           error={errorClave}
           fallos={fallos}
           validando={validando}
-          onCerrar={() => setTeclado(false)}
+          onCerrar={() => setTeclado(null)}
           onEntrar={enviarClave}
         />
       )}
 
-      <Link
-        href="/operator/avances"
-        style={{ color: '#94a3b8', fontSize: 12.5, display: 'inline-block', marginBottom: 8 }}
-      >
+      <Link href="/operator/avances" className="inline-flex items-center gap-1.5 min-h-[44px] text-sm font-semibold text-[#8fa0bf] hover:text-white">
         ← Proyectos
       </Link>
 
       {banners}
 
-      <div
-        style={{
-          ...gradiente,
-          padding: '16px 20px',
-          marginBottom: 14,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 12,
-          flexWrap: 'wrap',
-        }}
-        className="op-cab"
-      >
-        <div>
-          <div style={{ color: bl, fontSize: 10.5, fontWeight: 700 }}>{detalle.codigo}</div>
-          <div style={{ color: '#fff', fontSize: 19, fontWeight: 800 }}>{detalle.nombre}</div>
-          <div style={{ color: '#94a3b8', fontSize: 12 }}>
-            {detalle.cliente || 'Sin cliente'} · Avance general {detalle.progreso}%
+      {/* Encabezado del proyecto */}
+      <div className="op-cab relative overflow-hidden rounded-3xl border border-[#26314a] bg-gradient-to-br from-[#1a2a55] via-[#121a2b] to-[#0d1220] p-5 sm:p-7 mb-6 shadow-[0_24px_60px_-30px_#2563ff] flex flex-wrap items-center justify-between gap-5">
+        <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-[#2563ff]/25 blur-3xl" />
+        <div className="relative flex items-center gap-5 min-w-0">
+          <AnilloAvance pct={detalle.progreso} />
+          <div className="min-w-0">
+            <span className="inline-block rounded-full border border-[#4f8cff]/30 bg-[#4f8cff]/15 px-2.5 py-0.5 text-[11px] font-bold tracking-wide text-[#a9c2ff]">
+              {detalle.codigo || 'Sin código'}
+            </span>
+            <h1 className="mt-2 text-2xl sm:text-3xl font-extrabold leading-tight tracking-tight text-white">{detalle.nombre}</h1>
+            <p className="mt-1 text-sm font-medium text-[#a9b6cf]">
+              {detalle.cliente || 'Sin cliente'} · Avance general <span className="font-extrabold text-white">{detalle.progreso}%</span>
+            </p>
           </div>
         </div>
         <button
-          onClick={abrirTeclado}
-          style={{
-            background: blue,
-            color: '#fff',
-            border: 'none',
-            borderRadius: 11,
-            padding: '12px 22px',
-            fontSize: 14,
-            fontWeight: 800,
-            cursor: 'pointer',
-          }}
+          onClick={() => abrirTeclado(null, null)}
+          className="relative min-h-[54px] rounded-2xl px-7 text-base font-extrabold text-white"
+          style={{ background: `linear-gradient(180deg, ${bl}, ${blue})`, boxShadow: `0 12px 28px -12px ${blue}` }}
         >
-          Entrar a mi área
+          🔒 Entrar a mi área
         </button>
       </div>
 
-      <div
-        style={{
-          color: '#64748b',
-          fontSize: 11,
-          letterSpacing: '.08em',
-          fontWeight: 700,
-          marginBottom: 8,
-        }}
-      >
-        ÁREAS DEL PROYECTO
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <p className="text-[11px] font-extrabold uppercase tracking-[0.16em] text-[#7d8cab]">Áreas del proyecto</p>
+        <p className="text-xs text-[#6b7a99]">Toca tu área y escribe su contraseña de 3 dígitos</p>
       </div>
 
       {detalle.areas.length === 0 ? (
-        <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', padding: '34px 0' }}>
+        <div className="rounded-3xl border border-[#26314a] bg-[#121a2b] p-10 text-center text-sm text-[#a9b6cf]">
           Este proyecto todavía no tiene piezas asignadas a ningún área.
         </div>
       ) : (
-        <div className="ar-grid">
-          {detalle.areas.map((a) => (
-            <div
-              key={a.areaId}
-              onClick={() => tocarArea(a)}
-              style={{
-                background: card,
-                border: `1px solid ${a.desbloqueada ? bl : line}`,
-                borderRadius: 14,
-                padding: '13px 15px',
-                cursor: a.desbloqueada ? 'pointer' : 'default',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ color: '#fff', fontSize: 15, fontWeight: 700 }}>{a.nombre}</div>
-                  <div style={{ color: '#7c8aa5', fontSize: 12, marginTop: 2 }}>
-                    {a.piezas > 0
-                      ? `${a.piezas} ${a.piezas === 1 ? 'pieza' : 'piezas'} por hacer${a.cerrada ? ' · terminada' : ''}`
-                      : 'Sin piezas en este proyecto'}
-                  </div>
-                </div>
-                <IconoCandado abierto={a.desbloqueada} />
-              </div>
-
-              <div
+        <div className="grid gap-4 grid-cols-1 min-[420px]:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+          {detalle.areas.map((a) => {
+            // Color según el estado del área
+            const estado = a.cerrada
+              ? { color: green, texto: '✓ Terminada' }
+              : a.pausa
+                ? { color: amber, texto: `⏸ En pausa: ${a.pausa.motivo}` }
+                : a.enCurso > 0
+                  ? { color: teal, texto: `● ${a.enCurso} ${a.enCurso === 1 ? 'pieza' : 'piezas'} en curso` }
+                  : a.desbloqueada
+                    ? { color: bl, texto: 'Abierta en este dispositivo' }
+                    : { color: '#3b4a6b', texto: '' }
+            const barra = a.porcentaje >= 100 ? green : teal
+            return (
+              <button
+                key={a.areaId}
+                onClick={() => tocarArea(a)}
+                disabled={a.cerrada}
+                className="group relative flex flex-col gap-3 overflow-hidden rounded-3xl border border-[#26314a] bg-gradient-to-b from-[#16203a] to-[#111929] p-5 text-left transition hover:-translate-y-0.5 hover:border-[#3a4d78] disabled:cursor-default disabled:hover:translate-y-0"
                 style={{
-                  height: 5,
-                  background: '#0a0d16',
-                  borderRadius: 3,
-                  marginTop: 10,
-                  overflow: 'hidden',
+                  borderLeft: `6px solid ${estado.color}`,
+                  boxShadow: a.desbloqueada || a.enCurso > 0 ? `0 18px 40px -24px ${estado.color}` : '0 12px 30px -22px #000',
                 }}
               >
-                <div style={{ width: `${a.porcentaje}%`, height: '100%', background: teal }} />
-              </div>
-              <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 5 }}>
-                {a.porcentaje}% de avance
-              </div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-lg font-extrabold leading-tight tracking-tight text-white">{a.nombre}</p>
+                    <p className="mt-1 text-sm text-[#a9b6cf]">
+                      {a.piezas > 0 ? `${a.piezas} ${a.piezas === 1 ? 'pieza' : 'piezas'} por hacer` : 'Sin piezas en este proyecto'}
+                    </p>
+                  </div>
+                  <span
+                    className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl"
+                    style={{ background: a.desbloqueada ? `${bl}22` : '#1c2640', border: `1px solid ${a.desbloqueada ? `${bl}55` : '#2c3a58'}` }}
+                    aria-label={a.desbloqueada ? 'Abierta' : 'Bloqueada'}
+                  >
+                    <IconoCandado abierto={a.desbloqueada} />
+                  </span>
+                </div>
 
-              {a.pausa ? (
-                <div style={{ color: amber, fontSize: 12, fontWeight: 700, marginTop: 6 }}>
-                  ⏸ En pausa: {a.pausa.motivo}
+                <div className="mt-auto space-y-1.5">
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xs font-semibold text-[#8fa0bf]">Avance</span>
+                    <span className="text-lg font-extrabold tabular-nums" style={{ color: a.porcentaje > 0 ? barra : '#cbd6ea' }}>
+                      {a.porcentaje}%
+                    </span>
+                  </div>
+                  <div className="h-2.5 w-full overflow-hidden rounded-full bg-[#0b1120]">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{ width: `${a.porcentaje}%`, background: `linear-gradient(90deg, ${barra}aa, ${barra})`, boxShadow: `0 0 10px ${barra}88` }}
+                    />
+                  </div>
                 </div>
-              ) : a.enCurso > 0 ? (
-                <div style={{ color: green, fontSize: 12, fontWeight: 700, marginTop: 6 }}>
-                  ● {a.enCurso} {a.enCurso === 1 ? 'pieza' : 'piezas'} en curso
-                </div>
-              ) : null}
-            </div>
-          ))}
+
+                {estado.texto && (
+                  <span
+                    className="self-start rounded-full px-2.5 py-1 text-[11px] font-bold"
+                    style={{ color: estado.color, background: `${estado.color}1a`, border: `1px solid ${estado.color}44` }}
+                  >
+                    {estado.texto}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </div>
       )}
 
-      <div style={{ color: '#475569', fontSize: 11, marginTop: 12 }}>
-        Ves el avance de todas las áreas, pero solo puedes registrar en la tuya con su contraseña.
-      </div>
-      <div style={{ color: '#334155', fontSize: 10, marginTop: 4 }}>
-        {detalle.usaPdf ? 'Piezas: matriz de corte (PDF)' : 'Piezas: productos del pedido'}
-      </div>
-
-      <div
-        style={{
-          background: card,
-          border: `1px solid ${line}`,
-          borderRadius: 14,
-          padding: '14px 16px',
-          marginTop: 18,
-        }}
-      >
-        <div style={{ color: '#fff', fontSize: 14, fontWeight: 700 }}>Evidencia del día</div>
-        <div style={{ color: '#7c8aa5', fontSize: 12, marginTop: 2, marginBottom: 12 }}>
-          Un solo PDF con todas las áreas: avance, piezas por hora, pausas y reportes.
+      {/* Evidencia del día */}
+      <div className="mt-7 rounded-3xl border border-[#26314a] bg-gradient-to-b from-[#16203a] to-[#111929] p-5 sm:p-6">
+        <div className="flex items-start gap-3">
+          <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-[#ff5a6e]/15 text-xl">📄</span>
+          <div>
+            <p className="text-lg font-extrabold text-white">Evidencia del día</p>
+            <p className="text-sm text-[#a9b6cf]">Un solo PDF con todas las áreas: avance, piezas por hora, pausas y reportes.</p>
+          </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
           <input
             type="date"
             value={fechaPdf}
             onChange={(e) => setFechaPdf(e.target.value)}
-            style={{
-              background: '#08090d',
-              border: `1px solid ${line}`,
-              borderRadius: 10,
-              padding: '10px 12px',
-              fontSize: 14,
-              color: '#fff',
-            }}
+            aria-label="Fecha de la evidencia"
+            className="h-12 rounded-2xl border border-[#2c3a58] bg-[#0b1120] px-4 text-[15px] text-white outline-none focus:border-[#4f8cff] [color-scheme:dark]"
           />
           <button
             onClick={bajarPdf}
             disabled={ocupado === 'pdf' || !fechaPdf}
-            style={{
-              background: '#fff',
-              color: '#0a0e1a',
-              border: 'none',
-              borderRadius: 10,
-              padding: '11px 18px',
-              fontSize: 13.5,
-              fontWeight: 800,
-              cursor: 'pointer',
-              opacity: ocupado === 'pdf' ? 0.5 : 1,
-            }}
+            className="h-12 rounded-2xl bg-white px-5 text-sm font-extrabold text-[#0b1120] shadow-[0_10px_24px_-14px_#fff] disabled:opacity-50"
           >
-            {ocupado === 'pdf' ? 'Generando...' : 'Descargar PDF'}
+            {ocupado === 'pdf' ? 'Generando...' : '⬇ Descargar PDF'}
           </button>
           <button
             onClick={() => void enviarEvidencia()}
             disabled={ocupado === 'evidencia'}
-            style={{
-              background: blue,
-              color: '#fff',
-              border: 'none',
-              borderRadius: 10,
-              padding: '11px 18px',
-              fontSize: 13.5,
-              fontWeight: 800,
-              cursor: 'pointer',
-              opacity: ocupado === 'evidencia' ? 0.5 : 1,
-            }}
+            className="h-12 rounded-2xl px-5 text-sm font-extrabold text-white disabled:opacity-50"
+            style={{ background: `linear-gradient(180deg, ${bl}, ${blue})`, boxShadow: `0 12px 26px -14px ${blue}` }}
           >
             {ocupado === 'evidencia' ? 'Enviando...' : 'Enviar al historial y al administrador'}
           </button>
         </div>
 
         {historial.length > 0 && (
-          <div style={{ marginTop: 14 }}>
-            <div style={{ color: '#64748b', fontSize: 11, letterSpacing: '.08em', fontWeight: 700, marginBottom: 6 }}>
-              HISTORIAL
+          <div className="mt-5">
+            <p className="mb-2 text-[11px] font-extrabold uppercase tracking-[0.16em] text-[#7d8cab]">Enviadas</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {historial.map((h) => (
+                <a
+                  key={h.id}
+                  href={h.pdfUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex min-h-[52px] items-center gap-3 rounded-2xl border border-[#26314a] bg-[#0b1120]/60 px-4 py-2.5 transition hover:border-[#4f8cff]"
+                >
+                  <span className="text-lg">📄</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-bold text-white">Evidencia del {h.fecha}</span>
+                    <span className="block truncate text-xs text-[#8fa0bf]">
+                      {h.creadoPor} ·{' '}
+                      {new Date(h.creadoEn).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short', timeZone: ZONA })}
+                    </span>
+                  </span>
+                  <span className="text-sm font-bold text-[#7fa8ff]">Abrir ›</span>
+                </a>
+              ))}
             </div>
-            {historial.map((h) => (
-              <a
-                key={h.id}
-                href={h.pdfUrl}
-                target="_blank"
-                rel="noreferrer"
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: 10,
-                  flexWrap: 'wrap',
-                  padding: '9px 0',
-                  borderTop: `1px solid ${line}`,
-                  color: '#cbd5e1',
-                  fontSize: 13,
-                }}
-              >
-                <span>
-                  📄 Evidencia del {h.fecha}
-                </span>
-                <span style={{ color: '#7c8aa5', fontSize: 12 }}>
-                  {h.creadoPor} ·{' '}
-                  {new Date(h.creadoEn).toLocaleString('es-MX', {
-                    dateStyle: 'short',
-                    timeStyle: 'short',
-                    timeZone: ZONA,
-                  })}
-                </span>
-              </a>
-            ))}
           </div>
         )}
       </div>

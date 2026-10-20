@@ -1,275 +1,228 @@
-'use client';
+'use client'
 
-import { useEffect, useState, useCallback } from 'react';
-import Image from 'next/image';
-import { supabase } from '@/lib/supabase';
-import { Bell, MessageSquare, AlertTriangle, Clock, Loader2, Send, Factory, CheckCircle2 } from 'lucide-react';
+/**
+ * Notificaciones del operador — /operator/notificaciones
+ * Solo muestra lo que el administrador le manda a los operadores (avisos, proyectos, comentarios).
+ * Los proyectos nuevos no se descargan aquí: aparecen solos en "Registrar avance".
+ *
+ * RUTA: src/app/operator/notificaciones/page.tsx
+ */
 
-interface NotificacionOperador {
-  id: string;
-  mensaje: string;
-  tipo: string;
-  leido: boolean;
-  created_at: string;
-  areas?: { nombre: string; };
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import {
+  Bell,
+  BellOff,
+  CheckCheck,
+  FolderPlus,
+  AlertOctagon,
+  MessageSquare,
+  type LucideIcon,
+} from 'lucide-react'
+import {
+  getNotificaciones,
+  marcarNotificacionLeida,
+  marcarTodasLeidas,
+  type Notificacion,
+} from '../notificaciones-actions'
+
+interface ConfigTipo {
+  icono: LucideIcon
+  color: string
+  fondo: string
+  etiqueta: string
 }
 
-interface Area {
-  id: string;
-  nombre: string;
+function configTipo(tipo: string): ConfigTipo {
+  switch (tipo) {
+    case 'nuevo_proyecto':
+      return { icono: FolderPlus, color: 'text-red-500', fondo: 'bg-red-500/10', etiqueta: 'Nuevo proyecto' }
+    case 'retraso':
+      return { icono: AlertOctagon, color: 'text-amber-500', fondo: 'bg-amber-500/10', etiqueta: 'Retraso' }
+    case 'comentario':
+      return { icono: MessageSquare, color: 'text-emerald-500', fondo: 'bg-emerald-500/10', etiqueta: 'Comentario' }
+    default:
+      return { icono: Bell, color: 'text-blue-400', fondo: 'bg-blue-500/10', etiqueta: 'Aviso' }
+  }
+}
+
+/** A dónde lleva el aviso al tocarlo: al proyecto si trae uno; los proyectos nuevos, a Registrar avance */
+function rutaDe(n: Notificacion): string | null {
+  if (n.proyectoId) return `/operator/avances/${n.proyectoId}`
+  if (n.tipo === 'nuevo_proyecto') return '/operator/avances'
+  return null
+}
+
+function tiempoRelativo(iso: string) {
+  const minutos = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
+  if (minutos < 1) return 'Ahora'
+  if (minutos < 60) return `Hace ${minutos} min`
+  const horas = Math.floor(minutos / 60)
+  if (horas < 24) return `Hace ${horas} h`
+  return `Hace ${Math.floor(horas / 24)} d`
+}
+
+function fechaCorta(iso: string) {
+  return new Date(iso).toLocaleString('es-MX', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 export default function NotificacionesOperatorPage() {
-  const [misNotificaciones, setMisNotificaciones] = useState<NotificacionOperador[]>([]);
-  const [areas, setAreas] = useState<Area[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [resultado, setResultado] = useState<{ ok: boolean; msg: string } | null>(null);
+  const router = useRouter()
+  const [cargando, setCargando] = useState(true)
+  const [notificaciones, setNotificaciones] = useState<Notificacion[]>([])
+  const [filtro, setFiltro] = useState<'todas' | 'sin_leer'>('todas')
 
-  const [mensaje, setMensaje] = useState('');
-  const [tipo, setTipo] = useState<'info' | 'alerta'>('info');
-  const [selectedArea, setSelectedArea] = useState<string>('');
-
-  const fetchMisNotificaciones = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('notificaciones')
-      .select('*, areas (nombre)')
-      .order('created_at', { ascending: false });
-    if (!error && data) setMisNotificaciones(data as NotificacionOperador[]);
-  }, []);
-
-  const fetchAreas = useCallback(async () => {
-    const { data } = await supabase.from('areas').select('id, nombre').eq('activo', true).order('orden', { ascending: true });
-    if (data) setAreas(data as Area[]);
-  }, []);
-
+  // Se revisa cada 30 s y cuando otra pantalla marca avisos como leídos
   useEffect(() => {
-    let isMounted = true;
-    async function loadData() {
-      setLoading(true);
-      await Promise.all([fetchMisNotificaciones(), fetchAreas()]);
-      if (isMounted) setLoading(false);
+    let vigente = true
+    const cargar = () => {
+      getNotificaciones(50).then((data) => {
+        if (!vigente) return
+        setNotificaciones(data)
+        setCargando(false)
+      })
     }
-    void loadData();
-    return () => { isMounted = false; };
-  }, [fetchMisNotificaciones, fetchAreas]);
-
-  const handleEnviarNotificacion = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!mensaje.trim()) {
-      alert('Escribe el detalle del aviso antes de enviar.');
-      return;
+    cargar()
+    const intervalo = setInterval(cargar, 30000)
+    window.addEventListener('notificaciones-actualizadas', cargar)
+    return () => {
+      vigente = false
+      clearInterval(intervalo)
+      window.removeEventListener('notificaciones-actualizadas', cargar)
     }
-    setSending(true);
-    setResultado(null);
+  }, [])
 
-    try {
-      // Buscar nombre del area para el email
-      const areaSeleccionada = areas.find((a) => a.id === selectedArea);
+  const sinLeer = notificaciones.filter((n) => !n.leida).length
+  const visibles = filtro === 'sin_leer' ? notificaciones.filter((n) => !n.leida) : notificaciones
 
-      // Llama a la API route que:
-      //   1. Guarda en tabla notificaciones de Supabase
-      //   2. Manda email al admin via Resend
-      const res = await fetch('/api/notificar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tipo: tipo === 'alerta' ? 'alerta' : 'mensaje',
-          mensaje: mensaje.trim(),
-          area_id: selectedArea || undefined,
-          area_nombre: areaSeleccionada?.nombre || 'General',
-          usuario_nombre: 'Operador',
-        }),
-      });
-
-      const data = await res.json();
-
-      if (data.success) {
-        setResultado({
-          ok: true,
-          msg: data.emailEnviado ? 'Enviado + email al admin' : 'Guardado (email no configurado)',
-        });
-        setMensaje('');
-        setSelectedArea('');
-        setTipo('info');
-        await fetchMisNotificaciones();
-        setTimeout(() => setResultado(null), 3000);
-      } else {
-        setResultado({ ok: false, msg: data.error || 'Error al enviar' });
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Error desconocido';
-      setResultado({ ok: false, msg });
-    } finally {
-      setSending(false);
+  async function abrir(n: Notificacion) {
+    if (!n.leida) {
+      setNotificaciones((prev) => prev.map((x) => (x.id === n.id ? { ...x, leida: true } : x)))
+      await marcarNotificacionLeida(n.id)
+      window.dispatchEvent(new Event('notificaciones-actualizadas'))
     }
-  };
+    const ruta = rutaDe(n)
+    if (ruta) router.push(ruta)
+  }
+
+  async function leerTodas() {
+    setNotificaciones((prev) => prev.map((x) => ({ ...x, leida: true })))
+    await marcarTodasLeidas()
+    window.dispatchEvent(new Event('notificaciones-actualizadas'))
+  }
+
+  if (cargando) {
+    return (
+      <div className="bg-[#0e1017]/80 backdrop-blur-xl border border-slate-800 p-6 rounded-2xl text-slate-400 text-sm">
+        Cargando notificaciones...
+      </div>
+    )
+  }
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-8 text-white">
-      
-      <div 
-        className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 sm:p-8 shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-cover bg-center"
-        style={{ backgroundImage: "linear-gradient(to right, rgba(11,15,23,0.95), rgba(18,24,36,0.8)), url('/images/corte_madera2.webp')" }}
-      >
+    <div className="space-y-5 pb-12">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#0e1017]/80 backdrop-blur-xl border border-slate-800 p-5 sm:p-6 rounded-2xl shadow-xl">
         <div>
-          <h1 className="text-2xl font-bold text-white tracking-wide flex items-center gap-3">
-            <Bell className="w-6 h-6 text-red-500 animate-pulse" />
-            Reportes y Notificaciones de Operador
+          <h1 className="text-xl font-black text-white tracking-wider uppercase flex items-center gap-2">
+            <Bell className="w-5 h-5 text-red-600" />
+            <span className="text-red-600">Notificaciones</span>
           </h1>
-          <p className="text-xs text-white/65 mt-1">
-            Envia avisos o alertas urgentes de tu estacion de trabajo a administracion.
+          <p className="text-xs text-slate-400 mt-1">
+            {sinLeer > 0
+              ? `Tienes ${sinLeer} ${sinLeer === 1 ? 'aviso sin leer' : 'avisos sin leer'} del administrador`
+              : 'Estás al día: no hay avisos pendientes del administrador'}
           </p>
         </div>
+
+        <button
+          onClick={leerTodas}
+          disabled={sinLeer === 0}
+          className="min-h-[44px] flex items-center justify-center gap-2 border border-slate-800 hover:border-slate-600 text-slate-300 hover:text-white disabled:opacity-40 disabled:hover:border-slate-800 disabled:hover:text-slate-300 text-xs font-bold uppercase tracking-wide px-4 py-2.5 rounded-xl transition"
+        >
+          <CheckCheck className="w-4 h-4" />
+          Marcar todas como leídas
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        <div className="lg:col-span-1 space-y-4">
-          <form 
-            onSubmit={handleEnviarNotificacion}
-            className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-6 shadow-2xl backdrop-blur-2xl space-y-4"
+      <div className="flex gap-2">
+        {(
+          [
+            ['todas', `Todas (${notificaciones.length})`],
+            ['sin_leer', `Sin leer (${sinLeer})`],
+          ] as const
+        ).map(([valor, etiqueta]) => (
+          <button
+            key={valor}
+            onClick={() => setFiltro(valor)}
+            className={`min-h-[44px] flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wide border transition ${
+              filtro === valor
+                ? 'bg-red-700 border-red-700 text-white'
+                : 'bg-[#0e1017]/80 border-slate-800 text-slate-400 hover:text-white'
+            }`}
           >
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider border-b border-white/10 pb-3 flex items-center gap-2">
-              <Send className="w-4 h-4 text-sky-400" /> Nuevo Aviso a Administracion
-            </h2>
+            {etiqueta}
+          </button>
+        ))}
+      </div>
 
-            <div>
-              <label className="text-xs text-white/60 block mb-1 font-semibold">Tipo de Reporte</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setTipo('info')}
-                  className={`py-2.5 px-3 rounded-xl text-xs font-bold border flex items-center justify-center gap-1.5 transition-all ${
-                    tipo === 'info'
-                      ? 'bg-sky-500/20 text-sky-300 border-sky-400/50 shadow-md'
-                      : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10'
-                  }`}
-                >
-                  <MessageSquare className="w-3.5 h-3.5" /> Mensaje
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTipo('alerta')}
-                  className={`py-2.5 px-3 rounded-xl text-xs font-bold border flex items-center justify-center gap-1.5 transition-all ${
-                    tipo === 'alerta'
-                      ? 'bg-red-500/20 text-red-300 border-red-400/50 shadow-md'
-                      : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10'
-                  }`}
-                >
-                  <AlertTriangle className="w-3.5 h-3.5" /> Alerta Urgente
-                </button>
-              </div>
-            </div>
+      {visibles.length === 0 && (
+        <div className="bg-[#0e1017]/80 backdrop-blur-xl border border-slate-800 rounded-2xl p-10 text-center space-y-3">
+          <BellOff className="w-8 h-8 text-slate-700 mx-auto" />
+          <p className="text-sm text-slate-500">
+            {filtro === 'sin_leer'
+              ? 'No hay avisos sin leer.'
+              : 'Todavía no llegan avisos del administrador.'}
+          </p>
+        </div>
+      )}
 
-            <div>
-              <label className="text-xs text-white/60 block mb-1 font-semibold flex items-center gap-1">
-                <Factory className="w-3.5 h-3.5 text-sky-400" /> Estacion de Trabajo (Area)
-              </label>
-              <select
-                value={selectedArea}
-                onChange={(e) => setSelectedArea(e.target.value)}
-                className="w-full h-11 rounded-xl border border-white/20 bg-[#121824] px-3 text-xs text-white outline-none focus:border-sky-400 transition-colors"
-              >
-                <option value="">Selecciona tu area (Opcional)</option>
-                {areas.map((a) => (
-                  <option key={a.id} value={a.id}>{a.nombre}</option>
-                ))}
-              </select>
-            </div>
+      <div className="space-y-3">
+        {visibles.map((n) => {
+          const cfg = configTipo(n.tipo)
+          const Icono = cfg.icono
 
-            <div>
-              <label className="text-xs text-white/60 block mb-1 font-semibold">Mensaje o Detalle *</label>
-              <textarea
-                rows={4}
-                placeholder="Ejemplo: Falta material en la estacion / Falla mecanica en maquina..."
-                value={mensaje}
-                onChange={(e) => setMensaje(e.target.value)}
-                className="w-full rounded-xl border border-white/20 bg-white/[0.07] p-3 text-xs text-white outline-none focus:border-sky-400 transition-colors placeholder:text-white/30 resize-none"
-                required
-              />
-            </div>
-
+          return (
             <button
-              type="submit"
-              disabled={sending}
-              className="w-full bg-red-600 hover:bg-red-500 text-white font-bold text-xs py-3.5 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-red-950/50 transition-all disabled:opacity-50"
+              key={n.id}
+              onClick={() => abrir(n)}
+              className={`w-full text-left flex items-start gap-3 p-4 rounded-2xl border transition hover:border-slate-600 ${
+                n.leida
+                  ? 'bg-[#0e1017]/60 border-slate-800/70'
+                  : 'bg-[#0e1017]/90 border-red-900/50 shadow-lg shadow-red-950/20'
+              }`}
             >
-              {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              Enviar a Administracion
+              <div className={`p-2.5 rounded-xl flex-shrink-0 ${cfg.fondo} ${cfg.color}`}>
+                <Icono className="w-4 h-4" />
+              </div>
+
+              <div className="flex-1 min-w-0 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className={`text-[10px] font-bold uppercase tracking-wider ${cfg.color}`}>
+                    {cfg.etiqueta}
+                  </span>
+                  <span className="text-[10px] text-slate-500 flex-shrink-0">{tiempoRelativo(n.createdAt)}</span>
+                </div>
+
+                <p className={`text-sm leading-snug break-words ${n.leida ? 'text-slate-400' : 'text-white font-medium'}`}>
+                  {n.mensaje}
+                </p>
+
+                <p className="text-[11px] text-slate-500 break-words">
+                  De: {n.remitenteNombre ?? 'Administración'}
+                  {n.proyectoNombre ? ` · ${n.proyectoNombre}` : ''} · {fechaCorta(n.createdAt)}
+                </p>
+              </div>
+
+              {!n.leida && <span className="w-2.5 h-2.5 mt-1 rounded-full bg-red-600 flex-shrink-0" />}
             </button>
-
-            {resultado && (
-              <div className={`text-xs font-semibold px-3 py-2 rounded-xl text-center ${resultado.ok ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-500/30' : 'bg-red-950/50 text-red-400 border border-red-500/30'}`}>
-                {resultado.ok ? '✅' : '❌'} {resultado.msg}
-              </div>
-            )}
-          </form>
-
-          <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-4 shadow-xl h-44 flex flex-col justify-end">
-            <Image src="/images/nueva.webp" alt="Planta SULA MOB" fill className="object-cover rounded-2xl opacity-60" />
-            <div className="absolute inset-0 bg-gradient-to-t from-[#0B0F17] via-transparent to-transparent rounded-2xl" />
-            <div className="relative z-10 p-2 space-y-1">
-              <span className="text-[10px] uppercase font-bold text-red-400 bg-black/60 px-2.5 py-1 rounded-full border border-white/10 backdrop-blur-md inline-block">Canal Directo</span>
-              <p className="text-[11px] text-white/80">Comunica contratiempos inmediatamente para evitar paros.</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="lg:col-span-2 space-y-4">
-          <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-            <Clock className="w-4 h-4 text-sky-400" /> Mis Reportes Enviados
-          </h2>
-
-          {loading ? (
-            <div className="flex justify-center items-center py-20 text-white/50 gap-3">
-              <Loader2 className="w-6 h-6 animate-spin text-red-500" />
-              <span>Cargando reportes...</span>
-            </div>
-          ) : misNotificaciones.length === 0 ? (
-            <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] p-12 text-center shadow-2xl backdrop-blur-2xl space-y-3">
-              <MessageSquare className="w-10 h-10 text-white/30 mx-auto" />
-              <h3 className="text-base font-bold text-white">Sin reportes enviados</h3>
-              <p className="text-xs text-white/50">Aun no has registrado notificaciones desde este panel.</p>
-            </div>
-          ) : (
-            misNotificaciones.map((n) => (
-              <div key={n.id} className={`relative overflow-hidden rounded-[26px] border border-white/20 p-5 flex items-start justify-between gap-4 transition-all shadow-xl backdrop-blur-2xl ${n.leido ? 'bg-white/[0.03]' : 'bg-red-950/20 border-red-500/40'}`}>
-                <div className="flex items-start gap-4">
-                  <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 border ${n.tipo === 'alerta' ? 'bg-red-950/80 text-red-400 border-red-500/50' : 'bg-white/10 text-white border-white/15'}`}>
-                    {n.tipo === 'alerta' ? <AlertTriangle className="w-5 h-5" /> : <MessageSquare className="w-5 h-5" />}
-                  </div>
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {n.areas ? (
-                        <span className="text-[10px] bg-sky-500/20 text-sky-300 px-2.5 py-0.5 rounded-full font-bold border border-sky-500/30">Area: {n.areas.nombre}</span>
-                      ) : (
-                        <span className="text-[10px] bg-white/10 text-white/70 px-2.5 py-0.5 rounded-full font-bold">General</span>
-                      )}
-                    </div>
-                    <p className="text-sm text-white/90 leading-relaxed">{n.mensaje}</p>
-                    <div className="flex items-center gap-1 text-[11px] text-white/50 pt-1">
-                      <Clock className="w-3 h-3" />
-                      {new Date(n.created_at).toLocaleString('es-MX')}
-                    </div>
-                  </div>
-                </div>
-                <div className="shrink-0">
-                  {n.leido ? (
-                    <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-xl flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Revisado
-                    </span>
-                  ) : (
-                    <span className="text-[10px] font-bold text-amber-300 bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 rounded-xl flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5" /> Pendiente
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+          )
+        })}
       </div>
     </div>
-  );
+  )
 }
