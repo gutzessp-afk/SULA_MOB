@@ -4,7 +4,7 @@ import { useState, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { cargarProyectos, useDatos } from '@/lib/cache-datos';
 import { eliminarProyecto } from '@/lib/eliminar-proyecto';
-import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, Pencil, X, Calendar, User, MapPin, Download } from 'lucide-react';
+import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, Pencil, Upload, X, Calendar, User, MapPin, Download } from 'lucide-react';
 import { parsePedidoPdf } from '@/lib/parse-pedido';
 import { useDebounce } from '@/hooks/useDebounce';
 import { BadgePrioridad } from '@/components/BadgePrioridad';
@@ -336,10 +336,14 @@ export default function ProyectosPage() {
     setLoadingView(false);
   };
 
-  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePdfUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    // Se limpia para que el mismo PDF se pueda volver a elegir
+    e.target.value = '';
+    if (file) void procesarPdf(file);
+  };
 
+  const procesarPdf = async (file: File) => {
     setIsParsingPdf(true);
     setPdfSuccess('');
 
@@ -385,6 +389,47 @@ export default function ProyectosPage() {
     } finally {
       setIsParsingPdf(false);
     }
+  };
+
+  // ── Arrastrar y soltar el PDF ──
+  // El contador evita el parpadeo: al pasar sobre los hijos de la zona el navegador manda dragleave/dragenter
+  const [draggingPdf, setDraggingPdf] = useState(false);
+  const dragCounter = useRef(0);
+  const traeArchivos = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (!traeArchivos(e)) return;
+    e.preventDefault();
+    dragCounter.current++;
+    setDraggingPdf(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!traeArchivos(e)) return;
+    dragCounter.current = Math.max(0, dragCounter.current - 1);
+    if (dragCounter.current === 0) setDraggingPdf(false);
+  };
+
+  // Sin preventDefault el navegador abre el PDF en vez de soltarlo aquí
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!traeArchivos(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = isParsingPdf ? 'none' : 'copy';
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    if (!traeArchivos(e)) return;
+    e.preventDefault();
+    dragCounter.current = 0;
+    setDraggingPdf(false);
+    if (isParsingPdf) return;
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      alert('Solo se aceptan archivos PDF.');
+      return;
+    }
+    void procesarPdf(file);
   };
 
   const handleLimpiarFormulario = () => {
@@ -633,14 +678,29 @@ export default function ProyectosPage() {
         </div>
       ) : (
         <div className="space-y-6">
-          <div className="relative overflow-hidden rounded-[26px] border border-white/20 bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7]">
+          <div
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            className={`relative overflow-hidden rounded-[26px] border shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7] transition-all duration-200 ${
+              draggingPdf ? 'border-dashed border-blue-400 bg-blue-500/10 scale-[1.01]' : 'border-white/20 bg-white/[0.05]'
+            }`}
+          >
+            {/* Aviso mientras se arrastra el archivo encima */}
+            {draggingPdf && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center rounded-[26px] bg-blue-950/80 backdrop-blur-sm">
+                <Upload className="w-10 h-10 text-blue-400 mb-2 animate-bounce" />
+                <p className="text-sm font-bold text-blue-300">Suelta el PDF aquí</p>
+              </div>
+            )}
             <div className="flex flex-col sm:flex-row items-center gap-4 p-5 sm:p-6">
               <div className="w-12 h-12 rounded-2xl bg-blue-950/60 border border-blue-500/40 flex items-center justify-center text-blue-400 flex-shrink-0">
                 {isParsingPdf ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileText className="w-5 h-5" />}
               </div>
               <div className="text-center sm:text-left flex-1">
                 <h3 className="font-bold text-white text-sm">Cargar Pedido PDF</h3>
-                <p className="text-xs text-white/60 mt-0.5">Sube el PDF del pedido Click Balance para auto-llenar todos los campos.</p>
+                <p className="text-xs text-white/60 mt-0.5">Sube el PDF del pedido Click Balance para auto-llenar todos los campos<span className="hidden sm:inline">, o <span className="text-blue-400 font-semibold">arrastra y suelta el archivo aquí</span></span>.</p>
               </div>
               <label className="max-sm:min-h-[44px] cursor-pointer bg-blue-600 hover:bg-blue-700 text-white text-xs px-5 py-3 rounded-2xl font-bold inline-flex items-center gap-2 shadow-lg shadow-blue-950/50 flex-shrink-0 transition-colors">
                 <FileUp className="w-4 h-4" /> Cargar Orden PDF
