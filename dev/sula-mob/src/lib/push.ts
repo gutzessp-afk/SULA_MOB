@@ -11,6 +11,7 @@
  * RUTA: src/lib/push.ts
  */
 
+import { createECDH } from 'node:crypto'
 import { after } from 'next/server'
 import webpush from 'web-push'
 import { supabaseServidor } from '@/lib/admin-api'
@@ -26,6 +27,28 @@ export interface MensajePush {
 }
 
 let configurado: boolean | null = null
+
+/**
+ * Revisa que la llave privada del servidor sea pareja de la pública con la que se
+ * suscribieron los dispositivos. Si no, Google/Apple rechazan cada envío (403).
+ */
+function problemaLlaves(): string | null {
+  const privada = process.env.VAPID_PRIVATE_KEY
+  if (!privada) return 'Falta la variable VAPID_PRIVATE_KEY en el servidor.'
+  if (privada !== privada.trim() || /["']/.test(privada)) return 'VAPID_PRIVATE_KEY tiene espacios, saltos de línea o comillas de más: pégala sin nada extra.'
+  try {
+    const ecdh = createECDH('prime256v1')
+    ecdh.setPrivateKey(Buffer.from(privada, 'base64url'))
+    if (ecdh.getPublicKey().toString('base64url') !== VAPID_PUBLICA) {
+      return 'VAPID_PRIVATE_KEY no corresponde a la llave pública (NEXT_PUBLIC_VAPID_PUBLIC_KEY): las dos deben ser del mismo par.'
+    }
+  } catch {
+    return 'VAPID_PRIVATE_KEY no es una llave válida.'
+  }
+  const sujeto = process.env.VAPID_SUBJECT
+  if (sujeto && !/^(mailto:|https:\/\/)/.test(sujeto)) return 'VAPID_SUBJECT debe empezar con "mailto:" o "https://".'
+  return null
+}
 
 function configurar(): boolean {
   if (configurado !== null) return configurado
@@ -70,6 +93,8 @@ export async function enviarPushAdmins(mensaje: MensajePush): Promise<number> {
 
 /** Notificación de prueba a UN dispositivo (botón "Enviar prueba" de Mi perfil) */
 export async function enviarPrueba(sub: { endpoint: string; p256dh: string; auth: string }): Promise<string | null> {
+  const problema = problemaLlaves()
+  if (problema) return problema
   if (!configurar()) return 'Faltan las llaves VAPID en el servidor (variables de entorno).'
   try {
     await webpush.sendNotification(
@@ -79,7 +104,10 @@ export async function enviarPrueba(sub: { endpoint: string; p256dh: string; auth
     )
     return null
   } catch (err) {
-    return 'No se pudo enviar: ' + (err as Error).message
+    const { statusCode, body } = err as { statusCode?: number; body?: string }
+    if (statusCode === 404 || statusCode === 410) return 'Este dispositivo ya no está suscrito: toca "Quitar" y vuelve a activarlas.'
+    const detalle = [statusCode && `código ${statusCode}`, body?.trim().slice(0, 200)].filter(Boolean).join(': ')
+    return 'No se pudo enviar' + (detalle ? ` (${detalle})` : ': ' + (err as Error).message)
   }
 }
 
