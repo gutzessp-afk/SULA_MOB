@@ -8,7 +8,10 @@
  * Hay dos tipos de cuenta de administrador:
  *   - 'usuario': fila de la tabla `usuarios` (contraseña con bcrypt). Edita nombre,
  *     apellidos, usuario, correo y contraseña.
- *   - 'auth': cuenta de Supabase Auth (sin fila en `usuarios`). Solo cambia su contraseña.
+ *   - 'auth': cuenta de Supabase Auth (sin fila en `usuarios`). Su nombre, apellidos y foto
+ *     se guardan en los metadatos de Supabase Auth; el correo es con el que inicia sesión y no cambia aquí.
+ *
+ * La foto de perfil va al bucket público `avatares` (sql/avatar_perfil.sql).
  *
  * RUTA: src/app/admin/perfil/actions.ts
  */
@@ -24,6 +27,7 @@ export interface Perfil {
   apellidos: string
   username: string
   correo: string
+  avatar_url: string | null
   creado: string | null
 }
 
@@ -58,21 +62,40 @@ async function clienteAuth() {
   })
 }
 
+/** Metadatos de la cuenta de Supabase Auth de la sesión (null si su sesión de Auth ya no es válida) */
+async function usuarioAuth() {
+  const { data } = await (await clienteAuth()).auth.getUser()
+  return data.user
+}
+
 export async function obtenerPerfil(): Promise<Perfil | null> {
   const sesion = await sesionAdmin()
   if (!sesion) return null
-  const { data } = await supabaseServidor()
-    .from('usuarios')
-    .select('nombre, apellidos, username, correo, created_at')
-    .eq('id', sesion.id)
-    .maybeSingle()
-  if (!data) return { tipo: 'auth', nombre: '', apellidos: '', username: '', correo: sesion.correo, creado: null }
+  const supabase = supabaseServidor()
+  // La foto se pide aparte: si la columna avatar_url aún no existe, el resto del perfil sigue funcionando
+  const [{ data }, { data: foto }] = await Promise.all([
+    supabase.from('usuarios').select('nombre, apellidos, username, correo, created_at').eq('id', sesion.id).maybeSingle(),
+    supabase.from('usuarios').select('avatar_url').eq('id', sesion.id).maybeSingle(),
+  ])
+  if (!data) {
+    const meta = (await usuarioAuth())?.user_metadata ?? {}
+    return {
+      tipo: 'auth',
+      nombre: typeof meta.nombre === 'string' ? meta.nombre : '',
+      apellidos: typeof meta.apellidos === 'string' ? meta.apellidos : '',
+      username: '',
+      correo: sesion.correo,
+      avatar_url: typeof meta.avatar_url === 'string' ? meta.avatar_url : null,
+      creado: null,
+    }
+  }
   return {
     tipo: 'usuario',
     nombre: data.nombre ?? '',
     apellidos: data.apellidos ?? '',
     username: data.username ?? '',
     correo: data.correo ?? '',
+    avatar_url: (foto as { avatar_url?: string | null } | null)?.avatar_url ?? null,
     creado: data.created_at ?? null,
   }
 }
@@ -83,15 +106,23 @@ export async function guardarDatos(datos: { nombre: string; apellidos: string; u
 
   const nombre = datos.nombre.trim()
   const apellidos = datos.apellidos.trim()
-  const username = datos.username.trim().toLowerCase()
-  const correo = datos.correo.trim().toLowerCase()
   if (!nombre) return { ok: false, error: 'El nombre es obligatorio.' }
-  if (!USUARIO.test(username)) return { ok: false, error: 'El usuario debe tener de 3 a 30 letras, números, punto, guion o guion bajo, sin espacios.' }
-  if (correo && !CORREO.test(correo)) return { ok: false, error: 'El correo no es válido.' }
 
   const supabase = supabaseServidor()
   const { data: actual } = await supabase.from('usuarios').select('id').eq('id', sesion.id).maybeSingle()
-  if (!actual) return { ok: false, error: 'Esta cuenta se administra en Supabase; aquí solo puedes cambiar la contraseña.' }
+
+  // Cuenta de Supabase Auth: solo nombre y apellidos, en sus metadatos
+  if (!actual) {
+    const auth = await clienteAuth()
+    const { error } = await auth.auth.updateUser({ data: { nombre, apellidos } })
+    if (error) return { ok: false, error: 'No se pudo guardar: ' + (/session/i.test(error.message) ? 'tu sesión de Supabase venció, vuelve a iniciar sesión.' : error.message) }
+    return { ok: true, mensaje: 'Datos guardados.' }
+  }
+
+  const username = datos.username.trim().toLowerCase()
+  const correo = datos.correo.trim().toLowerCase()
+  if (!USUARIO.test(username)) return { ok: false, error: 'El usuario debe tener de 3 a 30 letras, números, punto, guion o guion bajo, sin espacios.' }
+  if (correo && !CORREO.test(correo)) return { ok: false, error: 'El correo no es válido.' }
 
   // Usuario y correo no pueden repetirse con otra cuenta (se usan para iniciar sesión)
   const { data: repetidos } = await supabase
@@ -140,4 +171,47 @@ export async function cambiarContrasena(actual: string, nueva: string): Promise<
   const { error } = await auth.auth.updateUser({ password: nueva })
   if (error) return { ok: false, error: 'No se pudo cambiar la contraseña: ' + error.message }
   return { ok: true, mensaje: 'Contraseña actualizada.' }
+}
+
+const TIPOS_FOTO: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }
+
+/**
+ * Sube la foto de perfil al bucket `avatares` y guarda su URL pública
+ * (en usuarios.avatar_url, o en los metadatos de Auth para cuentas de Supabase Auth).
+ * El navegador ya la manda recortada a 512×512, así que pesa poco.
+ */
+export async function subirAvatar(formData: FormData): Promise<Resultado> {
+  const sesion = await sesionAdmin()
+  if (!sesion) return { ok: false, error: 'Tu sesión terminó. Vuelve a iniciar sesión.' }
+
+  const archivo = formData.get('avatar')
+  if (!(archivo instanceof File) || archivo.size === 0) return { ok: false, error: 'No se recibió ninguna imagen.' }
+  if (archivo.size > 900 * 1024) return { ok: false, error: 'La imagen es demasiado pesada.' }
+  const ext = TIPOS_FOTO[archivo.type]
+  if (!ext) return { ok: false, error: 'La foto debe ser JPG, PNG o WebP.' }
+
+  const supabase = supabaseServidor()
+  // Nombre nuevo en cada cambio: así el navegador no se queda con la foto anterior en caché
+  const ruta = `${sesion.id}/${Date.now()}.${ext}`
+  const { error: errSubida } = await supabase.storage
+    .from('avatares')
+    .upload(ruta, new Uint8Array(await archivo.arrayBuffer()), { contentType: archivo.type, upsert: false })
+  if (errSubida) {
+    const falta = /bucket not found/i.test(errSubida.message)
+    return { ok: false, error: falta ? 'Falta crear el almacenamiento de fotos: corre sql/avatar_perfil.sql en Supabase.' : 'No se pudo subir la imagen: ' + errSubida.message }
+  }
+  const avatarUrl = supabase.storage.from('avatares').getPublicUrl(ruta).data.publicUrl
+
+  const { data: fila } = await supabase.from('usuarios').select('id').eq('id', sesion.id).maybeSingle()
+  if (fila) {
+    const { error } = await supabase.from('usuarios').update({ avatar_url: avatarUrl, updated_at: new Date().toISOString() }).eq('id', sesion.id)
+    if (error) {
+      const falta = /avatar_url/.test(error.message)
+      return { ok: false, error: falta ? 'Falta la columna de la foto: corre sql/avatar_perfil.sql en Supabase.' : 'Se subió la imagen pero no se pudo guardar en tu perfil: ' + error.message }
+    }
+  } else {
+    const { error } = await (await clienteAuth()).auth.updateUser({ data: { avatar_url: avatarUrl } })
+    if (error) return { ok: false, error: 'Se subió la imagen pero no se pudo guardar en tu perfil: ' + error.message }
+  }
+  return { ok: true, mensaje: 'Foto de perfil actualizada.' }
 }

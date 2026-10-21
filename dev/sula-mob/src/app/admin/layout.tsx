@@ -78,10 +78,13 @@ function PanelAdmin({ children }: { children: React.ReactNode }) {
   const setMobileOpen = (abrir: boolean) => setAbiertoEn(abrir ? pathname : null);
   // Nombre real del administrador para la tarjeta del menú (se actualiza al editar el perfil)
   const [miNombre, setMiNombre] = useState('');
+  const [miFoto, setMiFoto] = useState<string | null>(null);
   useEffect(() => {
     const leer = () => {
       void obtenerPerfil().then(p => {
-        if (p) setMiNombre(`${p.nombre} ${p.apellidos}`.trim() || p.correo);
+        if (!p) return;
+        setMiNombre(`${p.nombre} ${p.apellidos}`.trim() || p.correo);
+        setMiFoto(p.avatar_url);
       });
     };
     const primero = setTimeout(leer, 0);
@@ -134,9 +137,14 @@ function PanelAdmin({ children }: { children: React.ReactNode }) {
           pathname === '/admin/perfil' ? 'bg-blue-600/30 ring-1 ring-blue-400/40' : 'bg-white/[0.06] hover:bg-white/[0.1]'
         }`}
       >
-        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-sm font-bold shadow-md">
-          {(miNombre[0] ?? 'A').toUpperCase()}
-        </div>
+        {miFoto ? (
+          // eslint-disable-next-line @next/next/no-img-element -- foto propia de 512 px
+          <img src={miFoto} alt="" className="w-9 h-9 shrink-0 rounded-full object-cover shadow-md ring-1 ring-blue-400/30" />
+        ) : (
+          <div className="w-9 h-9 shrink-0 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-sm font-bold shadow-md">
+            {(miNombre[0] ?? 'A').toUpperCase()}
+          </div>
+        )}
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-white truncate">{miNombre || 'Admin'}</p>
           <p className="text-[11px] text-slate-400">Administrador · Mi perfil</p>

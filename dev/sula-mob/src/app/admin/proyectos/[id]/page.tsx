@@ -31,6 +31,7 @@ interface Proyecto {
   codigo: string;
   nombre: string;
   cliente?: string | null;
+  referencia_sucursal?: string | null;
   descripcion?: string | null;
 }
 
@@ -71,7 +72,7 @@ export default function DetalleProyectoPage() {
   /* ── Carga: proyecto, partidas y plantillas que ya existen ── */
   const cargar = useCallback(async () => {
     const { data: prj, error: errPrj } = await supabase
-      .from('proyectos').select('id, codigo, nombre, cliente, descripcion').eq('id', proyectoId).maybeSingle();
+      .from('proyectos').select('id, codigo, nombre, cliente, referencia_sucursal, descripcion').eq('id', proyectoId).maybeSingle();
     if (errPrj || !prj) {
       setError(errPrj?.message || 'No se encontró el proyecto.');
       setLoading(false);
@@ -138,7 +139,7 @@ export default function DetalleProyectoPage() {
   const ocupado = analizandoClave !== null;
 
   const stats = useMemo(() => [
-    { icono: User, label: 'Cliente', valor: proyecto?.cliente || '—' },
+    { icono: User, label: 'Sucursal', valor: proyecto?.referencia_sucursal || proyecto?.cliente || '—' },
     { icono: Calendar, label: 'Entrega', valor: entrega ? fechaCorta(entrega) : '—' },
     { icono: Package, label: 'Partidas', valor: String(partidas.length) },
     { icono: Ruler, label: 'Planos', valor: `${listas}/${partidas.length} listos` },
@@ -228,8 +229,8 @@ export default function DetalleProyectoPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          cliente: proyecto.cliente || '',
-          nombre_proyecto: [proyecto.codigo, proyecto.cliente].filter(Boolean).join(' - '),
+          cliente: proyecto.referencia_sucursal || proyecto.cliente || '',
+          nombre_proyecto: [proyecto.codigo, proyecto.referencia_sucursal || proyecto.cliente].filter(Boolean).join(' - '),
           fecha_entrega: entrega,
           partidas,
         }),
@@ -269,7 +270,7 @@ export default function DetalleProyectoPage() {
         <div>
           <p className="text-sm font-mono text-white/40">{proyecto?.codigo || (loading ? 'Cargando…' : '—')}</p>
           <h1 className="text-xl sm:text-2xl font-bold text-white leading-tight">
-            {proyecto ? [proyecto.nombre, proyecto.cliente].filter(Boolean).join(' - ') : loading ? ' ' : 'Proyecto no encontrado'}
+            {proyecto ? [proyecto.nombre, proyecto.referencia_sucursal || proyecto.cliente].filter(Boolean).join(' - ') : loading ? ' ' : 'Proyecto no encontrado'}
           </h1>
         </div>
         {proyecto && (
@@ -362,7 +363,7 @@ export default function DetalleProyectoPage() {
                   clave={p.clave}
                   descripcion={p.descripcion}
                   cantidad={p.cantidad}
-                  cliente={proyecto?.cliente || ''}
+                  cliente={proyecto?.referencia_sucursal || proyecto?.cliente || ''}
                   proyecto={proyecto?.codigo || ''}
                   estado={estados[p.clave] ?? {}}
                   ocupado={ocupado}

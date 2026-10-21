@@ -37,6 +37,7 @@ interface Proyecto {
   codigo: string;
   nombre: string;
   cliente?: string | null;
+  referencia_sucursal?: string | null;
   progreso: number;
 }
 
@@ -274,7 +275,7 @@ export default function DespiecePage() {
   /* ── Carga de datos: cada nivel se pide con los ids del nivel anterior ── */
   const loadDespiece = useCallback(async () => {
     const [proyectoRes, partidasRes, areasRes] = await Promise.all([
-      supabase.from('proyectos').select('id, codigo, nombre, cliente, progreso').eq('id', proyectoId).maybeSingle(),
+      supabase.from('proyectos').select('id, codigo, nombre, cliente, referencia_sucursal, progreso').eq('id', proyectoId).maybeSingle(),
       supabase.from('partidas').select('id, clave, descripcion, cantidad, orden, progreso').eq('proyecto_id', proyectoId).order('orden'),
       supabase.from('areas').select('id, nombre, peso').eq('activo', true).order('orden', { ascending: true }),
     ]);
@@ -486,7 +487,7 @@ export default function DespiecePage() {
               {proyecto?.nombre || (loading ? 'Cargando…' : 'Proyecto no encontrado')}
             </h1>
             <p className="text-[11px] sm:text-xs text-white/65 mt-1">
-              Despiece del pedido{proyecto?.cliente ? ` · Cliente: ${proyecto.cliente}` : ''}
+              Despiece del pedido{(proyecto?.referencia_sucursal || proyecto?.cliente) ? ` · ${proyecto?.referencia_sucursal || proyecto?.cliente}` : ''}
             </p>
             <EnVivo estado={enVivo} className="mt-1.5" />
           </div>

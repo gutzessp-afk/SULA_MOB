@@ -50,9 +50,10 @@ export async function activarPush(): Promise<{ ok: boolean; error?: string }> {
     const reg = (await registro()) ?? (await navigator.serviceWorker.ready)
     const sub = (await reg.pushManager.getSubscription())
       ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytesDeLlave(LLAVE_PUBLICA) }))
-    const res = await fetch('/api/push', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub.toJSON()) })
-    if (!res.ok) return { ok: false, error: (await res.json().catch(() => null))?.error || `Error ${res.status}` }
-    return { ok: true }
+    const r = await guardar(sub)
+    // Si el servidor no la guardó, se quita también del navegador: así no aparece "activada" sin estarlo
+    if (!r.ok) await sub.unsubscribe().catch(() => {})
+    return r
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'No se pudieron activar las notificaciones.' }
   }
@@ -66,11 +67,21 @@ export async function desactivarPush(): Promise<void> {
   await sub.unsubscribe().catch(() => {})
 }
 
-/** Con el permiso ya dado, vuelve a guardar la suscripción (por si el navegador la renovó) */
-export async function refrescarPush(): Promise<void> {
-  if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return
+/** Guarda (o actualiza) la suscripción en el servidor */
+async function guardar(sub: PushSubscription): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch('/api/push', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub.toJSON()) })
+    return res.ok ? { ok: true } : { ok: false, error: (await res.json().catch(() => null))?.error || `Error ${res.status}` }
+  } catch {
+    return { ok: false, error: 'Sin conexión con el servidor.' }
+  }
+}
+
+/** Con el permiso ya dado, vuelve a guardar la suscripción (por si el navegador la renovó o el servidor no la tiene) */
+export async function refrescarPush(): Promise<{ ok: boolean; error?: string }> {
+  if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return { ok: true }
   const sub = await (await registro())?.pushManager.getSubscription()
-  if (sub) await fetch('/api/push', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub.toJSON()) }).catch(() => {})
+  return sub ? guardar(sub) : { ok: true }
 }
 
 /** Pide al servidor una notificación de prueba para este dispositivo */
