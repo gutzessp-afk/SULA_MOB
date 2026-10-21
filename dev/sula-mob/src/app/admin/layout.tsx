@@ -16,6 +16,7 @@ import {
   Menu,
   X,
   ChevronRight,
+  Layers,
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
@@ -36,7 +37,9 @@ const menuSections = [
     title: 'MENÚ',
     items: [
       { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutGrid },
-      { name: 'Proyectos', href: '/admin/proyectos', icon: Briefcase },
+      // Proyectos solo se marca en la lista; el detalle de un proyecto (/admin/proyectos/[id]) pertenece a Despiece
+      { name: 'Proyectos', href: '/admin/proyectos', icon: Briefcase, activoEn: (ruta: string) => ruta === '/admin/proyectos' },
+      { name: 'Despiece', href: '/admin/despiece', icon: Layers, activoEn: (ruta: string) => ruta.startsWith('/admin/despiece') || ruta.startsWith('/admin/proyectos/') },
       { name: 'Calendario', href: '/admin/calendario', icon: CalendarDays },
       { name: 'Áreas', href: '/admin/actividades', icon: Warehouse },
       { name: 'Notificaciones', href: '/admin/notificaciones', icon: Bell },
@@ -152,7 +155,9 @@ function PanelAdmin({ children }: { children: React.ReactNode }) {
             <div className="space-y-1">
               {section.items.map((item) => {
                 const Icon = item.icon;
-                const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
+                const isActive = 'activoEn' in item && item.activoEn
+                  ? item.activoEn(pathname)
+                  : pathname === item.href || pathname.startsWith(item.href + '/');
 
                 return (
                   <Link

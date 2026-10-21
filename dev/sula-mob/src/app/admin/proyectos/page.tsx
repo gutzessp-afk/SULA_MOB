@@ -1,11 +1,10 @@
 'use client';
 
 import { useState, useMemo, useRef } from 'react';
-import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { cargarProyectos, useDatos } from '@/lib/cache-datos';
 import { eliminarProyecto } from '@/lib/eliminar-proyecto';
-import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, X, Calendar, User, MapPin, Download, Layers } from 'lucide-react';
+import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, X, Calendar, User, MapPin, Download } from 'lucide-react';
 import { parsePedidoPdf } from '@/lib/parse-pedido';
 import { useDebounce } from '@/hooks/useDebounce';
 import { BadgePrioridad } from '@/components/BadgePrioridad';
@@ -84,7 +83,6 @@ interface Proyecto {
 }
 
 export default function ProyectosPage() {
-  const router = useRouter();
   const [activeTab, setActiveTab] = useState<'lista' | 'crear'>('lista');
   // Proyectos y áreas se piden a la vez y se muestran al instante si ya se habían cargado
   const { datos: listaProyectos, cargando: cargandoProyectos, recargar: fetchProyectos } = useDatos('proyectos', () => cargarProyectos<Proyecto>());
@@ -481,14 +479,8 @@ export default function ProyectosPage() {
                     <Eye className="w-4 h-4" />
                   </button>
                   <button
-                    onClick={() => router.push(`/admin/proyectos/${p.id}`)}
-                    className="max-sm:min-h-[44px] flex-1 bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-400/30 text-xs px-3 py-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 backdrop-blur-md transition-all"
-                  >
-                    <Layers className="w-3.5 h-3.5 text-cyan-400" /> Despiece
-                  </button>
-                  <button
                     onClick={() => handleEliminarProyecto(p)}
-                    className="max-sm:min-h-[44px] bg-red-500/20 hover:bg-red-500/35 text-red-200 border border-red-400/30 text-xs px-3 py-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 backdrop-blur-md transition-all"
+                    className="max-sm:min-h-[44px] flex-1 bg-red-500/20 hover:bg-red-500/35 text-red-200 border border-red-400/30 text-xs px-3 py-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 backdrop-blur-md transition-all"
                   >
                     <Trash2 className="w-3.5 h-3.5 text-red-400" /> Baja
                   </button>
@@ -533,12 +525,6 @@ export default function ProyectosPage() {
                           title="Ver pedido"
                         >
                           <Eye className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => router.push(`/admin/proyectos/${p.id}`)}
-                          className="max-sm:min-h-[44px] h-8 bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-400/30 text-xs px-3 rounded-xl inline-flex items-center gap-1.5 backdrop-blur-md transition-all"
-                        >
-                          <Layers className="w-3.5 h-3.5 text-cyan-400" /> Despiece
                         </button>
                         <button
                           onClick={() => handleEliminarProyecto(p)}
@@ -916,15 +902,6 @@ export default function ProyectosPage() {
               )}
             </div>
 
-            {/* Botón para ir al despiece desde aquí */}
-            <div className="flex justify-center pt-2">
-              <button
-                onClick={() => router.push(`/admin/proyectos/${viewProyecto.id}`)}
-                className="max-sm:min-h-[44px] bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-300 text-xs px-5 py-2.5 rounded-xl border border-cyan-400/30 inline-flex items-center gap-2 backdrop-blur-md transition-all"
-              >
-                <Layers className="w-4 h-4 text-cyan-400" /> Ir al Despiece
-              </button>
-            </div>
           </div>
         </div>
       )}
