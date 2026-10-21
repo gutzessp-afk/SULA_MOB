@@ -4,7 +4,7 @@ import { useState, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { cargarProyectos, useDatos } from '@/lib/cache-datos';
 import { eliminarProyecto } from '@/lib/eliminar-proyecto';
-import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, X, Calendar, User, MapPin, Download } from 'lucide-react';
+import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, Pencil, X, Calendar, User, MapPin, Download } from 'lucide-react';
 import { parsePedidoPdf } from '@/lib/parse-pedido';
 import { useDebounce } from '@/hooks/useDebounce';
 import { BadgePrioridad } from '@/components/BadgePrioridad';
@@ -116,6 +116,48 @@ export default function ProyectosPage() {
   const [viewProyecto, setViewProyecto] = useState<Proyecto | null>(null);
   const [viewProductos, setViewProductos] = useState<ProductoDB[]>([]);
   const [loadingView, setLoadingView] = useState(false);
+
+  // Modal para corregir los datos de un pedido ya creado (el código no cambia: es el identificador)
+  const [editProyecto, setEditProyecto] = useState<Proyecto | null>(null);
+  const [editForm, setEditForm] = useState({ nombre: '', cliente: '', referencia_sucursal: '', prioridad: 'media', fecha_maxima: '', descripcion: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const openEditModal = (p: Proyecto) => {
+    setEditProyecto(p);
+    setEditForm({
+      nombre: p.nombre || '',
+      cliente: p.cliente || '',
+      referencia_sucursal: p.referencia_sucursal || '',
+      prioridad: p.prioridad || 'media',
+      // Misma fecha que muestra la lista (fecha_maxima o la "Entrega:" de la descripción)
+      fecha_maxima: entregaDe(p),
+      descripcion: p.descripcion || '',
+    });
+  };
+
+  const handleGuardarEdicion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editProyecto) return;
+    if (!editForm.nombre.trim()) { alert('El nombre es obligatorio.'); return; }
+    setSavingEdit(true);
+    const { data: guardado, error } = await supabase
+      .from('proyectos')
+      .update({
+        nombre: editForm.nombre.trim(),
+        cliente: editForm.cliente.trim() || null,
+        referencia_sucursal: editForm.referencia_sucursal.trim() || null,
+        prioridad: editForm.prioridad,
+        fecha_maxima: editForm.fecha_maxima || null,
+        descripcion: editForm.descripcion.trim() || null,
+      })
+      .eq('id', editProyecto.id)
+      .select('id');
+    setSavingEdit(false);
+    if (error) { alert('No se pudo guardar: ' + error.message); return; }
+    if (!guardado?.length) { alert('La base no permitió guardar los cambios (permisos).'); return; }
+    setEditProyecto(null);
+    await fetchProyectos();
+  };
 
   const [isParsingPdf, setIsParsingPdf] = useState(false);
   const [pdfSuccess, setPdfSuccess] = useState('');
@@ -479,6 +521,14 @@ export default function ProyectosPage() {
                     <Eye className="w-4 h-4" />
                   </button>
                   <button
+                    onClick={() => openEditModal(p)}
+                    className="max-sm:min-h-[44px] w-10 h-10 bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-400/30 rounded-xl inline-flex items-center justify-center backdrop-blur-md transition-all"
+                    title="Editar pedido"
+                    aria-label={`Editar ${p.codigo}`}
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button
                     onClick={() => handleEliminarProyecto(p)}
                     className="max-sm:min-h-[44px] flex-1 bg-red-500/20 hover:bg-red-500/35 text-red-200 border border-red-400/30 text-xs px-3 py-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 backdrop-blur-md transition-all"
                   >
@@ -525,6 +575,14 @@ export default function ProyectosPage() {
                           title="Ver pedido"
                         >
                           <Eye className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => openEditModal(p)}
+                          className="max-sm:min-h-[44px] w-8 h-8 bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-400/30 rounded-lg inline-flex items-center justify-center backdrop-blur-md transition-all"
+                          title="Editar pedido"
+                          aria-label={`Editar ${p.codigo}`}
+                        >
+                          <Pencil className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleEliminarProyecto(p)}
@@ -903,6 +961,81 @@ export default function ProyectosPage() {
             </div>
 
           </div>
+        </div>
+      )}
+      {/* ── MODAL EDITAR PEDIDO ── */}
+      {editProyecto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onKeyDown={e => { if (e.key === 'Escape') setEditProyecto(null); }}>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setEditProyecto(null)} />
+          <form onSubmit={handleGuardarEdicion} role="dialog" aria-modal="true" aria-labelledby="titulo-editar-pedido" className="relative w-full max-w-lg rounded-[20px] border border-white/20 bg-[#0d1117] shadow-2xl ring-1 ring-inset ring-white/10 overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+              <div className="min-w-0">
+                <h2 id="titulo-editar-pedido" className="text-base font-bold text-white">Editar pedido</h2>
+                <p className="text-xs text-white/50 mt-0.5 truncate">{editProyecto.codigo}</p>
+              </div>
+              <button type="button" onClick={() => setEditProyecto(null)} aria-label="Cerrar" className="p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Formulario */}
+            <div className="space-y-4 p-5 max-h-[70vh] overflow-y-auto">
+              <label className="block space-y-1.5">
+                <span className="text-xs font-semibold text-white/60">Nombre del proyecto *</span>
+                <input required autoFocus value={editForm.nombre} onChange={e => setEditForm({ ...editForm, nombre: e.target.value })} className="w-full h-[44px] rounded-xl border border-white/20 bg-white/[0.07] px-3.5 text-sm text-white outline-none focus:border-blue-400/60 placeholder:text-white/30 max-sm:text-base" placeholder="Ej: Pedido 3492" />
+              </label>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-semibold text-white/60">Cliente</span>
+                  <input value={editForm.cliente} onChange={e => setEditForm({ ...editForm, cliente: e.target.value })} className="w-full h-[44px] rounded-xl border border-white/20 bg-white/[0.07] px-3.5 text-sm text-white outline-none focus:border-blue-400/60 placeholder:text-white/30 max-sm:text-base" placeholder="WATTS SUSTENTABLES" />
+                </label>
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-semibold text-white/60">Sucursal</span>
+                  <input value={editForm.referencia_sucursal} onChange={e => setEditForm({ ...editForm, referencia_sucursal: e.target.value })} className="w-full h-[44px] rounded-xl border border-white/20 bg-white/[0.07] px-3.5 text-sm text-white outline-none focus:border-blue-400/60 placeholder:text-white/30 max-sm:text-base" placeholder="KFC HOSPICIO" />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-semibold text-white/60">Prioridad</span>
+                  <select value={editForm.prioridad} onChange={e => setEditForm({ ...editForm, prioridad: e.target.value })} className="w-full h-[44px] rounded-xl border border-white/20 bg-white/[0.07] px-3.5 text-sm text-white outline-none focus:border-blue-400/60 placeholder:text-white/30 max-sm:text-base">
+                    <option value="baja" className="bg-[#0d1117]">Baja</option>
+                    <option value="media" className="bg-[#0d1117]">Media</option>
+                    <option value="alta" className="bg-[#0d1117]">Alta</option>
+                    <option value="urgente" className="bg-[#0d1117]">Urgente</option>
+                  </select>
+                </label>
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-semibold text-white/60">Fecha de entrega</span>
+                  <input type="date" value={editForm.fecha_maxima} onChange={e => setEditForm({ ...editForm, fecha_maxima: e.target.value })} className="w-full h-[44px] rounded-xl border border-white/20 bg-white/[0.07] px-3.5 text-sm text-white outline-none focus:border-blue-400/60 placeholder:text-white/30 max-sm:text-base [color-scheme:dark]" />
+                </label>
+              </div>
+
+              <label className="block space-y-1.5">
+                <span className="text-xs font-semibold text-white/60">Descripción / notas</span>
+                <textarea
+                  value={editForm.descripcion}
+                  onChange={e => setEditForm({ ...editForm, descripcion: e.target.value })}
+                  rows={3}
+                  className="w-full rounded-xl border border-white/20 bg-white/[0.07] px-3.5 py-2.5 text-sm text-white outline-none focus:border-blue-400/60 placeholder:text-white/30 resize-none max-sm:text-base"
+                  placeholder="Fecha: ... | Entrega: ... | Ref: ... | Elaboró: ..."
+                />
+              </label>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 border-t border-white/10 px-5 py-4">
+              <button type="button" onClick={() => setEditProyecto(null)} className="h-[44px] px-5 rounded-xl text-sm font-semibold text-white/60 hover:text-white hover:bg-white/10 transition-colors">
+                Cancelar
+              </button>
+              <button type="submit" disabled={savingEdit} className="h-[44px] px-6 rounded-xl bg-amber-600 text-sm font-bold text-white hover:bg-amber-500 disabled:opacity-40 inline-flex items-center gap-2 transition-colors">
+                {savingEdit ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />}
+                Guardar cambios
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>
