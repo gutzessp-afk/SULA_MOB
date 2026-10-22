@@ -31,6 +31,26 @@ async function registro(): Promise<ServiceWorkerRegistration | null> {
   return (await navigator.serviceWorker.getRegistration()) ?? null
 }
 
+/** ¿La suscripción se hizo con la llave pública actual? Si se cambió el par de llaves, ya no sirve */
+function llaveVigente(sub: PushSubscription): boolean {
+  const llave = sub.options.applicationServerKey
+  if (!llave) return true
+  const actual = bytesDeLlave(LLAVE_PUBLICA)
+  const usada = new Uint8Array(llave)
+  return usada.length === actual.length && usada.every((b, i) => b === actual[i])
+}
+
+/** Suscripción de este dispositivo con la llave actual: reemplaza la que se hizo con una llave vieja */
+async function suscripcionVigente(reg: ServiceWorkerRegistration): Promise<PushSubscription> {
+  const sub = await reg.pushManager.getSubscription()
+  if (sub && llaveVigente(sub)) return sub
+  if (sub) {
+    await fetch('/api/push', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: sub.endpoint }) }).catch(() => {})
+    await sub.unsubscribe().catch(() => {})
+  }
+  return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytesDeLlave(LLAVE_PUBLICA) })
+}
+
 export async function estadoPush(): Promise<EstadoPush> {
   if (typeof window === 'undefined' || !LLAVE_PUBLICA) return 'no-soportado'
   // En iPhone, las notificaciones solo existen con la app instalada
@@ -48,8 +68,7 @@ export async function activarPush(): Promise<{ ok: boolean; error?: string }> {
     const permiso = await Notification.requestPermission()
     if (permiso !== 'granted') return { ok: false, error: 'No se dio permiso para las notificaciones.' }
     const reg = (await registro()) ?? (await navigator.serviceWorker.ready)
-    const sub = (await reg.pushManager.getSubscription())
-      ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytesDeLlave(LLAVE_PUBLICA) }))
+    const sub = await suscripcionVigente(reg)
     const r = await guardar(sub)
     // Si el servidor no la guardó, se quita también del navegador: así no aparece "activada" sin estarlo
     if (!r.ok) await sub.unsubscribe().catch(() => {})
@@ -80,8 +99,13 @@ async function guardar(sub: PushSubscription): Promise<{ ok: boolean; error?: st
 /** Con el permiso ya dado, vuelve a guardar la suscripción (por si el navegador la renovó o el servidor no la tiene) */
 export async function refrescarPush(): Promise<{ ok: boolean; error?: string }> {
   if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return { ok: true }
-  const sub = await (await registro())?.pushManager.getSubscription()
-  return sub ? guardar(sub) : { ok: true }
+  const reg = await registro()
+  if (!reg || !(await reg.pushManager.getSubscription())) return { ok: true }
+  try {
+    return await guardar(await suscripcionVigente(reg))
+  } catch {
+    return { ok: false, error: 'No se pudo renovar la suscripción de este dispositivo. Toca "Quitar" y vuelve a activarlas.' }
+  }
 }
 
 /** Pide al servidor una notificación de prueba para este dispositivo */

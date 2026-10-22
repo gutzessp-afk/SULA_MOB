@@ -6,4 +6,4 @@
  *
  * RUTA: src/lib/vapid.ts
  */
-export const VAPID_PUBLICA = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || 'BPRy7whGOauMOIOAelhYU_mHmlKh2z3Jgxu-zJKXWxYDc8BKEGVkNfk77XMU2daFlTzwtVc5e6ccLuAwZUdhLlE'
+export const VAPID_PUBLICA = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || 'BLUKz9IWxkZFRhFLVaY711-pP4kzVk4c5F7igaEdXZS64-Oj8HXz12xRA6aar5chLo8VH7PlUjlwg9w4Yc9a72s'
