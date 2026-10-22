@@ -10,6 +10,11 @@
 // administrador: así lo ve en automático sin cambiar sus pantallas.
 //
 // Para quitarlo: sql/despiece_operador.sql trae el bloque que borra estas piezas.
+//
+// DESACTIVADO (2026-10-22): al aparecer planos analizados en pedidos en curso, el operador cambió
+// de modo y el avance del admin se reescribió en 0. Con INTEGRACION_ACTIVA = false no se crean
+// piezas del plano, el operador no las ve y no se toca el avance del admin: todo trabaja como antes.
+export const INTEGRACION_ACTIVA = false
 
 import { construirMatriz } from '@/lib/matriz-corte'
 import type { createClient } from '@/lib/supabase/server'
@@ -156,6 +161,7 @@ async function piezasDelPlano(supabase: Supabase, proyectoId: string): Promise<F
  * (Matriz de Corte en PDF) o si ninguna partida tiene plano analizado.
  */
 export async function sincronizarDespiece(supabase: Supabase, proyectoId: string): Promise<boolean> {
+  if (!INTEGRACION_ACTIVA) return false
   const { count: aMano } = await supabase
     .from('piezas_proyecto')
     .select('id', { count: 'exact', head: true })
@@ -243,6 +249,7 @@ export async function registrarEnAdmin(
   supabase: Supabase,
   datos: { proyectoId: string; areaId: string; piezaId: string; piezas: number; inicio: string; fin: string; operadorId: string }
 ): Promise<void> {
+  if (!INTEGRACION_ACTIVA) return
   const { data: pieza } = await supabase
     .from('piezas_proyecto')
     .select('origen, origen_clave')
@@ -288,6 +295,7 @@ export async function usaDespiece(supabase: Supabase, proyectoId: string) {
  * partidas.progreso y proyectos.progreso (misma fórmula ponderada por área de siempre).
  */
 export async function actualizarAvanceAdmin(supabase: Supabase, proyectoId: string): Promise<void> {
+  if (!INTEGRACION_ACTIVA) return
   const [piezasRes, productosRes, partidasRes, areasRes] = await Promise.all([
     supabase.from('piezas_proyecto').select('id, area_id, origen_clave, meta').eq('proyecto_id', proyectoId).eq('origen', ORIGEN_DESPIECE),
     supabase.from('proyecto_productos').select('id, nombre, progreso').eq('proyecto_id', proyectoId),

@@ -15,6 +15,8 @@ import {
   productoDePiezaDespiece,
   registrarEnAdmin,
   sincronizarDespiece,
+  INTEGRACION_ACTIVA,
+  ORIGEN_DESPIECE,
 } from '@/lib/operador/despiece'
 import { getUsuarioActual } from '../actions'
 import { avisarRetrasoDespues } from '@/lib/push'
@@ -248,6 +250,8 @@ async function cargarPiezasPdf(supabase: Supabase, proyectoId: string): Promise<
     .from('piezas_proyecto')
     .select('id, area_id, descripcion, modulo, material, medidas, notas, meta')
     .eq('proyecto_id', proyectoId)
+    // Las piezas que salieron del despiece del plano no se muestran mientras la integración esté apagada
+    .or(INTEGRACION_ACTIVA ? 'origen.is.null,origen.not.is.null' : `origen.is.null,origen.neq.${ORIGEN_DESPIECE}`)
     .order('orden')
   if (error) {
     console.error('Error al traer piezas del PDF (¿ya corriste el SQL del paso 2?):', error)

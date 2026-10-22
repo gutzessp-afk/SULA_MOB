@@ -9,6 +9,7 @@ import {
   tieneAccesoArea,
   validarClaveArea,
 } from '@/lib/operador/acceso'
+import { INTEGRACION_ACTIVA, ORIGEN_DESPIECE } from '@/lib/operador/despiece'
 
 type Supabase = Awaited<ReturnType<typeof createClient>>
 
@@ -456,6 +457,8 @@ async function areaCompleta(
     .select('id, meta')
     .eq('proyecto_id', proyectoId)
     .eq('area_id', areaId)
+    // Las piezas del despiece del plano no cuentan mientras la integración esté apagada
+    .or(INTEGRACION_ACTIVA ? 'origen.is.null,origen.not.is.null' : `origen.is.null,origen.neq.${ORIGEN_DESPIECE}`)
   if (piezas && piezas.length > 0) {
     const { data: trabajos } = await supabase
       .from('trabajos_pieza')
