@@ -13,8 +13,17 @@
  *   3. Respaldo sin IA (src/lib/bom-pdf.ts): solo si no hay API key o la IA
  *      falla, y solo si logra leer todos los subensambles.
  *
- * Entrada (FormData): plano (PDF), clave, descripcion, force ("true" = ignorar caché)
+ * Entrada (FormData): plano (PDF), clave, descripcion, force ("true" = ignorar caché),
+ *   versionar ("true" = Despiece por plano suelto: control de versiones por huella del PDF)
  * Respuesta: { ok: true, source: 'cache' | 'pdf' | 'ia', bom, advertencias } o { error }
+ *
+ * Con versionar=true (pantalla /admin/despiece/plano), en vez de la caché por clave:
+ *   - Mismo PDF que la versión vigente (misma huella SHA-256) → la plantilla guardada, sin IA.
+ *   - Un PDF que ya se analizó en una versión anterior → esa versión, sin IA.
+ *   - La clave tiene plantilla pero sin huella (se analizó antes de las versiones) →
+ *     la plantilla guardada con huellaDesconocida: la pantalla pregunta si analizar el PDF.
+ *   - PDF distinto → se analiza, se guarda como versión nueva (sql/plano_versiones.sql)
+ *     y la respuesta trae { version, diferencias } contra la versión anterior.
  *
  * La IA requiere ANTHROPIC_API_KEY. Solo administradores.
  *
@@ -25,6 +34,8 @@ import Anthropic from '@anthropic-ai/sdk'
 import { NextRequest, NextResponse } from 'next/server'
 import { esAdmin, supabaseServidor } from '@/lib/admin-api'
 import { leerPlanoPDF, leerTextoPlano } from '@/lib/bom-pdf'
+import { hashArchivo } from '@/lib/hash-archivo'
+import { faltaEsquema, registrarVersion } from '@/lib/versiones-plano'
 import { AREAS_PRODUCCION, type AreaProduccion, type BomSource, type CalidadPlano, type PlantillaBOM, type ProblemaPlano } from '@/lib/types'
 
 // Un plano de ~20 hojas tarda alrededor de un minuto con IA
@@ -495,6 +506,22 @@ function evaluarPlano(bom: PlantillaBOM, deIA: ProblemaPlano[], textoHojas: stri
   return { nivel, problemas: unicos.slice(0, 25) }
 }
 
+interface PlantillaGuardada {
+  bom: PlantillaBOM
+  plano_nombre: string | null
+  source: BomSource | null
+  archivo_hash: string | null
+  version_actual: number | null
+}
+
+/** La plantilla vigente de la clave con su huella; sin las columnas de versiones si aún no existen */
+async function leerPlantilla(supabase: ReturnType<typeof supabaseServidor>, clave: string): Promise<{ fila: PlantillaGuardada | null; conVersiones: boolean }> {
+  const { data, error } = await supabase.from('plantilla_despiece').select('bom, plano_nombre, source, archivo_hash, version_actual').eq('clave', clave).maybeSingle()
+  if (!faltaEsquema(error)) return { fila: (data as PlantillaGuardada | null) ?? null, conVersiones: true }
+  const { data: basica } = await supabase.from('plantilla_despiece').select('bom, plano_nombre').eq('clave', clave).maybeSingle()
+  return { fila: basica ? { ...(basica as { bom: PlantillaBOM; plano_nombre: string | null }), source: null, archivo_hash: null, version_actual: null } : null, conVersiones: false }
+}
+
 const contarPiezas = (bom: PlantillaBOM) => (bom.subensambles ?? []).reduce((n, s) => n + (s.componentes?.length ?? 0), 0)
 
 /* ═══════════════════════════════════════
@@ -511,12 +538,13 @@ export async function POST(request: NextRequest) {
   const clave = String(form?.get('clave') ?? '').trim()
   const descripcion = String(form?.get('descripcion') ?? '').trim().slice(0, 300)
   const force = form?.get('force') === 'true'
+  const versionar = form?.get('versionar') === 'true'
 
   if (!clave) return NextResponse.json({ error: 'Falta la clave del producto.' }, { status: 400 })
   const supabase = supabaseServidor()
 
-  // 1. Caché
-  if (!force) {
+  // 1. Caché por clave (despiece de un pedido)
+  if (!force && !versionar) {
     const { data } = await supabase.from('plantilla_despiece').select('bom').eq('clave', clave).maybeSingle()
     if (data?.bom) return NextResponse.json({ ok: true, source: 'cache', bom: data.bom, advertencias: [] })
   }
@@ -535,9 +563,35 @@ export async function POST(request: NextRequest) {
     let advertencias: string[] = []
     let source: BomSource = 'pdf'
 
+    // 1b. Plano suelto: caché por huella del PDF
+    const hash = versionar ? hashArchivo(buffer) : null
+    let reutilizada = false
+    const previa = versionar ? await leerPlantilla(supabase, clave) : null
+    if (previa && !previa.conVersiones) advertencias.push('Falta correr sql/plano_versiones.sql en Supabase: no se guarda el historial de versiones.')
+    if (previa?.fila && !force) {
+      const { fila } = previa
+      if (fila.archivo_hash === hash) {
+        return NextResponse.json({ ok: true, source: 'cache', bom: fila.bom, advertencias, version: fila.version_actual ?? 1, diferencias: null })
+      }
+      if (!fila.archivo_hash) {
+        return NextResponse.json({ ok: true, source: 'cache', bom: fila.bom, advertencias, version: fila.version_actual ?? 1, diferencias: null, huellaDesconocida: true })
+      }
+    }
+    // Un PDF que ya se analizó en otra versión: se reutiliza sin gastar IA
+    if (hash && previa?.conVersiones && !force) {
+      const { data: misma } = await supabase.from('plano_versiones').select('bom_snapshot').eq('clave', clave).eq('archivo_hash', hash)
+        .order('version', { ascending: false }).limit(1).maybeSingle()
+      if (misma?.bom_snapshot) {
+        bom = misma.bom_snapshot as PlantillaBOM
+        source = previa.fila?.source ?? 'ia'
+        reutilizada = true
+        advertencias.push('Este PDF ya se había analizado en una versión anterior: se usó ese despiece, sin IA.')
+      }
+    }
+
     // 2. IA: lee el plano completo (piezas, acabado y posición de cada pieza para el 3D)
     let errorIA: unknown = null
-    if (process.env.ANTHROPIC_API_KEY) {
+    if (!bom && process.env.ANTHROPIC_API_KEY) {
       try {
         // Solo las estaciones de producción reales: un área de más en la base (Melamina, Herraje...) no llega a la IA
         const { data: areasData } = await supabase.from('areas').select('nombre').eq('activo', true)
@@ -609,6 +663,7 @@ export async function POST(request: NextRequest) {
       bom,
       plano_nombre: plano.name,
       source,
+      ...(versionar && previa?.conVersiones ? { archivo_hash: hash, editado_manualmente: false } : {}),
     }
     let { error } = await supabase.from('plantilla_despiece').upsert(fila, { onConflict: 'clave' })
     // PGRST204 = la tabla aún no tiene la columna "source": se guarda sin ella
@@ -617,6 +672,19 @@ export async function POST(request: NextRequest) {
       ;({ error } = await supabase.from('plantilla_despiece').upsert(sinSource, { onConflict: 'clave' }))
     }
     if (error) throw new Error('El plano se analizó, pero no se pudo guardar la plantilla: ' + error.message)
+
+    // 5. Plano suelto: nueva versión con lo que cambió contra la anterior
+    if (versionar && previa?.conVersiones) {
+      const anterior = previa.fila
+      const registro = await registrarVersion(supabase, {
+        clave, bom, archivo_nombre: plano.name, archivo_hash: hash, analizado_por: source,
+        previoSinHistorial: anterior ? { bom: anterior.bom, archivo_nombre: anterior.plano_nombre, analizado_por: anterior.source ?? 'ia' } : null,
+      })
+      if (registro) {
+        await supabase.from('plantilla_despiece').update({ version_actual: registro.version }).eq('clave', clave)
+        return NextResponse.json({ ok: true, source: reutilizada ? 'cache' : source, bom, advertencias, version: registro.version, diferencias: registro.cambios })
+      }
+    }
 
     return NextResponse.json({ ok: true, source, bom, advertencias })
   } catch (err) {

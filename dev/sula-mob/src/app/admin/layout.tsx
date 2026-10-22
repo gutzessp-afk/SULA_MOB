@@ -19,6 +19,7 @@ import {
   Layers,
   PanelLeftClose,
   PanelLeftOpen,
+  Clock,
 } from 'lucide-react';
 import { logoutAction } from '@/app/(auth)/login/actions';
 import { limpiarCache } from '@/lib/cache-datos';
@@ -39,7 +40,8 @@ const menuSections = [
       { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutGrid },
       // Proyectos solo se marca en la lista; el detalle de un proyecto (/admin/proyectos/[id]) pertenece a Despiece
       { name: 'Proyectos', href: '/admin/proyectos', icon: Briefcase, activoEn: (ruta: string) => ruta === '/admin/proyectos' },
-      { name: 'Despiece', href: '/admin/despiece', icon: Layers, activoEn: (ruta: string) => ruta.startsWith('/admin/despiece') || ruta.startsWith('/admin/proyectos/') },
+      { name: 'Despiece', href: '/admin/despiece', icon: Layers, activoEn: (ruta: string) => (ruta.startsWith('/admin/despiece') && !ruta.startsWith('/admin/despiece/historial')) || ruta.startsWith('/admin/proyectos/') },
+      { name: 'Historial', href: '/admin/despiece/historial', icon: Clock, activoEn: (ruta: string) => ruta.startsWith('/admin/despiece/historial') },
       { name: 'Calendario', href: '/admin/calendario', icon: CalendarDays },
       { name: 'Áreas', href: '/admin/actividades', icon: Warehouse },
       { name: 'Notificaciones', href: '/admin/notificaciones', icon: Bell },

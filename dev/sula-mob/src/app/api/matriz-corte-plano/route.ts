@@ -4,16 +4,18 @@
  * Genera en Excel la Matriz de Corte de UN plano (un producto del pedido).
  *
  * Entrada (JSON): { bom, clave, descripcion, cantidad, cliente, proyecto, fecha }
- * Salida: archivo .xlsx con dos hojas:
+ * Salida: archivo .xlsx con tres hojas:
  *   1. MATRIZ DE CORTE — piezas por subensamble, con columnas amarillas para
  *      que producción anote piezas procesadas y fecha.
  *   2. POR ÁREA — las mismas piezas agrupadas por área, con casilla de hecho.
+ *   3. RESUMEN — piezas por área, por subensamble y por material, con totales.
  *
  * No usa IA: solo da formato al BOM que ya está guardado. Los datos los arma
  * src/lib/matriz-corte.ts (el PDF usa los mismos).
  *
  * La CANT. TOTAL va como fórmula: si en la hoja se corrige una cantidad o el
- * total a producir, se recalcula sola.
+ * total a producir, se recalcula sola. Los totales del RESUMEN también dependen
+ * del TOTAL A PRODUCIR de la primera hoja.
  *
  * RUTA DEL ARCHIVO: src/app/api/matriz-corte-plano/route.ts
  */
@@ -283,6 +285,210 @@ function hojaAreas(wb: ExcelJS.Workbook, m: Matriz) {
 }
 
 /* ═══════════════════════════════════════
+   HOJA 3: RESUMEN DE PRODUCCIÓN
+   ═══════════════════════════════════════ */
+
+const GRIS_CLARO = 'FFE2E8F0'
+const TOTAL_PRODUCIR = `'MATRIZ DE CORTE'!${CELDA_TOTAL}`
+
+/** Banda oscura con el título de una tabla, de A a F */
+function tituloTabla(ws: ExcelJS.Worksheet, r: number, texto: string) {
+  ws.mergeCells(`A${r}:F${r}`)
+  const c = ws.getCell(`A${r}`)
+  c.value = texto
+  c.fill = relleno(AZUL_OSCURO)
+  c.font = fuente({ bold: true, size: 11, color: { argb: 'FFFFFFFF' } })
+  c.alignment = { horizontal: 'center', vertical: 'middle' }
+  ws.getRow(r).height = 26
+}
+
+/** Encabezados de columna en gris; cada uno ocupa un rango ("A:B") o una celda ("C") */
+function encabezados(ws: ExcelJS.Worksheet, r: number, columnas: [string, string][]) {
+  for (const [rango, texto] of columnas) {
+    const [desde, hasta] = rango.split(':')
+    if (hasta) ws.mergeCells(`${desde}${r}:${hasta}${r}`)
+    const c = ws.getCell(`${desde}${r}`)
+    c.value = texto
+    c.fill = relleno(GRIS_CLARO)
+    c.font = fuente({ bold: true, size: 8, color: { argb: 'FF334155' } })
+    c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+    c.border = BORDE
+  }
+  ws.getRow(r).height = 22
+}
+
+/** Fila TOTAL en azul oscuro; la columna resaltada va más grande */
+function filaTotal(ws: ExcelJS.Worksheet, r: number, columnas: string[], resaltada: string) {
+  for (const col of columnas) {
+    const c = ws.getCell(`${col}${r}`)
+    c.fill = relleno(AZUL_OSCURO)
+    c.font = fuente({ bold: true, size: col === resaltada ? 12 : 10, color: { argb: 'FFFFFFFF' } })
+    c.alignment = { vertical: 'middle', horizontal: col === 'A' ? 'left' : 'center' }
+    c.border = BORDE
+  }
+  ws.getRow(r).height = 24
+}
+
+/**
+ * Totales de un vistazo: piezas por área de producción, por subensamble y por
+ * material. Las PIEZAS TOTAL son fórmulas sobre el TOTAL A PRODUCIR de la hoja
+ * principal, así se recalculan si se cambia esa cantidad.
+ */
+function hojaResumen(wb: ExcelJS.Workbook, m: Matriz) {
+  const ws = wb.addWorksheet('RESUMEN', {
+    views: [{ showGridLines: false }],
+    pageSetup: {
+      orientation: 'portrait', paperSize: CARTA, fitToPage: true, fitToWidth: 1, fitToHeight: 0,
+      margins: { left: 0.5, right: 0.5, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.25 },
+    },
+    headerFooter: { oddFooter: `&L&8SULA MOB · Resumen · ${m.modelo} — ${m.descripcion}&R&8Página &P de &N` },
+  })
+  ws.columns = [{ width: 36 }, { width: 10 }, { width: 14 }, { width: 16 }, { width: 16 }, { width: 16 }]
+  // Piezas de UNA unidad del producto (CANT. TOTAL ya viene multiplicada por el total a producir)
+  const porUnidad = (filas: Matriz['secciones'][number]['filas']) => filas.reduce((s, f) => s + f.total / m.total, 0)
+
+  // ── Encabezado ──
+  ws.mergeCells('A1:F1')
+  ws.getCell('A1').value = 'RESUMEN DE PRODUCCIÓN'
+  ws.getCell('A1').font = fuente({ size: 18, bold: true })
+  ws.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' }
+  ws.getRow(1).height = 32
+
+  ws.mergeCells('A2:D2')
+  ws.getCell('A2').value = { richText: [
+    { text: 'MODELO: ', font: fuente({ color: { argb: GRIS_TEXTO } }) },
+    { text: m.modelo, font: fuente({ bold: true, size: 11 }) },
+    { text: '   ' + m.descripcion, font: fuente({ size: 10, color: { argb: AZUL } }) },
+  ] }
+  ws.mergeCells('E2:F2')
+  ws.getCell('E2').value = { richText: [
+    { text: 'CLIENTE: ', font: fuente({ color: { argb: GRIS_TEXTO } }) },
+    { text: m.cliente || '—', font: fuente({ bold: true, size: 11 }) },
+  ] }
+  ws.getCell('E2').alignment = { horizontal: 'right', vertical: 'middle' }
+
+  ws.mergeCells('A3:D3')
+  ws.getCell('A3').value = { richText: [
+    { text: 'FECHA: ', font: fuente({ color: { argb: GRIS_TEXTO } }) },
+    { text: m.fecha || '—', font: fuente({ bold: true }) },
+    { text: '   ACABADO: ', font: fuente({ color: { argb: GRIS_TEXTO } }) },
+    { text: m.acabado || '—', font: fuente({ bold: true }) },
+  ] }
+  ws.getCell('A3').alignment = { vertical: 'middle', wrapText: true }
+  ws.getCell('E3').value = 'TOTAL A PRODUCIR:'
+  ws.getCell('E3').font = fuente({ bold: true, color: { argb: GRIS_TEXTO } })
+  ws.getCell('E3').alignment = { horizontal: 'right', vertical: 'middle' }
+  ws.getCell('F3').value = { formula: TOTAL_PRODUCIR, result: m.total }
+  ws.getCell('F3').font = fuente({ size: 16, bold: true, color: { argb: AZUL } })
+  ws.getCell('F3').alignment = { horizontal: 'center', vertical: 'middle' }
+  ws.getCell('F3').fill = relleno(AMARILLO)
+  ws.getCell('F3').border = BORDE
+  ws.getRow(2).height = 20
+  ws.getRow(3).height = 26
+
+  let r = 5
+
+  // ── Tabla 1: piezas por área de producción ──
+  tituloTabla(ws, r++, 'PIEZAS POR ÁREA DE PRODUCCIÓN')
+  encabezados(ws, r++, [['A:B', 'ÁREA'], ['C', 'COMPONENTES'], ['D', 'PZAS / UNIDAD'], ['E:F', 'PIEZAS TOTAL']])
+  const primeraArea = r
+  for (const grupo of m.porArea) {
+    const color = colorArea(grupo.area)
+    ws.mergeCells(`A${r}:B${r}`)
+    ws.mergeCells(`E${r}:F${r}`)
+    ws.getCell(`A${r}`).value = grupo.area
+    ws.getCell(`A${r}`).font = fuente({ bold: true, size: 9, color: { argb: argb(color.fuerte) } })
+    ws.getCell(`A${r}`).fill = relleno(argb(color.claro))
+    ws.getCell(`C${r}`).value = grupo.filas.length
+    ws.getCell(`D${r}`).value = porUnidad(grupo.filas)
+    ws.getCell(`E${r}`).value = { formula: `D${r}*${TOTAL_PRODUCIR}`, result: grupo.piezas }
+    ws.getCell(`E${r}`).font = fuente({ bold: true, size: 11, color: { argb: AZUL } })
+    for (const col of ['A', 'C', 'D', 'E']) {
+      ws.getCell(`${col}${r}`).border = BORDE
+      ws.getCell(`${col}${r}`).alignment = { vertical: 'middle', horizontal: col === 'A' ? 'left' : 'center' }
+    }
+    r++
+  }
+  ws.mergeCells(`A${r}:B${r}`)
+  ws.mergeCells(`E${r}:F${r}`)
+  ws.getCell(`A${r}`).value = 'TOTAL'
+  ws.getCell(`C${r}`).value = { formula: `SUM(C${primeraArea}:C${r - 1})` }
+  ws.getCell(`D${r}`).value = { formula: `SUM(D${primeraArea}:D${r - 1})` }
+  ws.getCell(`E${r}`).value = { formula: `SUM(E${primeraArea}:E${r - 1})` }
+  filaTotal(ws, r, ['A', 'C', 'D', 'E'], 'E')
+  r += 2
+
+  // ── Tabla 2: piezas por subensamble ──
+  tituloTabla(ws, r++, 'PIEZAS POR SUBENSAMBLE')
+  encabezados(ws, r++, [['A', 'SUBENSAMBLE'], ['B', 'PÁG.'], ['C', '× / PRODUCTO'], ['D', 'COMPONENTES'], ['E', 'PZAS / UNIDAD'], ['F', 'PIEZAS TOTAL']])
+  const primeraSub = r
+  for (const sec of m.secciones) {
+    ws.getCell(`A${r}`).value = sec.nombre
+    ws.getCell(`A${r}`).font = fuente({ bold: true, size: 9 })
+    ws.getCell(`B${r}`).value = sec.pagina ?? '—'
+    ws.getCell(`B${r}`).font = fuente({ size: 8, color: { argb: GRIS_TEXTO } })
+    ws.getCell(`C${r}`).value = sec.cantidad
+    ws.getCell(`C${r}`).numFmt = '"×"0'
+    ws.getCell(`D${r}`).value = sec.filas.length
+    ws.getCell(`E${r}`).value = porUnidad(sec.filas)
+    ws.getCell(`F${r}`).value = { formula: `E${r}*${TOTAL_PRODUCIR}`, result: sec.filas.reduce((s, f) => s + f.total, 0) }
+    ws.getCell(`F${r}`).font = fuente({ bold: true, size: 11, color: { argb: AZUL } })
+    for (const col of ['A', 'B', 'C', 'D', 'E', 'F']) {
+      ws.getCell(`${col}${r}`).border = BORDE
+      ws.getCell(`${col}${r}`).alignment = { vertical: 'middle', wrapText: col === 'A', horizontal: col === 'A' ? 'left' : 'center' }
+    }
+    r++
+  }
+  ws.getCell(`A${r}`).value = 'TOTAL'
+  ws.getCell(`D${r}`).value = { formula: `SUM(D${primeraSub}:D${r - 1})` }
+  ws.getCell(`E${r}`).value = { formula: `SUM(E${primeraSub}:E${r - 1})` }
+  ws.getCell(`F${r}`).value = { formula: `SUM(F${primeraSub}:F${r - 1})` }
+  filaTotal(ws, r, ['A', 'B', 'C', 'D', 'E', 'F'], 'F')
+  r += 2
+
+  // ── Tabla 3: materiales (lo que se corta; el herraje se compra hecho y ya está arriba) ──
+  // "LAMINA CRS C. 20", "LAMINA CRS C20" y "lamina crs c.20" son el mismo material
+  const mismoMaterial = (t: string) => t.toUpperCase().replace(/\s+/g, ' ').replace(/\bC\.?\s*(\d)/g, 'C.$1').trim()
+  const porMaterial = new Map<string, { nombre: string; unidad: number; total: number; area: string }>()
+  for (const f of m.secciones.flatMap(s => s.filas)) {
+    const material = f.material.trim()
+    if (!material || f.area === 'Herraje') continue
+    const previo = porMaterial.get(mismoMaterial(material))
+    if (previo) { previo.unidad += f.total / m.total; previo.total += f.total }
+    else porMaterial.set(mismoMaterial(material), { nombre: material, unidad: f.total / m.total, total: f.total, area: f.area })
+  }
+  const materiales = [...porMaterial.values()].sort((a, b) => b.total - a.total)
+
+  tituloTabla(ws, r++, 'LISTA DE MATERIALES')
+  encabezados(ws, r++, [['A:B', 'MATERIAL'], ['C', 'PZAS / UNIDAD'], ['D', 'PIEZAS TOTAL'], ['E:F', 'ÁREA']])
+  const primeraMat = r
+  for (const info of materiales) {
+    const color = colorArea(info.area)
+    ws.mergeCells(`A${r}:B${r}`)
+    ws.mergeCells(`E${r}:F${r}`)
+    ws.getCell(`A${r}`).value = info.nombre
+    ws.getCell(`A${r}`).font = fuente({ size: 9 })
+    ws.getCell(`C${r}`).value = info.unidad
+    ws.getCell(`D${r}`).value = { formula: `C${r}*${TOTAL_PRODUCIR}`, result: info.total }
+    ws.getCell(`D${r}`).font = fuente({ bold: true, size: 10, color: { argb: AZUL } })
+    ws.getCell(`E${r}`).value = info.area
+    ws.getCell(`E${r}`).font = fuente({ size: 8, bold: true, color: { argb: argb(color.fuerte) } })
+    ws.getCell(`E${r}`).fill = relleno(argb(color.claro))
+    for (const col of ['A', 'C', 'D', 'E']) {
+      ws.getCell(`${col}${r}`).border = BORDE
+      ws.getCell(`${col}${r}`).alignment = { vertical: 'middle', wrapText: col === 'A', horizontal: col === 'A' ? 'left' : 'center' }
+    }
+    r++
+  }
+  ws.mergeCells(`A${r}:B${r}`)
+  ws.mergeCells(`E${r}:F${r}`)
+  ws.getCell(`A${r}`).value = `${materiales.length} material(es) distinto(s)`
+  ws.getCell(`C${r}`).value = { formula: `SUM(C${primeraMat}:C${Math.max(primeraMat, r - 1)})` }
+  ws.getCell(`D${r}`).value = { formula: `SUM(D${primeraMat}:D${Math.max(primeraMat, r - 1)})` }
+  filaTotal(ws, r, ['A', 'C', 'D', 'E'], 'D')
+}
+
+/* ═══════════════════════════════════════
    HANDLER POST
    ═══════════════════════════════════════ */
 
@@ -312,6 +518,7 @@ export async function POST(request: NextRequest) {
     wb.creator = 'SULA MOB'
     hojaMatriz(wb, matriz)
     hojaAreas(wb, matriz)
+    hojaResumen(wb, matriz)
     const buffer = await wb.xlsx.writeBuffer()
 
     return new NextResponse(buffer as ArrayBuffer, {

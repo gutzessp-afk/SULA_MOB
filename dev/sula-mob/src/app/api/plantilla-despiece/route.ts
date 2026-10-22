@@ -17,7 +17,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { esAdmin, supabaseServidor } from '@/lib/admin-api'
-import type { PlantillaBOM } from '@/lib/types'
+import { esBOM } from '@/lib/validar-bom'
 
 const noAutorizado = () =>
   NextResponse.json({ error: 'Solo los administradores pueden consultar las plantillas.' }, { status: 403 })
@@ -79,31 +79,6 @@ export async function DELETE(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }
-
-/** Revisión mínima de la forma del despiece antes de guardarlo */
-function esBOM(bom: unknown): bom is PlantillaBOM {
-  if (!bom || typeof bom !== 'object') return false
-  const { subensambles, herrajes } = bom as Record<string, unknown>
-  return (
-    Array.isArray(subensambles) &&
-    Array.isArray(herrajes) &&
-    subensambles.every(
-      (s) =>
-        s && typeof s === 'object' && typeof s.nombre === 'string' && typeof s.cantidad === 'number' &&
-        Array.isArray(s.componentes) &&
-        s.componentes.every(
-          (c: unknown) =>
-            !!c && typeof c === 'object' &&
-            typeof (c as ComponenteCrudo).descripcion === 'string' &&
-            typeof (c as ComponenteCrudo).material === 'string' &&
-            typeof (c as ComponenteCrudo).cantidad === 'number' &&
-            ((c as ComponenteCrudo).largo_mm === null || typeof (c as ComponenteCrudo).largo_mm === 'number') &&
-            typeof (c as ComponenteCrudo).ancho === 'string'
-        )
-    )
-  )
-}
-type ComponenteCrudo = { descripcion: unknown; material: unknown; cantidad: unknown; largo_mm: unknown; ancho: unknown }
 
 export async function PATCH(request: NextRequest) {
   if (!(await esAdmin())) return noAutorizado()

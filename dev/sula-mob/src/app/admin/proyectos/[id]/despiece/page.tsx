@@ -585,7 +585,7 @@ export default function DespiecePage() {
           </div>
 
           {/* ═══ SECCIÓN 2: ÁRBOL DE DESPIECE ═══ */}
-          <div className="space-y-3">
+          <div className="space-y-4 sm:space-y-5">
             {partidas.map(partida => {
               const abierta = !colapsado[partida.id];
               const subsPartida = subsDe(partida.id);
@@ -597,7 +597,7 @@ export default function DespiecePage() {
                     type="button"
                     onClick={() => toggleNodo(partida.id)}
                     aria-expanded={abierta}
-                    className="max-sm:min-h-[44px] w-full text-left p-3 sm:p-5 flex flex-col gap-2 hover:bg-white/[0.03] transition-colors"
+                    className="max-sm:min-h-[44px] w-full text-left p-4 sm:p-6 flex flex-col gap-2.5 hover:bg-white/[0.03] transition-colors"
                   >
                     {/* Fila 1: flecha, clave, cantidad y cuántos subensambles */}
                     <div className="flex items-center gap-2 min-w-0">
@@ -616,7 +616,7 @@ export default function DespiecePage() {
                   </button>
 
                   {abierta && (
-                    <div className="border-t border-white/10 px-2 sm:px-5 py-3 sm:py-4 space-y-2 sm:space-y-3">
+                    <div className="border-t border-white/10 px-3 sm:px-6 py-4 sm:py-5 space-y-3 sm:space-y-4">
                       {subsPartida.map(sub => {
                         const subAbierto = !colapsado[sub.id];
                         const compsSub = compsDe(sub.id);
@@ -628,7 +628,7 @@ export default function DespiecePage() {
                               type="button"
                               onClick={() => toggleNodo(sub.id)}
                               aria-expanded={subAbierto}
-                              className="max-sm:min-h-[44px] w-full text-left px-3 py-2.5 sm:px-4 sm:py-3 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2 hover:bg-white/[0.03] rounded-2xl transition-colors"
+                              className="max-sm:min-h-[44px] w-full text-left px-4 py-3 sm:px-5 sm:py-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 hover:bg-white/[0.03] rounded-2xl transition-colors"
                             >
                               <div className="flex items-center gap-2 flex-1 min-w-0">
                                 {subAbierto ? <ChevronDown className="w-3.5 h-3.5 text-white/40 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-white/40 flex-shrink-0" />}
@@ -642,19 +642,17 @@ export default function DespiecePage() {
                             </button>
 
                             {subAbierto && (
-                              <div className="px-2 sm:px-4 pb-2 sm:pb-3 space-y-2">
+                              <div className="px-3 sm:px-5 pb-3 sm:pb-4 space-y-2.5 sm:space-y-3">
                                 {/* Nivel 3: Componentes */}
                                 {compsSub.map(comp => {
                                   const p = progresoComp(comp);
                                   const ruta = comp.areas_ruta || [];
                                   return (
-                                    <div key={comp.id} className="rounded-xl border border-white/10 bg-black/20 p-2.5 sm:p-3 space-y-2">
-                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                    <div key={comp.id} className="rounded-xl border border-white/10 bg-black/20 p-3 sm:p-4 space-y-2.5">
+                                      {/* Fila 1: nombre + piezas a fabricar + avance */}
+                                      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
                                         <Cog className="w-3.5 h-3.5 text-white/50 flex-shrink-0" />
                                         <span className="text-[13px] font-semibold text-white break-words min-w-0">{comp.nombre}</span>
-                                        {/* Material y medidas solo en pantallas medianas en adelante */}
-                                        {comp.material && <span className="text-[11px] text-white/55 hidden sm:inline">{comp.material}</span>}
-                                        {comp.dimensiones && <span className="text-[11px] text-white/55 font-mono hidden sm:inline">{comp.dimensiones}</span>}
                                         {/* Total a fabricar = piezas por mueble × muebles pedidos en la partida */}
                                         <span
                                           className="text-[11px] font-mono font-bold text-sky-300 bg-sky-500/10 border border-sky-400/25 px-1.5 py-0.5 rounded"
@@ -669,6 +667,13 @@ export default function DespiecePage() {
                                           {p >= 100 ? '✓' : `${p}%`}
                                         </span>
                                       </div>
+                                      {/* Fila 2: material y medidas, también en el celular */}
+                                      {(comp.material || comp.dimensiones) && (
+                                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pl-5 sm:pl-6">
+                                          {comp.material && <span className="text-[11px] text-white/55">{comp.material}</span>}
+                                          {comp.dimensiones && <span className="text-[11px] text-white/55 font-mono">{comp.dimensiones}</span>}
+                                        </div>
+                                      )}
 
                                       {/* Ruta de áreas: clic en un chip = marcar o desmarcar esa área */}
                                       {ruta.length === 0 ? (

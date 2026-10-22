@@ -187,3 +187,25 @@ export interface MatrizCorteRequest {
   fecha_entrega: string;        // YYYY-MM-DD o vacío
   partidas: PartidaPedido[];
 }
+
+/* ── Despiece por plano suelto (/admin/despiece/plano) ── */
+
+/** Un cambio entre dos versiones del BOM de un plano (src/lib/comparar-bom.ts) */
+export interface Diferencia {
+  tipo: 'agregado' | 'eliminado' | 'modificado';
+  subensamble: string;
+  componente: string;
+  campo?: string;               // 'cantidad' | 'largo_mm' | 'material' | ...
+  valor_anterior?: string;
+  valor_nuevo?: string;
+}
+
+/** Registro de la tabla `plano_versiones` (sql/plano_versiones.sql) */
+export interface VersionPlano {
+  version: number;
+  created_at: string;
+  archivo_nombre: string | null;
+  analizado_por: BomSource;
+  cambios: Diferencia[] | null;
+  bom_snapshot?: PlantillaBOM;
+}
