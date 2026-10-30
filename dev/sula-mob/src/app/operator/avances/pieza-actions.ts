@@ -813,10 +813,9 @@ export async function iniciarPieza(
 
   const supabase = await createClient()
 
-  // Revisiones al mismo tiempo: acceso, área cerrada, la pieza, lo hecho y si ya está en curso
-  const [acceso, cierreRes, piezaRes, hechasMapa, enCursoRes] = await Promise.all([
+  // Revisiones al mismo tiempo: acceso, la pieza, lo hecho y si ya está en curso
+  const [acceso, piezaRes, hechasMapa, enCursoRes] = await Promise.all([
     tieneAccesoArea(supabase, usuario, areaId),
-    supabase.from('area_cierres').select('id').eq('proyecto_id', proyectoId).eq('area_id', areaId).maybeSingle(),
     tipo === 'pdf'
       ? supabase.from('piezas_proyecto').select('id, meta').eq('id', id).eq('proyecto_id', proyectoId).eq('area_id', areaId).maybeSingle()
       : Promise.resolve({ data: null }),
@@ -827,7 +826,6 @@ export async function iniciarPieza(
   ])
 
   if (!acceso) return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
-  if (cierreRes.data) return { error: 'Esta área ya fue marcada como terminada en este proyecto.' }
   if (enCursoRes.data) return { error: 'Esta pieza ya está en curso.' }
 
   if (tipo === 'pdf') {

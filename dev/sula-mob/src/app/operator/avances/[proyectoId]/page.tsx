@@ -1424,7 +1424,6 @@ export default function ProyectoPage() {
 
   // Área abierta en este dispositivo: entra directo. Bloqueada: pide su clave de 3 dígitos
   function tocarArea(a: AreaOperador) {
-    if (a.cerrada) return
     if (a.desbloqueada) {
       setError('')
       setAviso('')
@@ -1953,7 +1952,6 @@ export default function ProyectoPage() {
               <button
                 key={a.areaId}
                 onClick={() => tocarArea(a)}
-                disabled={a.cerrada}
                 className="group relative flex flex-col gap-3 overflow-hidden rounded-3xl border border-[#26314a] bg-gradient-to-b from-[#16203a] to-[#111929] p-5 text-left transition hover:-translate-y-0.5 hover:border-[#3a4d78] disabled:cursor-default disabled:hover:translate-y-0"
                 style={{
                   borderLeft: `6px solid ${estado.color}`,
