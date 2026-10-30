@@ -1,7 +1,7 @@
 
 'use client'
 
-import { useCallback, useEffect, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useRealtimeAvances } from '@/hooks/useRealtimeAvances'
 import { useConsultaPeriodica } from '@/hooks/useConsultaPeriodica'
 import Link from 'next/link'
@@ -11,9 +11,8 @@ import { marcarAreaTerminada } from '../../actions'
 import {
   entrarConClave,
   finalizarPieza,
-  getAreaOperador,
   getEvidenciaDia,
-  getProyectoOperador,
+  getPantallaOperador,
   prepararProyecto,
   guardarEvidenciaDia,
   iniciarPieza,
@@ -672,10 +671,10 @@ function PiezaCard({
           )}
 
           {!t && p.faltan === 0 && (
-            <span style={{ color: green, fontSize: 12, fontWeight: 800 }}>✓ Completo</span>
+            <span style={{ color: green, fontSize: 12, fontWeight: 800 }}>🔒 Completo</span>
           )}
 
-          {p.hechas > 0 && !fin && !reporte && (
+          {p.hechas > 0 && p.faltan > 0 && !fin && !reporte && (
             <button
               onClick={() => setCorrigiendo((v) => !v)}
               style={{
@@ -971,6 +970,7 @@ function PiezasPorPasos({
   const [saltadas, setSaltadas] = useState<string[]>([])
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({})
   const [verTerminadas, setVerTerminadas] = useState(true)
+  // Solo las piezas a medias: las terminadas tienen candado
   const [corrigiendo, setCorrigiendo] = useState<string | null>(null)
 
   const enCurso = piezas.filter((p) => p.trabajo)
@@ -1195,40 +1195,13 @@ function PiezasPorPasos({
             terminadas.map((p) => (
               <div key={p.id} style={{ borderTop: `1px solid ${line}`, padding: '9px 15px' }}>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                  <span style={{ color: green }}>✓</span>
+                  <span aria-label="Con candado">🔒</span>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ display: 'block', color: '#64748b', fontSize: 11 }}>{p.modulo}</span>
                     <span style={{ display: 'block', color: '#cbd5e1', fontSize: 13.5 }}>{p.nombre}</span>
                   </span>
                   <span style={{ color: '#64748b', fontSize: 12.5, fontFamily: 'monospace' }}>{p.hechas}</span>
-                  <button
-                    onClick={() => setCorrigiendo((v) => (v === p.id ? null : p.id))}
-                    style={{
-                      background: 'none',
-                      color: '#cbd5e1',
-                      border: `1px solid ${line}`,
-                      borderRadius: 10,
-                      padding: '7px 11px',
-                      fontSize: 12.5,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    ✏️ Corregir
-                  </button>
                 </div>
-                {corrigiendo === p.id && (
-                  <CorregirPiezas
-                    hechas={p.hechas}
-                    meta={p.meta}
-                    guardando={ocupado === `corregir|${p.id}`}
-                    onGuardar={(total) => {
-                      onCorregir(p.id, p.tipo, total)
-                      setCorrigiendo(null)
-                    }}
-                    onCerrar={() => setCorrigiendo(null)}
-                  />
-                )}
               </div>
             ))}
         </div>
@@ -1292,11 +1265,7 @@ export default function ProyectoPage() {
 
   const cargar = useCallback(
     async (area: string | null) => {
-      // El proyecto y el área se piden al mismo tiempo
-      const [d, r] = await Promise.all([
-        getProyectoOperador(proyectoId),
-        area ? getAreaOperador(proyectoId, area) : Promise.resolve(null),
-      ])
+      const { detalle: d, area: r } = await getPantallaOperador(proyectoId, area)
       if (d) {
         setDetalle(d)
         setOffset(new Date(d.ahora).getTime() - Date.now())
@@ -1333,11 +1302,28 @@ export default function ProyectoPage() {
     }
   }, [proyectoId])
 
+  // Las actualizaciones automáticas no se enciman ni estorban a Iniciar/Finalizar: si ya hay una
+  // lectura o una acción en curso, esa vuelta se salta (al terminar la acción se recarga sola)
+  const leyendo = useRef(false)
+  const accionActiva = useRef(false)
+  const refrescar = useCallback(
+    async (area: string | null) => {
+      if (leyendo.current || accionActiva.current) return
+      leyendo.current = true
+      try {
+        await cargar(area)
+      } finally {
+        leyendo.current = false
+      }
+    },
+    [cargar]
+  )
+
   // carga inicial y actualizacion cada 15 s con la pantalla a la vista (asi ves lo que hacen otros operadores)
-  useConsultaPeriodica(() => cargar(areaId), 15000, { recargarCon: `${areaId}|${version}` })
+  useConsultaPeriodica(() => refrescar(areaId), 15000, { recargarCon: `${areaId}|${version}` })
 
   // En vivo: además de cada 15 s, se recarga al instante cuando cambia el avance de este proyecto
-  useRealtimeAvances(() => void cargar(areaId), { proyectoId })
+  useRealtimeAvances(() => void refrescar(areaId), { proyectoId })
 
   const cargarHistorial = useCallback(async () => {
     setHistorial(await listarEvidencias(proyectoId))
@@ -1353,16 +1339,21 @@ export default function ProyectoPage() {
     setError('')
     setAviso('')
     setOcupado(clave)
-    const r = await accion()
-    setOcupado(null)
-    if (r.error) {
-      setError(r.error)
+    accionActiva.current = true
+    try {
+      const r = await accion()
+      setOcupado(null)
+      if (r.error) {
+        setError(r.error)
+        await cargar(areaId)
+        return false
+      }
+      if (mensaje) setAviso(mensaje)
       await cargar(areaId)
-      return false
+      return true
+    } finally {
+      accionActiva.current = false
     }
-    if (mensaje) setAviso(mensaje)
-    await cargar(areaId)
-    return true
   }
 
   /* ---- Entrar / salir ---- */
@@ -1425,6 +1416,17 @@ export default function ProyectoPage() {
   }
 
   async function finalizar(trabajoId: string, cantidad: number) {
+    // Se ve registrado al instante; si el servidor lo rechaza, la recarga de abajo lo regresa
+    setVista((v) =>
+      v && {
+        ...v,
+        piezas: v.piezas.map((p) =>
+          p.trabajo?.id === trabajoId
+            ? { ...p, hechas: p.hechas + cantidad, faltan: Math.max(0, p.faltan - cantidad), trabajo: null }
+            : p
+        ),
+      }
+    )
     await ejecutar(
       `finalizar|${trabajoId}`,
       () => finalizarPieza(trabajoId, cantidad),
@@ -1910,7 +1912,9 @@ export default function ProyectoPage() {
           {detalle.areas.map((a) => {
             // Color según el estado del área
             const estado = a.cerrada
-              ? { color: green, texto: '✓ Terminada' }
+              ? { color: green, texto: '🔒 Terminada' }
+              : a.porcentaje >= 100 && a.enCurso === 0
+                ? { color: green, texto: '🔒 Completada' }
               : a.pausa
                 ? { color: amber, texto: `⏸ En pausa: ${a.pausa.motivo}` }
                 : a.enCurso > 0

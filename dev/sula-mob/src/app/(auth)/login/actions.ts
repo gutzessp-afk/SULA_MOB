@@ -1,14 +1,28 @@
 'use server'
 
 import { cookies } from 'next/headers'
+import { after } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import bcrypt from 'bcryptjs'
+import { registrarActividad } from '@/lib/registrar-actividad'
 
 interface RoleData {
   nombre: string
 }
 
 const SIETE_DIAS = 60 * 60 * 24 * 7
+
+/** Entrada o salida en el Historial (pestaña "Entradas y salidas"), después de responder */
+function registrarSesion(tipo: 'login' | 'logout', usuario: { id?: string; nombre?: string; correo?: string; username?: string; rol?: string; dispositivo?: string }) {
+  after(() =>
+    registrarActividad({
+      tipo,
+      usuarioId: usuario.id,
+      usuarioNombre: usuario.nombre || usuario.username || usuario.correo || 'Desconocido',
+      detalle: { rol: usuario.rol ?? null, ...(usuario.dispositivo && { dispositivo: usuario.dispositivo }) },
+    })
+  )
+}
 
 export async function loginAction(prevState: unknown, formData: FormData) {
   const identifier = (formData.get('identifier') as string)?.trim()
@@ -68,6 +82,7 @@ export async function loginAction(prevState: unknown, formData: FormData) {
         ...duracion,
       })
 
+      registrarSesion('login', { id: authData.user.id, correo: authData.user.email, rol: 'admin' })
       return { success: true, redirectUrl: '/admin/dashboard' }
     }
   } catch {}
@@ -125,6 +140,7 @@ export async function loginAction(prevState: unknown, formData: FormData) {
           ...duracion,
         })
 
+        registrarSesion('login', { id: usuario.id, nombre: `${usuario.nombre} ${usuario.apellidos || ''}`.trim(), correo: usuario.correo, rol: userRole })
         const destination = userRole === 'admin' ? '/admin/dashboard' : '/operator'
         return { success: true, redirectUrl: destination }
       }
@@ -182,7 +198,7 @@ export async function entrarComoOperador(): Promise<{ error?: string; success?: 
     return { error: 'El acceso de operador no está configurado. Avisa al administrador.' }
   }
 
-  cookieStore.set('sula_session', JSON.stringify({
+  const sesion = {
     id: usuario.id,
     nombre: `${usuario.nombre} ${usuario.apellidos || ''}`.trim(),
     correo: usuario.correo,
@@ -190,7 +206,8 @@ export async function entrarComoOperador(): Promise<{ error?: string; success?: 
     rol: 'operador',
     // Cada tableta/celular abre sus áreas por separado aunque todos usen el mismo usuario
     dispositivo: crypto.randomUUID(),
-  }), {
+  }
+  cookieStore.set('sula_session', JSON.stringify(sesion), {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
@@ -198,12 +215,17 @@ export async function entrarComoOperador(): Promise<{ error?: string; success?: 
     maxAge: SIETE_DIAS,
   })
 
+  registrarSesion('login', sesion)
   return { success: true, redirectUrl: '/operator/avances' }
 }
 
 /** Cierra la sesión: borra la cookie (es httpOnly, el navegador no puede borrarla) y sale de Supabase Auth */
 export async function logoutAction() {
   const cookieStore = await cookies()
+  try {
+    const sesion = cookieStore.get('sula_session')?.value
+    if (sesion) registrarSesion('logout', JSON.parse(sesion))
+  } catch {}
   cookieStore.delete('sula_session')
 
   const supabase = createServerClient(

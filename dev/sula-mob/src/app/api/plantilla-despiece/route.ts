@@ -18,6 +18,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { esAdmin, supabaseServidor } from '@/lib/admin-api'
 import { esBOM } from '@/lib/validar-bom'
+import { faltaEsquema } from '@/lib/versiones-plano'
 
 const noAutorizado = () =>
   NextResponse.json({ error: 'Solo los administradores pueden consultar las plantillas.' }, { status: 403 })
@@ -61,11 +62,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ plantilla: data })
   }
 
-  // Sin parámetros → todas, sin el bom (que es pesado)
-  const { data, error } = await supabase
-    .from('plantilla_despiece')
-    .select('id, clave, clave_completa, descripcion, linea, plano_nombre, created_at, updated_at')
-    .order('clave')
+  // Sin parámetros → todas, sin el bom (que es pesado). drive_file_id = su PDF en Drive (sql/drive_file_id.sql)
+  const columnas = 'id, clave, clave_completa, descripcion, linea, plano_nombre, created_at, updated_at'
+  const lista = (conDrive: boolean) => supabase.from('plantilla_despiece').select(conDrive ? `${columnas}, drive_file_id` : columnas).order('clave')
+  let { data, error } = await lista(true)
+  // Sin la columna todavía: la lista sale igual, sin el vínculo al PDF
+  if (faltaEsquema(error)) ({ data, error } = await lista(false))
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ plantillas: data ?? [] })
 }

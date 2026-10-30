@@ -40,27 +40,42 @@ async function claveCorrecta(pin: string, pinHash: string) {
   return bcrypt.compare(pin, pinHash.replace(/^\$2a\$/, '$2b$'))
 }
 
+/** Áreas (de las indicadas) con al menos un reloj corriendo */
+async function areasConReloj(supabase: Supabase, areaIds: string[]): Promise<Set<string>> {
+  if (areaIds.length === 0) return new Set()
+  const { data } = await supabase
+    .from('trabajos_pieza')
+    .select('area_id')
+    .eq('estado', 'en_curso')
+    .in('area_id', areaIds)
+  return new Set((data ?? []).map((t) => t.area_id as string))
+}
+
+// Un reloj puede correr más de 12 h: mientras haya uno, el dispositivo que abrió el área no la pierde
 export async function tieneAccesoArea(supabase: Supabase, usuario: UsuarioSesion, areaId: string) {
   const { data } = await supabase
     .from('area_accesos')
-    .select('area_id')
+    .select('expira_at')
     .eq('operador_id', usuario.id)
     .eq('dispositivo', dispositivoDe(usuario))
     .eq('area_id', areaId)
-    .gt('expira_at', ahoraISO())
     .maybeSingle()
-  return Boolean(data)
+  if (!data) return false
+  if ((data.expira_at as string) > ahoraISO()) return true
+  return (await areasConReloj(supabase, [areaId])).has(areaId)
 }
 
 /** Áreas que este dispositivo tiene abiertas ahora mismo */
 export async function areasAbiertas(supabase: Supabase, usuario: UsuarioSesion): Promise<Set<string>> {
   const { data } = await supabase
     .from('area_accesos')
-    .select('area_id')
+    .select('area_id, expira_at')
     .eq('operador_id', usuario.id)
     .eq('dispositivo', dispositivoDe(usuario))
-    .gt('expira_at', ahoraISO())
-  return new Set((data ?? []).map((a) => a.area_id as string))
+  const ahora = ahoraISO()
+  const filas = (data ?? []) as { area_id: string; expira_at: string }[]
+  const conReloj = await areasConReloj(supabase, filas.filter((a) => a.expira_at <= ahora).map((a) => a.area_id))
+  return new Set(filas.filter((a) => a.expira_at > ahora || conReloj.has(a.area_id)).map((a) => a.area_id))
 }
 
 /** Cierra el acceso de este dispositivo al área (no toca relojes ni a otros dispositivos) */

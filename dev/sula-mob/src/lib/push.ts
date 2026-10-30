@@ -121,6 +121,16 @@ export async function pushRetraso(datos: { retrasoId: string; motivo: string; ar
   })
 }
 
+/** Aviso de un proyecto que llegó al 100% (src/lib/proyecto-completado.ts) */
+export async function pushProyectoCompletado(datos: { proyectoId: string; codigo: string | null; nombre: string; cliente: string | null }) {
+  return enviarPushAdmins({
+    titulo: `🎉 Proyecto completado${datos.codigo ? ` · ${datos.codigo}` : ''}`,
+    cuerpo: [datos.nombre, datos.cliente].filter(Boolean).join(' · ') + '\nLlegó al 100%.',
+    url: `/admin/proyectos/${datos.proyectoId}`,
+    etiqueta: `completado-${datos.proyectoId}`,
+  })
+}
+
 /**
  * Programa el aviso push de un atraso para DESPUÉS de responder al operador
  * (no lo hace esperar). Busca el motivo, el área, el operador y el proyecto por su id.

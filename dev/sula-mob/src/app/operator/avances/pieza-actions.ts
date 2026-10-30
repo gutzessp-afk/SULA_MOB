@@ -3,6 +3,7 @@
 
 import { after } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { revisarFinalizacion } from '@/lib/proyecto-completado'
 import {
   areasAbiertas,
   cerrarAccesoArea,
@@ -381,11 +382,12 @@ async function obtenerFila(
   return { fila: nueva }
 }
 
-async function recalcularProgreso(supabase: Supabase, proyectoId: string) {
-  const { data: productos } = await supabase
-    .from('proyecto_productos')
-    .select('id')
-    .eq('proyecto_id', proyectoId)
+// Con soloSube (registrar piezas) el % nunca baja: solo una corrección del operador puede bajarlo
+async function recalcularProgreso(supabase: Supabase, proyectoId: string, soloSube = false) {
+  const [{ data: productos }, { data: proyecto }] = await Promise.all([
+    supabase.from('proyecto_productos').select('id, progreso').eq('proyecto_id', proyectoId),
+    supabase.from('proyectos').select('progreso').eq('id', proyectoId).maybeSingle(),
+  ])
 
   if (!productos || productos.length === 0) return
 
@@ -421,20 +423,33 @@ async function recalcularProgreso(supabase: Supabase, proyectoId: string) {
       pesoAvanzado += (peso * pct) / 100
     })
 
-    const pctProducto = pesoTotal > 0 ? (pesoAvanzado / pesoTotal) * 100 : 0
+    const previo = (producto.progreso as number | null) ?? 0
+    const calculado = pesoTotal > 0 ? (pesoAvanzado / pesoTotal) * 100 : 0
+    const pctProducto = soloSube ? Math.max(calculado, previo) : calculado
 
-    await supabase
-      .from('proyecto_productos')
-      .update({ progreso: Math.round(pctProducto) })
-      .eq('id', producto.id)
+    // Solo se escribe el % que cambió: cada escritura recarga las pantallas en vivo
+    if (Math.round(pctProducto) !== previo) {
+      await supabase
+        .from('proyecto_productos')
+        .update({ progreso: Math.round(pctProducto) })
+        .eq('id', producto.id)
+    }
 
     sumaGlobal += pctProducto / productos.length
   }
 
-  await supabase
-    .from('proyectos')
-    .update({ progreso: Math.min(100, Math.round(sumaGlobal)) })
-    .eq('id', proyectoId)
+  const previoProyecto = (proyecto?.progreso as number | null) ?? 0
+  const calculadoProyecto = Math.min(100, Math.round(sumaGlobal))
+  const progresoProyecto = soloSube ? Math.max(calculadoProyecto, previoProyecto) : calculadoProyecto
+  if (progresoProyecto !== previoProyecto) {
+    await supabase
+      .from('proyectos')
+      .update({ progreso: progresoProyecto })
+      .eq('id', proyectoId)
+  }
+
+  // Llegó al 100%: fecha de fin y aviso push a los admins (una sola vez)
+  await revisarFinalizacion(proyectoId, progresoProyecto)
 }
 
 // Proyectos con PDF: el % del proyecto se calcula con el peso de cada area (igual que el admin)
@@ -614,6 +629,18 @@ export async function getProyectoOperador(proyectoId: string): Promise<ProyectoO
     areas,
     ahora: ahoraISO(),
   }
+}
+
+/**
+ * Proyecto y área en UNA sola petición. Next atiende las acciones de una pantalla en fila: dos
+ * lecturas separadas hacían esperar el doble a "Guardar" cuando coincidía con la actualización.
+ */
+export async function getPantallaOperador(proyectoId: string, areaId: string | null) {
+  const [detalle, area] = await Promise.all([
+    getProyectoOperador(proyectoId),
+    areaId ? getAreaOperador(proyectoId, areaId) : Promise.resolve(null),
+  ])
+  return { detalle, area }
 }
 
 /* ------------------------------------------------------------------ */
@@ -968,7 +995,7 @@ export async function finalizarPieza(trabajoId: string, piezas: number): Promise
       actividad: '',
     })
     if (errorAvance) console.error('No se pudo escribir en avances:', errorAvance)
-    await recalcularProgreso(supabase, proyectoId)
+    await recalcularProgreso(supabase, proyectoId, true)
   })
 
   return { success: true }
@@ -1012,9 +1039,12 @@ export async function corregirPieza(
   if (!Number.isInteger(total) || total < 0) return { error: 'Escribe cuántas piezas van en total.' }
 
   const supabase = await createClient()
-  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
-    return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
-  }
+  const [acceso, cierreRes] = await Promise.all([
+    tieneAccesoArea(supabase, usuario, areaId),
+    supabase.from('area_cierres').select('id').eq('proyecto_id', proyectoId).eq('area_id', areaId).maybeSingle(),
+  ])
+  if (!acceso) return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
+  if (cierreRes.data) return { error: 'Esta área ya fue marcada como terminada: tiene candado.' }
 
   // Lo que hay hoy (igual que lo que ve la pantalla) y la meta
   let meta = 0
@@ -1040,6 +1070,8 @@ export async function corregirPieza(
     productoAdmin = id
   }
 
+  // Candado: lo que ya llegó a su meta ya pasó por el área y no se mueve desde el operador
+  if (meta > 0 && actuales >= meta) return { error: 'Esta pieza ya está completa: tiene candado.' }
   if (meta > 0 && total > meta) return { error: `La meta es de ${meta} piezas.` }
   const delta = total - actuales
   if (delta === 0) return { success: true }

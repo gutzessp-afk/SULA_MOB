@@ -1,22 +1,25 @@
 'use client';
 
 /**
- * Historial de Despiece — /admin/despiece/historial
- * ──────────────────────────────────────────────────
- * Dos vistas:
- *   - Por plano: los despieces guardados (plantilla_despiece); abren /admin/despiece/plano.
- *   - Por pedido: los proyectos; abren /admin/proyectos/[id].
- * Filtros de periodo (sobre la fecha de alta), búsqueda y línea o cliente.
+ * Historial — /admin/despiece/historial
+ * ─────────────────────────────────────
+ * Tres secciones:
+ *   - Planos: los planos analizados (plantilla_despiece), con fecha y hora; abren /admin/despiece/plano.
+ *   - Pedidos: cuándo se inició y cuándo se terminó cada pedido (100%); abren /admin/proyectos/[id].
+ *   - Entradas y salidas: quién entró y salió del sistema, con fecha y hora (HistorialSesiones).
+ * Filtros: periodo, búsqueda, línea o cliente, y estado (pedidos) o entrada/salida (sesiones).
  *
  * RUTA: src/app/admin/despiece/historial/page.tsx
  */
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Briefcase, Calendar, ChevronDown, Clock, FileText, Filter, Layers, MapPin, Search, X } from 'lucide-react';
+import { ArrowLeft, Briefcase, Calendar, CheckCircle2, ChevronDown, Clock, FileText, Filter, Layers, LogIn, MapPin, PlayCircle, Search, X } from 'lucide-react';
 import { cargarProyectos, useDatos } from '@/lib/cache-datos';
 import { useDebounce } from '@/hooks/useDebounce';
 import { BadgePrioridad } from '@/components/BadgePrioridad';
+import { HistorialSesiones, type FiltroSesion } from '@/components/HistorialSesiones';
+import { ZONA_HORARIA } from '@/lib/entregas';
 
 /* ── Tipos ── */
 
@@ -39,13 +42,16 @@ interface Proyecto {
   prioridad: string;
   progreso: number;
   created_at: string;
+  /** Cuándo llegó al 100% (null si no ha terminado) */
+  fecha_real_fin?: string | null;
 }
 
 /* ── Constantes ── */
 
 const TARJETA = 'rounded-[20px] sm:rounded-[26px] border border-white/20 bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7]';
 
-type Vista = 'plano' | 'pedido';
+type Vista = 'plano' | 'pedido' | 'sesiones';
+type EstadoPedido = 'todos' | 'en_proceso' | 'terminados';
 type Periodo = 'semana' | 'mes' | '3meses' | 'todo';
 
 const PERIODOS: { valor: Periodo; etiqueta: string }[] = [
@@ -70,6 +76,9 @@ function fechaCorte(periodo: Periodo): Date | null {
 }
 
 const fechaCorta = (iso: string) => new Date(iso).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
+/** "27 oct 2026, 09:41" en hora de México */
+const fechaHora = (iso: string) => new Date(iso).toLocaleString('es-MX', { timeZone: ZONA_HORARIA, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const terminado = (p: Proyecto) => (Number(p.progreso) || 0) >= 100;
 
 function fechaRelativa(iso: string) {
   const dias = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
@@ -98,6 +107,8 @@ export default function HistorialPage() {
   const busquedaDebounced = useDebounce(busqueda, 300);
   const [filtroCategoria, setFiltroCategoria] = useState(''); // línea (plano) o cliente (pedido)
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
+  const [estadoPedido, setEstadoPedido] = useState<EstadoPedido>('todos');
+  const [filtroSesion, setFiltroSesion] = useState<FiltroSesion>('todos');
 
   /* ── Datos (misma caché que el resto de la app) ── */
   const { datos: datosPlantillas, cargando: cargandoPlantillas, error: errorPlantillas } = useDatos('plantillas-despiece', cargarPlantillas);
@@ -113,6 +124,7 @@ export default function HistorialPage() {
 
   /* ── Opciones de línea o cliente ── */
   const categorias = useMemo(() => {
+    if (vista === 'sesiones') return [];
     const valores = vista === 'plano' ? plantillas.map(p => p.linea) : proyectos.map(p => p.cliente);
     return [...new Set(valores.filter((v): v is string => !!v?.trim()))].sort((a, b) => a.localeCompare(b, 'es'));
   }, [vista, plantillas, proyectos]);
@@ -135,12 +147,22 @@ export default function HistorialPage() {
     return proyectos
       .filter(p => !corte || new Date(p.created_at) >= corte)
       .filter(p => !filtroCategoria || p.cliente === filtroCategoria)
-      .filter(p => !term || p.codigo?.toLowerCase().includes(term) || p.nombre?.toLowerCase().includes(term) || p.cliente?.toLowerCase().includes(term) || p.referencia_sucursal?.toLowerCase().includes(term));
-  }, [proyectos, periodo, filtroCategoria, term]);
+      .filter(p => estadoPedido === 'todos' || (estadoPedido === 'terminados') === terminado(p))
+      .filter(p => !term || p.codigo?.toLowerCase().includes(term) || p.nombre?.toLowerCase().includes(term) || p.cliente?.toLowerCase().includes(term) || p.referencia_sucursal?.toLowerCase().includes(term))
+      // Terminados: el último en terminar primero; los demás, el último en iniciar
+      .sort((a, b) => estadoPedido === 'terminados'
+        ? (b.fecha_real_fin ?? b.created_at).localeCompare(a.fecha_real_fin ?? a.created_at)
+        : b.created_at.localeCompare(a.created_at));
+  }, [proyectos, periodo, filtroCategoria, estadoPedido, term]);
+  const totalTerminados = useMemo(() => proyectos.filter(terminado).length, [proyectos]);
 
-  const hayFiltrosActivos = periodo !== 'todo' || filtroCategoria !== '' || busqueda !== '';
-  const limpiar = () => { setPeriodo('todo'); setFiltroCategoria(''); setBusqueda(''); };
-  const error = vista === 'plano' ? errorPlantillas : errorProyectos;
+  const hayFiltrosActivos = periodo !== 'todo' || filtroCategoria !== '' || busqueda !== '' || estadoPedido !== 'todos' || filtroSesion !== 'todos';
+  const limpiar = () => { setPeriodo('todo'); setFiltroCategoria(''); setBusqueda(''); setEstadoPedido('todos'); setFiltroSesion('todos'); };
+  const error = vista === 'plano' ? errorPlantillas : vista === 'pedido' ? errorProyectos : '';
+  const chip = (activo: boolean) =>
+    `max-sm:min-h-[44px] px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all inline-flex items-center justify-center gap-1.5 ${
+      activo ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/40' : 'bg-white/[0.04] text-white/50 border-white/10 hover:text-white hover:bg-white/[0.08]'
+    }`;
 
   return (
     <div className="space-y-6 sm:space-y-8 max-w-7xl mx-auto px-2 sm:px-0 pb-8">
@@ -157,19 +179,22 @@ export default function HistorialPage() {
           </Link>
           <div className="min-w-0 flex-1">
             <h1 className="text-xl sm:text-2xl font-bold text-white tracking-wide leading-tight">Historial</h1>
-            <p className="text-xs sm:text-sm text-white/55 mt-1">Planos analizados y despieces por pedido</p>
+            <p className="text-xs sm:text-sm text-white/55 mt-1">Planos analizados, pedidos iniciados y terminados, y quién entra y sale</p>
           </div>
         </div>
 
         {/* Pestañas */}
-        <div className="flex gap-2" role="tablist" aria-label="Qué ver">
+        <div className="grid grid-cols-3 sm:flex gap-2" role="tablist" aria-label="Qué ver">
           <button type="button" role="tab" aria-selected={vista === 'plano'} onClick={() => cambiarVista('plano')} className={pestana(vista === 'plano')}>
-            <FileText className="w-4 h-4" /> Por plano
+            <FileText className="w-4 h-4 max-sm:hidden" /> Planos
             <span className="text-[11px] font-mono bg-black/30 px-1.5 py-0.5 rounded">{plantillas.length}</span>
           </button>
           <button type="button" role="tab" aria-selected={vista === 'pedido'} onClick={() => cambiarVista('pedido')} className={pestana(vista === 'pedido')}>
-            <Briefcase className="w-4 h-4" /> Por pedido
+            <Briefcase className="w-4 h-4 max-sm:hidden" /> Pedidos
             <span className="text-[11px] font-mono bg-black/30 px-1.5 py-0.5 rounded">{proyectos.length}</span>
+          </button>
+          <button type="button" role="tab" aria-selected={vista === 'sesiones'} onClick={() => cambiarVista('sesiones')} className={pestana(vista === 'sesiones')}>
+            <LogIn className="w-4 h-4 max-sm:hidden" /> <span className="sm:hidden">Sesiones</span><span className="max-sm:hidden">Entradas y salidas</span>
           </button>
         </div>
       </div>
@@ -183,7 +208,7 @@ export default function HistorialPage() {
               <Search className="w-4 h-4 text-white/40 flex-shrink-0" />
               <input
                 type="text"
-                placeholder={vista === 'plano' ? 'Buscar por clave, descripción o archivo...' : 'Buscar por código, proyecto, cliente...'}
+                placeholder={vista === 'plano' ? 'Buscar por clave, descripción o archivo...' : vista === 'pedido' ? 'Buscar por código, proyecto, cliente...' : 'Buscar por nombre de usuario...'}
                 value={busqueda}
                 onChange={e => setBusqueda(e.target.value)}
                 className="max-sm:text-base max-sm:min-h-[44px] h-[42px] bg-transparent text-sm text-white outline-none w-full min-w-0 placeholder:text-white/35"
@@ -230,7 +255,28 @@ export default function HistorialPage() {
 
             <div className="hidden sm:block w-px h-6 bg-white/15" />
 
-            <div className="relative sm:flex-shrink-0">
+            {vista === 'pedido' && (
+              <div className="grid grid-cols-3 sm:flex gap-1.5">
+                <button type="button" onClick={() => setEstadoPedido('todos')} aria-pressed={estadoPedido === 'todos'} className={chip(estadoPedido === 'todos')}>Todos</button>
+                <button type="button" onClick={() => setEstadoPedido('en_proceso')} aria-pressed={estadoPedido === 'en_proceso'} className={chip(estadoPedido === 'en_proceso')}>
+                  <PlayCircle className="w-3.5 h-3.5" /> Iniciados
+                </button>
+                <button type="button" onClick={() => setEstadoPedido('terminados')} aria-pressed={estadoPedido === 'terminados'} className={chip(estadoPedido === 'terminados')}>
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Terminados ({totalTerminados})
+                </button>
+              </div>
+            )}
+            {vista === 'sesiones' && (
+              <div className="grid grid-cols-3 sm:flex gap-1.5">
+                <button type="button" onClick={() => setFiltroSesion('todos')} aria-pressed={filtroSesion === 'todos'} className={chip(filtroSesion === 'todos')}>Todas</button>
+                <button type="button" onClick={() => setFiltroSesion('login')} aria-pressed={filtroSesion === 'login'} className={chip(filtroSesion === 'login')}>Entradas</button>
+                <button type="button" onClick={() => setFiltroSesion('logout')} aria-pressed={filtroSesion === 'logout'} className={chip(filtroSesion === 'logout')}>Salidas</button>
+              </div>
+            )}
+
+            {vista !== 'sesiones' && <div className="hidden sm:block w-px h-6 bg-white/15" />}
+
+            {vista !== 'sesiones' && <div className="relative sm:flex-shrink-0">
               <select
                 value={filtroCategoria}
                 onChange={e => setFiltroCategoria(e.target.value)}
@@ -241,7 +287,7 @@ export default function HistorialPage() {
                 {categorias.map(cat => <option key={cat} value={cat} className="bg-slate-900">{cat}</option>)}
               </select>
               <ChevronDown className="w-3 h-3 text-white/40 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            </div>
+            </div>}
 
             {hayFiltrosActivos && (
               <button type="button" onClick={limpiar} className="max-sm:min-h-[44px] text-xs text-white/50 hover:text-white inline-flex items-center justify-center gap-1">
@@ -255,7 +301,9 @@ export default function HistorialPage() {
           <p className="text-[11px] text-white/45 font-semibold">
             {vista === 'plano'
               ? `${plantillasFiltradas.length} plano${plantillasFiltradas.length === 1 ? '' : 's'}`
-              : `${proyectosFiltrados.length} pedido${proyectosFiltrados.length === 1 ? '' : 's'}`}
+              : vista === 'pedido'
+                ? `${proyectosFiltrados.length} pedido${proyectosFiltrados.length === 1 ? '' : 's'}`
+                : 'Entradas y salidas del sistema'}
             {hayFiltrosActivos && ' (filtrado)'}
           </p>
         </div>
@@ -265,7 +313,9 @@ export default function HistorialPage() {
 
       {/* ═══ RESULTADOS ═══ */}
       <div className={`${TARJETA} overflow-hidden`}>
-        {vista === 'plano' ? (
+        {vista === 'sesiones' ? (
+          <HistorialSesiones desde={fechaCorte(periodo)} usuario={busquedaDebounced} filtro={filtroSesion} />
+        ) : vista === 'plano' ? (
           <div className="divide-y divide-white/10">
             {plantillasFiltradas.map(p => (
               <Link
@@ -284,7 +334,7 @@ export default function HistorialPage() {
                     </div>
                     <p className={`text-sm font-semibold leading-snug truncate ${p.descripcion ? 'text-white' : 'text-white/35 italic'}`}>{p.descripcion || 'Sin descripción'}</p>
                     <p className="text-[11px] text-white/40 flex items-center gap-1.5 min-w-0">
-                      <Clock className="w-3 h-3 flex-shrink-0" /> {fechaRelativa(p.created_at)}
+                      <Clock className="w-3 h-3 flex-shrink-0" /> <span title={fechaHora(p.created_at)}>Analizado {fechaRelativa(p.created_at).toLowerCase()} · {fechaHora(p.created_at).split(', ')[1]}</span>
                       {p.plano_nombre && <span className="truncate text-white/30">· {p.plano_nombre}</span>}
                     </p>
                   </div>
@@ -321,7 +371,12 @@ export default function HistorialPage() {
                       {(p.referencia_sucursal || p.cliente) && (
                         <span className="flex items-center gap-1 min-w-0"><MapPin className="w-3 h-3 flex-shrink-0" /> <span className="truncate">{p.referencia_sucursal || p.cliente}</span></span>
                       )}
-                      <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {fechaRelativa(p.created_at)}</span>
+                      <span className="flex items-center gap-1"><PlayCircle className="w-3 h-3" /> Inició {fechaHora(p.created_at)}</span>
+                      {terminado(p) && (
+                        <span className="flex items-center gap-1 text-emerald-300/90 font-semibold">
+                          <CheckCircle2 className="w-3 h-3" /> {p.fecha_real_fin ? `Terminó ${fechaHora(p.fecha_real_fin)}` : 'Terminado'}
+                        </span>
+                      )}
                     </div>
                   </div>
 

@@ -3,6 +3,7 @@
 
 import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
+import { revisarFinalizacion } from '@/lib/proyecto-completado'
 import {
   areasAbiertas,
   cerrarAccesoArea,
@@ -440,10 +441,14 @@ async function recalcularProgreso(supabase: Supabase, proyectoId: string) {
     sumaGlobal += pctProducto / productos.length
   }
 
+  const progresoProyecto = Math.min(100, Math.round(sumaGlobal))
   await supabase
     .from('proyectos')
-    .update({ progreso: Math.min(100, Math.round(sumaGlobal)) })
+    .update({ progreso: progresoProyecto })
     .eq('id', proyectoId)
+
+  // Llegó al 100%: fecha de fin y aviso push a los admins (una sola vez)
+  await revisarFinalizacion(proyectoId, progresoProyecto)
 }
 
 async function areaCompleta(

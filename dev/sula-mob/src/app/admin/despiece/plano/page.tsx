@@ -31,6 +31,7 @@ import { compararBOMs } from '@/lib/comparar-bom';
 import { construirMatriz } from '@/lib/matriz-corte';
 import { limpiarPlanoPendiente, verPlanoPendiente } from '@/lib/plano-pendiente';
 import type { Diferencia, PlantillaBOM, VersionPlano } from '@/lib/types';
+import { registrarEnHistorial } from '@/lib/historial-cliente';
 
 const TARJETA = 'rounded-[20px] sm:rounded-[26px] border border-white/20 bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7]';
 const INPUT = 'w-full h-[44px] rounded-xl border border-white/20 bg-white/[0.07] px-3.5 text-sm text-white outline-none focus:border-blue-400/60 placeholder:text-white/30 max-sm:text-base disabled:opacity-50';
@@ -152,6 +153,7 @@ function PlanoSuelto() {
       mostrar(r.bom, r.source, r.version ?? null);
       setAdvertencias(r.advertencias ?? []);
       setHuellaDesconocida(!!r.huellaDesconocida);
+      if (r.source !== 'cache') registrarEnHistorial({ tipo: 'plano_analizado', referenciaId: clave.trim(), referenciaTipo: 'plano', detalle: { clave: clave.trim(), archivo: archivo.name, version: r.version ?? null } });
       setActualizacion(r.diferencias?.length ? { version: r.version, diferencias: r.diferencias } : null);
       if (r.source === 'cache' && !r.huellaDesconocida) setAviso('Este PDF ya estaba analizado: se usó el despiece guardado, sin gastar IA.');
     } catch (err) {

@@ -26,10 +26,11 @@ interface AvanceArea {
   piezas_totales: number | null
 }
 
-export type TipoEvento = 'creacion' | 'avance' | 'completado' | 'incidencia'
+export type TipoEvento = 'creacion' | 'avance' | 'completado' | 'incidencia' | 'terminado'
 
 export interface Seguimiento {
-  proyecto: { progreso: number; estado: string; entrega: string; creado: string }
+  /** fin = cuándo llegó al 100% (null si todavía no) */
+  proyecto: { progreso: number; estado: string; entrega: string; creado: string; fin: string | null }
   areas: { id: string; nombre: string; hechas: number; totales: number; pct: number }[]
   /** titulo = área (o "Proyecto creado"), texto = quién hizo qué, detalle = producto */
   eventos: { id: string; fecha: string; tipo: TipoEvento; titulo: string; texto: string; detalle?: string }[]
@@ -60,7 +61,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const [proyectoRes, areasRes, avanceRes, avancesRes, retrasosRes] = await Promise.all([
     supabase
       .from('proyectos')
-      .select('id, nombre, descripcion, progreso, fecha_maxima, created_at, estados:estado_id ( nombre )')
+      .select('id, nombre, descripcion, progreso, fecha_maxima, fecha_real_fin, created_at, estados:estado_id ( nombre )')
       .eq('id', id)
       .maybeSingle(),
     supabase.from('areas').select('id, nombre').eq('activo', true).order('orden', { ascending: true }),
@@ -150,6 +151,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     eventos.push({ id: `incidencia-${i.id}`, fecha: i.fecha, tipo: 'incidencia', titulo: i.area, texto: `${i.operador} reportó un retraso: ${i.motivo}` })
   }
 
+  const fin = (proyecto.fecha_real_fin as string | null) || null
+  if (fin) eventos.push({ id: 'terminado', fecha: fin, tipo: 'terminado', titulo: 'Proyecto completado', texto: 'Llegó al 100%' })
   eventos.push({ id: 'creacion', fecha: proyecto.created_at as string, tipo: 'creacion', titulo: 'Proyecto creado', texto: proyecto.nombre as string })
   eventos.sort((a, b) => b.fecha.localeCompare(a.fecha))
 
@@ -158,7 +161,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const estadoGuardado = relacion(proyecto.estados as { nombre: string } | { nombre: string }[] | null)?.nombre || ''
 
   const respuesta: Seguimiento = {
-    proyecto: { progreso, estado: estadoEntrega(progreso, entrega, estadoGuardado), entrega, creado: proyecto.created_at as string },
+    proyecto: { progreso, estado: estadoEntrega(progreso, entrega, estadoGuardado), entrega, creado: proyecto.created_at as string, fin },
     areas,
     eventos: eventos.slice(0, MAX_EVENTOS),
     incidencias,

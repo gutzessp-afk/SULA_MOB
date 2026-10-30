@@ -11,6 +11,7 @@ import { BadgePrioridad } from '@/components/BadgePrioridad';
 import { EnVivo } from '@/components/EnVivo';
 import { useRealtimeAvances } from '@/hooks/useRealtimeAvances';
 import { estadoEntrega, fechaEntrega as entregaDe, fechaLegible } from '@/lib/entregas';
+import { registrarEnHistorial } from '@/lib/historial-cliente';
 
 const POR_PAGINA = 20;
 
@@ -248,6 +249,13 @@ export default function ProyectosPage() {
         : 'Error al crear proyecto: ' + (error?.message || 'desconocido'));
       return;
     }
+
+    registrarEnHistorial({
+      tipo: 'pedido_creado',
+      referenciaId: projectData.id,
+      referenciaTipo: 'proyecto',
+      detalle: { codigo: codigoLimpio, nombre, cliente, partidas: validPartidas.length },
+    });
 
     const prodInserts = validPartidas.map(p => ({
       proyecto_id: projectData.id,

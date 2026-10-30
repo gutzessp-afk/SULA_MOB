@@ -25,6 +25,7 @@ import { supabase } from '@/lib/supabase';
 import { PartidaCard, type EstadoPartida } from '@/components/PartidaCard';
 import TimelineProyecto from '@/components/TimelineProyecto';
 import type { PlantillaBOM } from '@/lib/types';
+import { registrarEnHistorial } from '@/lib/historial-cliente';
 
 interface Proyecto {
   id: string;
@@ -163,6 +164,8 @@ export default function DetalleProyectoPage() {
       const json = await res.json().catch(() => null);
       if (res.ok && json?.ok) {
         actualizar(partida.clave, { bom: json.bom, origen: json.source, advertencias: json.advertencias });
+        // Solo los análisis con IA (no los que salieron de la plantilla guardada)
+        if (json.source !== 'cache') registrarEnHistorial({ tipo: 'plano_analizado', referenciaId: partida.clave, referenciaTipo: 'plano', detalle: { clave: partida.clave, archivo: archivo.name, proyecto: proyecto?.codigo } });
       } else {
         actualizar(partida.clave, e => ({ ...e, analizando: false, error: json?.error || `Error ${res.status} al analizar el plano.` }));
       }
@@ -244,6 +247,7 @@ export default function DetalleProyectoPage() {
       a.download = nombre;
       a.click();
       URL.revokeObjectURL(url);
+      registrarEnHistorial({ tipo: 'despiece_generado', referenciaId: proyecto.id, referenciaTipo: 'proyecto', detalle: { codigo: proyecto.codigo, partidas: partidas.length } });
     } catch (err) {
       setAviso('No se pudo generar la Matriz de Corte: ' + (err instanceof Error ? err.message : 'error desconocido'));
     } finally {

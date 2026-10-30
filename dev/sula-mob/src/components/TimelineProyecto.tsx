@@ -7,15 +7,17 @@
  *   - Progreso: estado, %, entrega, días y cómo va contra el plan lineal, con las áreas en cuadrícula
  *   - Actividad reciente (área, quién hizo qué, producto) con scroll propio
  *   - Incidencias: las del admin y los retrasos de operadores (en celular van antes que la línea de tiempo)
+ *   - Al llegar al 100%: botón "Ver reporte" con el reporte completo (ReporteProyecto)
  * Los datos salen de /api/proyectos/{id}/seguimiento.
  *
  * RUTA: src/components/TimelineProyecto.tsx
  */
 
 import { useEffect, useState } from 'react';
-import { CalendarClock, Clock, Loader2 } from 'lucide-react';
+import { CalendarClock, Clock, FileBarChart, Loader2 } from 'lucide-react';
 import ProgresoAreas from '@/components/ProgresoAreas';
 import IncidenciasProyecto from '@/components/IncidenciasProyecto';
+import ReporteProyecto from '@/components/ReporteProyecto';
 import { EnVivo } from '@/components/EnVivo';
 import { useRealtimeAvances, type EstadoRealtime } from '@/hooks/useRealtimeAvances';
 import { ETIQUETA_ESTADO, diasEntre, fechaHoy, fechaLegible, ZONA_HORARIA, type EstadoEntrega } from '@/lib/entregas';
@@ -28,6 +30,7 @@ const PUNTO: Record<TipoEvento, string> = {
   avance: 'bg-emerald-400',
   completado: 'bg-emerald-300 ring-2 ring-emerald-400/30',
   incidencia: 'bg-red-400',
+  terminado: 'bg-emerald-300 ring-2 ring-emerald-300/50',
 };
 
 const COLOR_ESTADO: Record<EstadoEntrega, string> = {
@@ -57,7 +60,7 @@ function fechaHora(iso: string) {
  * Encabezado del progreso en una sola franja: estado, barra con el %, entrega,
  * días que faltan (o de atraso) y diferencia contra el plan lineal (0% en el alta → 100% en la entrega)
  */
-function ProgresoTotal({ p, estado, enVivo }: { p: Seguimiento['proyecto']; estado: EstadoEntrega; enVivo: EstadoRealtime }) {
+function ProgresoTotal({ p, estado, enVivo, onReporte }: { p: Seguimiento['proyecto']; estado: EstadoEntrega; enVivo: EstadoRealtime; onReporte: () => void }) {
   const hoy = fechaHoy();
   const pct = Math.min(100, Math.max(0, p.progreso));
   const alta = p.creado ? new Date(p.creado).toLocaleDateString('en-CA', { timeZone: ZONA_HORARIA }) : '';
@@ -82,6 +85,15 @@ function ProgresoTotal({ p, estado, enVivo }: { p: Seguimiento['proyecto']; esta
             <div className="h-full rounded-full bg-gradient-to-r from-amber-500 to-emerald-400 transition-all duration-700" style={{ width: `${pct}%` }} />
           </div>
           <span className="font-mono text-lg font-bold leading-none text-white">{pct}%</span>
+          {pct >= 100 && (
+            <button
+              type="button"
+              onClick={onReporte}
+              className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/20"
+            >
+              <FileBarChart className="h-3.5 w-3.5" /> Ver reporte
+            </button>
+          )}
         </div>
       </div>
       <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-white/45">
@@ -89,6 +101,7 @@ function ProgresoTotal({ p, estado, enVivo }: { p: Seguimiento['proyecto']; esta
           <CalendarClock className="h-3 w-3" />
           {p.entrega ? `Entrega: ${fechaLegible(p.entrega)}` : 'Sin fecha de entrega'}
         </span>
+        {p.fin && <span className="font-semibold text-emerald-300">Completado el {fechaLegible(p.fin)}</span>}
         {faltan !== null && (
           <span className={`inline-flex items-center gap-1.5 ${atrasado ? 'font-bold text-red-400' : faltan <= 3 && pct < 100 ? 'text-amber-300' : ''}`}>
             <Clock className="h-3 w-3" />
@@ -110,6 +123,7 @@ export default function TimelineProyecto({ proyectoId }: { proyectoId: string })
   const [error, setError] = useState('');
   // Sube cada vez que un operador registra algo en este proyecto: vuelve a pedir el seguimiento
   const [version, setVersion] = useState(0);
+  const [verReporte, setVerReporte] = useState(false);
   const enVivo = useRealtimeAvances(() => setVersion(v => v + 1), { proyectoId });
 
   useEffect(() => {
@@ -142,7 +156,7 @@ export default function TimelineProyecto({ proyectoId }: { proyectoId: string })
   return (
     <div className="space-y-3">
       <section className={`${TARJETA} space-y-4 p-4 sm:p-5`}>
-        <ProgresoTotal p={proyecto} estado={proyecto.estado as EstadoEntrega} enVivo={enVivo} />
+        <ProgresoTotal p={proyecto} estado={proyecto.estado as EstadoEntrega} enVivo={enVivo} onReporte={() => setVerReporte(true)} />
         {areas.length === 0 ? (
           <p className="text-sm text-white/40">Este proyecto todavía no tiene áreas asignadas.</p>
         ) : (
@@ -181,6 +195,8 @@ export default function TimelineProyecto({ proyectoId }: { proyectoId: string })
         {/* Incidencias: en celular van primero porque son lo urgente */}
         <IncidenciasProyecto proyectoId={proyectoId} reportes={incidencias} className="order-first lg:order-none" />
       </div>
+
+      {verReporte && <ReporteProyecto proyectoId={proyectoId} onCerrar={() => setVerReporte(false)} />}
     </div>
   );
 }

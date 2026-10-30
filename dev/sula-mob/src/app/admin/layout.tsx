@@ -20,6 +20,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Clock,
+  Library,
 } from 'lucide-react';
 import { logoutAction } from '@/app/(auth)/login/actions';
 import { limpiarCache } from '@/lib/cache-datos';
@@ -42,6 +43,7 @@ const menuSections = [
       { name: 'Proyectos', href: '/admin/proyectos', icon: Briefcase, activoEn: (ruta: string) => ruta === '/admin/proyectos' },
       { name: 'Despiece', href: '/admin/despiece', icon: Layers, activoEn: (ruta: string) => (ruta.startsWith('/admin/despiece') && !ruta.startsWith('/admin/despiece/historial')) || ruta.startsWith('/admin/proyectos/') },
       { name: 'Historial', href: '/admin/despiece/historial', icon: Clock, activoEn: (ruta: string) => ruta.startsWith('/admin/despiece/historial') },
+      { name: 'Catálogo', href: '/admin/catalogo', icon: Library, activoEn: (ruta: string) => ruta.startsWith('/admin/catalogo') },
       { name: 'Calendario', href: '/admin/calendario', icon: CalendarDays },
       { name: 'Áreas', href: '/admin/actividades', icon: Warehouse },
       { name: 'Notificaciones', href: '/admin/notificaciones', icon: Bell },
