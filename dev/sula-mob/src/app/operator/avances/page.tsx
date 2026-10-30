@@ -27,7 +27,7 @@ const PRIORIDAD: Record<string, { etiqueta: string; color: string }> = {
 }
 
 const estadoDe = (p: ProyectoLista): Estado =>
-  p.progreso >= 100 ? 'terminado' : p.progreso > 0 ? 'en_proceso' : 'por_iniciar'
+  p.progreso >= 100 ? 'terminado' : p.progreso > 0 || p.iniciado ? 'en_proceso' : 'por_iniciar'
 
 /** Anillo con el % de avance */
 function Anillo({ pct, color }: { pct: number; color: string }) {

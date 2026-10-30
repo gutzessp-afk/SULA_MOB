@@ -121,6 +121,8 @@ export interface ProyectoLista {
   referencia_sucursal: string
   prioridad: string
   progreso: number
+  /** Ya se tocó "Iniciar" en alguna pieza (aunque todavía no haya piezas registradas) */
+  iniciado: boolean
 }
 
 export async function getProyectosLista(): Promise<ProyectoLista[]> {
@@ -139,6 +141,19 @@ export async function getProyectosLista(): Promise<ProyectoLista[]> {
     return []
   }
 
+  // Proyectos en 0% que ya tienen alguna pieza iniciada (reloj corriendo o registrada):
+  // cuentan como "En proceso" desde que se toca Iniciar
+  const sinAvance = (data ?? []).filter((p) => !((p.progreso as number | null) ?? 0)).map((p) => p.id as string)
+  const iniciados = new Set<string>()
+  if (sinAvance.length > 0) {
+    const { data: trabajos, error: errorTrabajos } = await supabase
+      .from('trabajos_pieza')
+      .select('proyecto_id')
+      .in('proyecto_id', sinAvance)
+    if (errorTrabajos) console.error('Error al revisar piezas iniciadas:', errorTrabajos)
+    ;(trabajos ?? []).forEach((t) => iniciados.add(t.proyecto_id as string))
+  }
+
   return (data ?? []).map((p) => ({
     id: p.id as string,
     codigo: (p.codigo as string | null) ?? '',
@@ -147,6 +162,7 @@ export async function getProyectosLista(): Promise<ProyectoLista[]> {
     referencia_sucursal: (p.referencia_sucursal as string | null) ?? '',
     prioridad: (p.prioridad as string | null) ?? 'media',
     progreso: (p.progreso as number | null) ?? 0,
+    iniciado: ((p.progreso as number | null) ?? 0) > 0 || iniciados.has(p.id as string),
   }))
 }
 
