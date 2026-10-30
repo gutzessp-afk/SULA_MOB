@@ -1039,12 +1039,9 @@ export async function corregirPieza(
   if (!Number.isInteger(total) || total < 0) return { error: 'Escribe cuántas piezas van en total.' }
 
   const supabase = await createClient()
-  const [acceso, cierreRes] = await Promise.all([
-    tieneAccesoArea(supabase, usuario, areaId),
-    supabase.from('area_cierres').select('id').eq('proyecto_id', proyectoId).eq('area_id', areaId).maybeSingle(),
-  ])
-  if (!acceso) return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
-  if (cierreRes.data) return { error: 'Esta área ya fue marcada como terminada: tiene candado.' }
+  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
+    return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
+  }
 
   // Lo que hay hoy (igual que lo que ve la pantalla) y la meta
   let meta = 0
@@ -1070,8 +1067,6 @@ export async function corregirPieza(
     productoAdmin = id
   }
 
-  // Candado: lo que ya llegó a su meta ya pasó por el área y no se mueve desde el operador
-  if (meta > 0 && actuales >= meta) return { error: 'Esta pieza ya está completa: tiene candado.' }
   if (meta > 0 && total > meta) return { error: `La meta es de ${meta} piezas.` }
   const delta = total - actuales
   if (delta === 0) return { success: true }

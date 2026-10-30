@@ -671,10 +671,10 @@ function PiezaCard({
           )}
 
           {!t && p.faltan === 0 && (
-            <span style={{ color: green, fontSize: 12, fontWeight: 800 }}>🔒 Completo</span>
+            <span style={{ color: green, fontSize: 12, fontWeight: 800 }}>✓ Completo</span>
           )}
 
-          {p.hechas > 0 && p.faltan > 0 && !fin && !reporte && (
+          {p.hechas > 0 && !fin && !reporte && (
             <button
               onClick={() => setCorrigiendo((v) => !v)}
               style={{
@@ -970,7 +970,6 @@ function PiezasPorPasos({
   const [saltadas, setSaltadas] = useState<string[]>([])
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({})
   const [verTerminadas, setVerTerminadas] = useState(true)
-  // Solo las piezas a medias: las terminadas tienen candado
   const [corrigiendo, setCorrigiendo] = useState<string | null>(null)
 
   const enCurso = piezas.filter((p) => p.trabajo)
@@ -1195,13 +1194,40 @@ function PiezasPorPasos({
             terminadas.map((p) => (
               <div key={p.id} style={{ borderTop: `1px solid ${line}`, padding: '9px 15px' }}>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                  <span aria-label="Con candado">🔒</span>
+                  <span style={{ color: green }}>✓</span>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ display: 'block', color: '#64748b', fontSize: 11 }}>{p.modulo}</span>
                     <span style={{ display: 'block', color: '#cbd5e1', fontSize: 13.5 }}>{p.nombre}</span>
                   </span>
                   <span style={{ color: '#64748b', fontSize: 12.5, fontFamily: 'monospace' }}>{p.hechas}</span>
+                  <button
+                    onClick={() => setCorrigiendo((v) => (v === p.id ? null : p.id))}
+                    style={{
+                      background: 'none',
+                      color: '#cbd5e1',
+                      border: `1px solid ${line}`,
+                      borderRadius: 10,
+                      padding: '7px 11px',
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ✏️ Corregir
+                  </button>
                 </div>
+                {corrigiendo === p.id && (
+                  <CorregirPiezas
+                    hechas={p.hechas}
+                    meta={p.meta}
+                    guardando={ocupado === `corregir|${p.id}`}
+                    onGuardar={(total) => {
+                      onCorregir(p.id, p.tipo, total)
+                      setCorrigiendo(null)
+                    }}
+                    onCerrar={() => setCorrigiendo(null)}
+                  />
+                )}
               </div>
             ))}
         </div>
@@ -1912,9 +1938,9 @@ export default function ProyectoPage() {
           {detalle.areas.map((a) => {
             // Color según el estado del área
             const estado = a.cerrada
-              ? { color: green, texto: '🔒 Terminada' }
+              ? { color: green, texto: '✓ Terminada' }
               : a.porcentaje >= 100 && a.enCurso === 0
-                ? { color: green, texto: '🔒 Completada' }
+                ? { color: green, texto: '✓ Completada' }
               : a.pausa
                 ? { color: amber, texto: `⏸ En pausa: ${a.pausa.motivo}` }
                 : a.enCurso > 0
