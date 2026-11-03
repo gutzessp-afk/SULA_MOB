@@ -1410,6 +1410,51 @@ export async function reportarArea(
   return { success: true, afectadas: libres.length }
 }
 
+// "No puedo comenzar esta area": SOLO avisa al administrador (llega a /admin/reportes);
+// no pausa ni detiene ningun reloj
+export async function avisarNoPuedoComenzar(
+  proyectoId: string,
+  areaId: string,
+  motivo: string,
+  nota: string,
+  evidenciaUrl?: string
+): Promise<Resultado> {
+  const usuario = await getUsuarioActual()
+  if (!usuario) return { error: 'No autenticado' }
+
+  const supabase = await createClient()
+
+  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
+    return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
+  }
+
+  const { data: area } = await supabase.from('areas').select('nombre').eq('id', areaId).maybeSingle()
+
+  const { data: retraso, error } = await supabase
+    .from('retrasos')
+    .insert({
+      proyecto_id: proyectoId,
+      area_id: areaId,
+      operador_id: usuario.id,
+      motivo,
+      descripcion: `No se puede comenzar ${(area?.nombre as string | undefined) ?? 'el área'}`,
+      tiempo_estimado_retraso: 0,
+      comentario: nota.trim() || null,
+      evidencia_url: evidenciaUrl || null,
+    })
+    .select('id')
+    .single()
+
+  if (error || !retraso) {
+    console.error('Error al avisar que no se puede comenzar:', error)
+    return { error: `No se pudo enviar el reporte al administrador${detalleError(error)}` }
+  }
+  // Notificación en el celular de los administradores (después de responder)
+  avisarRetrasoDespues(retraso.id as string)
+
+  return { success: true }
+}
+
 async function avisarAdmins(
   supabase: Supabase,
   remitenteId: string,

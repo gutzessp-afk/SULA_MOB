@@ -20,7 +20,9 @@ import {
   pausarArea,
   reanudarArea,
   reanudarPieza,
+  reportarArea,
   reportarPieza,
+  avisarNoPuedoComenzar,
   corregirPieza,
   salirArea,
   subirEvidenciaReporte,
@@ -47,6 +49,7 @@ const blue = '#2563ff'
 const bl = '#4f8cff'
 const green = '#22d39a'
 const amber = '#ffb020'
+const orange = '#ff7a1a'
 const teal = '#2ee6c8'
 // Fondo de las tarjetas: degradado sutil para que se vean con volumen
 const fondoTarjeta = 'linear-gradient(180deg, #16203a 0%, #111929 100%)'
@@ -61,6 +64,24 @@ const MOTIVOS_REPORTE = [
   'Corte de energía',
   'Otro',
 ]
+// "Reporte al administrador" del área
+// No puedo comenzar: SOLO avisan al administrador, no detienen relojes
+const MOTIVOS_NO_COMENZAR = [
+  'Área anterior no ha terminado',
+  'Faltan piezas de otra área',
+  'No ha llegado el material',
+  'Falta plano u orden de trabajo',
+  'Esperando autorización para iniciar',
+]
+// Avisan al administrador y detienen los relojes del área (se sigue con "Reanudar área")
+const MOTIVOS_ADMIN_PRODUCCION = [
+  'Falla de máquina',
+  'Falta de herramienta',
+  'Pieza rechazada',
+  'Material defectuoso',
+  'Plano o medida con error',
+]
+const MOTIVOS_ADMIN_SERVICIOS = ['Corte de energía', 'Falta de gas, aire o agua']
 const MOTIVOS_PAUSA_AREA = ['Comida', 'Junta', 'Limpieza', 'Cambio de herramienta']
 const MOTIVO_TURNO = 'Cambio de turno'
 
@@ -921,10 +942,216 @@ async function comprimirFoto(archivo: File): Promise<Blob> {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Reporte al administrador (motivo, descripcion y foto)              */
+/* ------------------------------------------------------------------ */
+
+function PanelAdmin({
+  enviando,
+  onEnviar,
+}: {
+  enviando: boolean
+  onEnviar: (motivo: string, nota: string, foto: Blob | null) => void
+}) {
+  const [motivo, setMotivo] = useState('')
+  const [nota, setNota] = useState('')
+  const [foto, setFoto] = useState<Blob | null>(null)
+  const [vistaFoto, setVistaFoto] = useState('')
+  const [fallo, setFallo] = useState('')
+
+  useEffect(() => {
+    return () => {
+      if (vistaFoto) URL.revokeObjectURL(vistaFoto)
+    }
+  }, [vistaFoto])
+
+  async function elegirFoto(archivo: File | undefined) {
+    if (!archivo) return
+    setFallo('')
+    try {
+      const b = await comprimirFoto(archivo)
+      setFoto(b)
+      setVistaFoto(URL.createObjectURL(b))
+    } catch {
+      setFallo('No se pudo preparar la foto. Intenta con otra.')
+    }
+  }
+
+  function quitarFoto() {
+    setFoto(null)
+    setVistaFoto('')
+  }
+
+  const falta = motivo === '' ? 'Elige qué pasó.' : motivo === 'Otro' && !nota.trim() ? 'Describe qué pasó.' : ''
+
+  const chip = (activo: boolean, color = amber, fondo = '#1f1708'): CSSProperties => ({
+    ...chipAmber,
+    border: `1px solid ${color}66`,
+    padding: '9px 15px',
+    fontSize: 13.5,
+    background: activo ? color : fondo,
+    color: activo ? '#1a1204' : color,
+    fontWeight: activo ? 800 : 500,
+  })
+
+  const titulo = (texto: string, color = '#64748b', primero = false) => (
+    <div
+      style={{
+        color,
+        fontSize: 11,
+        letterSpacing: '.06em',
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        margin: primero ? '0 0 8px' : '14px 0 8px',
+      }}
+    >
+      {texto}
+    </div>
+  )
+
+  return (
+    <div
+      style={{
+        background: card,
+        border: `1px solid ${line}`,
+        borderRadius: 14,
+        padding: 14,
+        marginBottom: 12,
+      }}
+    >
+      {titulo('No puedo comenzar esta área', orange, true)}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {MOTIVOS_NO_COMENZAR.map((m) => (
+          <button key={m} onClick={() => setMotivo(m)} style={chip(motivo === m, orange, '#221208')}>
+            {m}
+          </button>
+        ))}
+      </div>
+
+      {titulo('Producción')}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {MOTIVOS_ADMIN_PRODUCCION.map((m) => (
+          <button key={m} onClick={() => setMotivo(m)} style={chip(motivo === m)}>
+            {m}
+          </button>
+        ))}
+      </div>
+
+      {titulo('Servicios')}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {MOTIVOS_ADMIN_SERVICIOS.map((m) => (
+          <button key={m} onClick={() => setMotivo(m)} style={chip(motivo === m)}>
+            {m}
+          </button>
+        ))}
+      </div>
+
+      {titulo('Otro')}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        <button onClick={() => setMotivo('Otro')} style={chip(motivo === 'Otro')}>
+          Otro
+        </button>
+      </div>
+
+      <textarea
+        value={nota}
+        onChange={(e) => setNota(e.target.value)}
+        rows={3}
+        placeholder={motivo === 'Otro' ? 'Describe qué pasó (obligatorio)' : 'Nota (opcional)'}
+        style={{
+          width: '100%',
+          marginTop: 12,
+          background: '#08090d',
+          border: `1px solid ${motivo === 'Otro' && !nota.trim() ? amber : line}`,
+          borderRadius: 10,
+          padding: '10px 12px',
+          fontSize: 15,
+          color: '#fff',
+          resize: 'vertical',
+        }}
+      />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+        <label
+          style={{
+            background: '#0f1b3d',
+            color: bl,
+            border: `1px solid ${bl}66`,
+            borderRadius: 10,
+            padding: '10px 16px',
+            fontSize: 13.5,
+            fontWeight: 700,
+            cursor: 'pointer',
+          }}
+        >
+          📷 {foto ? 'Cambiar foto' : 'Tomar foto'}
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={(e) => {
+              void elegirFoto(e.target.files?.[0])
+              e.target.value = ''
+            }}
+            style={{ display: 'none' }}
+          />
+        </label>
+
+        {vistaFoto && (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={vistaFoto}
+              alt="Evidencia"
+              style={{ height: 56, borderRadius: 8, border: `1px solid ${line}` }}
+            />
+            <button
+              onClick={quitarFoto}
+              style={{
+                background: 'none',
+                color: '#94a3b8',
+                border: `1px solid ${line}`,
+                borderRadius: 10,
+                padding: '8px 12px',
+                fontSize: 12.5,
+                cursor: 'pointer',
+              }}
+            >
+              Quitar
+            </button>
+          </>
+        )}
+      </div>
+
+      {fallo && <div style={{ color: '#f87171', fontSize: 12.5, marginTop: 8 }}>{fallo}</div>}
+
+      <button
+        onClick={() => onEnviar(motivo, nota, foto)}
+        disabled={enviando || falta !== ''}
+        style={{
+          width: '100%',
+          marginTop: 14,
+          background: falta ? '#2a2f3d' : amber,
+          color: falta ? '#64748b' : '#1a1204',
+          border: 'none',
+          borderRadius: 11,
+          padding: '13px 0',
+          fontSize: 15,
+          fontWeight: 800,
+          cursor: falta ? 'default' : 'pointer',
+          opacity: enviando ? 0.6 : 1,
+        }}
+      >
+        {enviando ? 'Enviando...' : falta ? falta : 'Enviar al administrador'}
+      </button>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /*  Pantalla                                                           */
 /* ------------------------------------------------------------------ */
 
-type Panel = 'pausa' | null
+type Panel = 'pausa' | 'admin' | null
 
 /* ------------------------------------------------------------------ */
 /*  Piezas por pasos (proyectos por pieza: despiece del plano o PDF)   */
@@ -1519,6 +1746,36 @@ export default function ProyectoPage() {
     }
   }
 
+  async function enviarAdmin(motivo: string, nota: string, foto: Blob | null) {
+    if (!areaId) return
+    let evidenciaUrl: string | undefined
+    if (foto) {
+      setOcupado('admin')
+      const fd = new FormData()
+      fd.append('foto', foto, 'evidencia.jpg')
+      const r = await subirEvidenciaReporte(fd)
+      if (r.error || !r.url) {
+        setOcupado(null)
+        setError(r.error ?? 'No se pudo subir la foto.')
+        return
+      }
+      evidenciaUrl = r.url
+    }
+    // "No puedo comenzar" solo avisa; los demás motivos detienen los relojes del área
+    const ok = MOTIVOS_NO_COMENZAR.includes(motivo)
+      ? await ejecutar(
+          'admin',
+          () => avisarNoPuedoComenzar(proyectoId, areaId, motivo, nota, evidenciaUrl),
+          `✓ Administrador notificado: ${motivo}.`
+        )
+      : await ejecutar(
+          'admin',
+          () => reportarArea(proyectoId, areaId, motivo, nota, evidenciaUrl),
+          `⏸ Administrador notificado: ${motivo}. Los relojes están detenidos; toca "Reanudar área" cuando se resuelva.`
+        )
+    if (ok) setPanel(null)
+  }
+
 
   async function reanudarElArea() {
     if (!areaId) return
@@ -1717,6 +1974,21 @@ export default function ProyectoPage() {
 
         <div className="op-barra">
           <button
+            onClick={() => setPanel((v) => (v === 'admin' ? null : 'admin'))}
+            style={{
+              background: 'none',
+              color: amber,
+              border: `1px solid ${amber}66`,
+              borderRadius: 10,
+              padding: '10px 15px',
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            Reporte al administrador
+          </button>
+          <button
             onClick={() => setPanel((v) => (v === 'pausa' ? null : 'pausa'))}
             style={{
               background: 'none',
@@ -1771,6 +2043,10 @@ export default function ProyectoPage() {
               </button>
             </div>
           </div>
+        )}
+
+        {panel === 'admin' && (
+          <PanelAdmin enviando={ocupado === 'admin'} onEnviar={enviarAdmin} />
         )}
 
         {vista.pausa && (
