@@ -67,8 +67,6 @@ const MOTIVOS_REPORTE = [
 // "Reporte al administrador" del área
 // No puedo comenzar: SOLO avisan al administrador, no detienen relojes
 const MOTIVOS_NO_COMENZAR = [
-  'Área anterior no ha terminado',
-  'Faltan piezas de otra área',
   'No ha llegado el material',
   'Falta plano u orden de trabajo',
   'Esperando autorización para iniciar',
