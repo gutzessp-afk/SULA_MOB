@@ -116,7 +116,8 @@ export default function ProyectosPage() {
     if (error) throw new Error(error.message);
     return (data ?? []) as Area[];
   });
-  const proyectos = useMemo(() => listaProyectos ?? [], [listaProyectos]);
+  // Los pedidos al 100% se van al módulo Terminados (/admin/terminados) y ya no salen aquí
+  const proyectos = useMemo(() => (listaProyectos ?? []).filter(p => (Number(p.progreso) || 0) < 100), [listaProyectos]);
   // En vivo: cuando un operador registra piezas, las barras de avance se actualizan solas
   const enVivo = useRealtimeAvances(() => void fetchProyectos());
   const areasDisponibles = listaAreas ?? [];

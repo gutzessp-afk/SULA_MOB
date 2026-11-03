@@ -21,6 +21,7 @@ import {
   PanelLeftOpen,
   Clock,
   Library,
+  CircleCheckBig,
 } from 'lucide-react';
 import { logoutAction } from '@/app/(auth)/login/actions';
 import { limpiarCache } from '@/lib/cache-datos';
@@ -44,6 +45,7 @@ const menuSections = [
       { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutGrid },
       // Proyectos se marca en la lista y en la planeación de tiempos; el resto del detalle de un proyecto (/admin/proyectos/[id]) pertenece a Despiece
       { name: 'Proyectos', href: '/admin/proyectos', icon: Briefcase, activoEn: (ruta: string) => ruta === '/admin/proyectos' || esPlaneacion(ruta) },
+      { name: 'Terminados', href: '/admin/terminados', icon: CircleCheckBig, activoEn: (ruta: string) => ruta.startsWith('/admin/terminados') },
       { name: 'Despiece', href: '/admin/despiece', icon: Layers, activoEn: (ruta: string) => (ruta.startsWith('/admin/despiece') && !ruta.startsWith('/admin/despiece/historial')) || (ruta.startsWith('/admin/proyectos/') && !esPlaneacion(ruta)) },
       { name: 'Historial', href: '/admin/despiece/historial', icon: Clock, activoEn: (ruta: string) => ruta.startsWith('/admin/despiece/historial') },
       { name: 'Catálogo', href: '/admin/catalogo', icon: Library, activoEn: (ruta: string) => ruta.startsWith('/admin/catalogo') },
