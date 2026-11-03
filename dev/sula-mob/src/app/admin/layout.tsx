@@ -34,14 +34,17 @@ import { EVENTO_PERFIL } from '@/lib/perfil';
 
 /* ── Secciones del menú ── */
 
+/** /admin/proyectos/[id]/tiempos: planeación de tiempos de un proyecto */
+const esPlaneacion = (ruta: string) => /^\/admin\/proyectos\/[^/]+\/tiempos\/?$/.test(ruta);
+
 const menuSections = [
   {
     title: 'MENÚ',
     items: [
       { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutGrid },
-      // Proyectos solo se marca en la lista; el detalle de un proyecto (/admin/proyectos/[id]) pertenece a Despiece
-      { name: 'Proyectos', href: '/admin/proyectos', icon: Briefcase, activoEn: (ruta: string) => ruta === '/admin/proyectos' },
-      { name: 'Despiece', href: '/admin/despiece', icon: Layers, activoEn: (ruta: string) => (ruta.startsWith('/admin/despiece') && !ruta.startsWith('/admin/despiece/historial')) || ruta.startsWith('/admin/proyectos/') },
+      // Proyectos se marca en la lista y en la planeación de tiempos; el resto del detalle de un proyecto (/admin/proyectos/[id]) pertenece a Despiece
+      { name: 'Proyectos', href: '/admin/proyectos', icon: Briefcase, activoEn: (ruta: string) => ruta === '/admin/proyectos' || esPlaneacion(ruta) },
+      { name: 'Despiece', href: '/admin/despiece', icon: Layers, activoEn: (ruta: string) => (ruta.startsWith('/admin/despiece') && !ruta.startsWith('/admin/despiece/historial')) || (ruta.startsWith('/admin/proyectos/') && !esPlaneacion(ruta)) },
       { name: 'Historial', href: '/admin/despiece/historial', icon: Clock, activoEn: (ruta: string) => ruta.startsWith('/admin/despiece/historial') },
       { name: 'Catálogo', href: '/admin/catalogo', icon: Library, activoEn: (ruta: string) => ruta.startsWith('/admin/catalogo') },
       { name: 'Calendario', href: '/admin/calendario', icon: CalendarDays },

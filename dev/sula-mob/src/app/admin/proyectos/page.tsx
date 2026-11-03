@@ -1,10 +1,15 @@
 'use client';
 
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { cargarProyectos, useDatos } from '@/lib/cache-datos';
 import { eliminarProyecto } from '@/lib/eliminar-proyecto';
-import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, Pencil, Upload, X, Calendar, User, MapPin, Download } from 'lucide-react';
+import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, Pencil, Upload, X, Calendar, User, MapPin, Download, CalendarClock } from 'lucide-react';
+import { limpiarHuerfanos, quitarPlan } from '@/lib/plan-almacen';
+import { usePlanes } from '@/hooks/usePlanes';
+import { useAvanceReal } from '@/hooks/useAvanceReal';
+import { IndicadorPlan } from '@/components/PlanTiempos';
 import { parsePedidoPdf } from '@/lib/parse-pedido';
 import { useDebounce } from '@/hooks/useDebounce';
 import { BadgePrioridad } from '@/components/BadgePrioridad';
@@ -53,6 +58,25 @@ function FechaEntrega({ p }: { p: { progreso: number; fecha_maxima?: string | nu
   );
 }
 
+/** Acceso a la planeación de tiempos; relleno y con punto cuando el proyecto ya tiene plan */
+function BotonPlanear({ id, codigo, conPlan, tamano }: { id: string; codigo: string; conPlan: boolean; tamano: string }) {
+  return (
+    <Link
+      href={`/admin/proyectos/${id}/tiempos`}
+      title={conPlan ? 'Planear tiempos (tiene plan)' : 'Planear tiempos'}
+      aria-label={`Planear tiempos de ${codigo}${conPlan ? ' (tiene plan)' : ''}`}
+      className={`max-sm:min-h-[44px] ${tamano} relative border inline-flex items-center justify-center backdrop-blur-md transition-all ${
+        conPlan
+          ? 'bg-violet-500/35 hover:bg-violet-500/50 text-violet-100 border-violet-300/60'
+          : 'bg-violet-500/10 hover:bg-violet-500/25 text-violet-300 border-violet-400/30'
+      }`}
+    >
+      <CalendarClock className="w-4 h-4" />
+      {conPlan && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-violet-300 ring-2 ring-[#0E131F]" />}
+    </Link>
+  );
+}
+
 interface PartidaItem {
   cantidad: number;
   clave: string;
@@ -86,7 +110,7 @@ interface Proyecto {
 export default function ProyectosPage() {
   const [activeTab, setActiveTab] = useState<'lista' | 'crear'>('lista');
   // Proyectos y áreas se piden a la vez y se muestran al instante si ya se habían cargado
-  const { datos: listaProyectos, cargando: cargandoProyectos, recargar: fetchProyectos } = useDatos('proyectos', () => cargarProyectos<Proyecto>());
+  const { datos: listaProyectos, cargando: cargandoProyectos, recargar: fetchProyectos, actualizadoEn: proyectosAlDia } = useDatos('proyectos', () => cargarProyectos<Proyecto>());
   const { datos: listaAreas } = useDatos('areas-activas', async () => {
     const { data, error } = await supabase.from('areas').select('id, nombre, peso').eq('activo', true).order('orden', { ascending: true });
     if (error) throw new Error(error.message);
@@ -96,6 +120,15 @@ export default function ProyectosPage() {
   // En vivo: cuando un operador registra piezas, las barras de avance se actualizan solas
   const enVivo = useRealtimeAvances(() => void fetchProyectos());
   const areasDisponibles = listaAreas ?? [];
+
+  // Plan de tiempos (opcional, guardado en este navegador): solo los proyectos con plan consultan su avance por área
+  const planes = usePlanes();
+  const idsConPlan = useMemo(() => proyectos.filter(p => planes[p.id]).map(p => p.id), [proyectos, planes]);
+  const { avance: avancePlan } = useAvanceReal(idsConPlan);
+  // Con la lista recién leída de la base, se borran los planes de proyectos que ya no existen
+  useEffect(() => {
+    if (proyectosAlDia && listaProyectos && listaProyectos.length > 0) limpiarHuerfanos(listaProyectos.map(p => p.id));
+  }, [proyectosAlDia, listaProyectos]);
 
   // Formulario — campos del Pedido Data
   const [codigo, setCodigo] = useState('');
@@ -192,6 +225,7 @@ export default function ProyectosPage() {
 
     // Borra primero lo que depende del proyecto y comprueba que de verdad desapareció
     const resultado = await eliminarProyecto(supabase, proyecto.id);
+    if (resultado.ok) quitarPlan(proyecto.id);
     await fetchProyectos();
     if (resultado.ok) alert(`El proyecto ${proyecto.codigo} se eliminó con todos sus registros.`);
     else alert('No se pudo eliminar el proyecto: ' + resultado.error);
@@ -563,6 +597,7 @@ export default function ProyectosPage() {
 
                 {/* Barra de progreso */}
                 <BarraProgresoConEstado progreso={p.progreso} />
+                {planes[p.id] && <IndicadorPlan plan={planes[p.id]} avance={avancePlan[p.id]} entrega={entregaDe(p)} />}
 
                 {/* Botones de acción */}
                 <div className="flex gap-2 pt-1">
@@ -581,6 +616,7 @@ export default function ProyectosPage() {
                   >
                     <Pencil className="w-4 h-4" />
                   </button>
+                  <BotonPlanear id={p.id} codigo={p.codigo} conPlan={!!planes[p.id]} tamano="w-10 h-10 rounded-xl" />
                   <button
                     onClick={() => handleEliminarProyecto(p)}
                     className="max-sm:min-h-[44px] flex-1 bg-red-500/20 hover:bg-red-500/35 text-red-200 border border-red-400/30 text-xs px-3 py-2.5 rounded-xl inline-flex items-center justify-center gap-1.5 backdrop-blur-md transition-all"
@@ -619,7 +655,10 @@ export default function ProyectosPage() {
                     </td>
                     <td className="px-2.5 py-3 min-[1600px]:px-3"><BadgePrioridad prioridad={p.prioridad} /></td>
                     <td className="px-2.5 py-3 min-[1600px]:px-3">{entregaDe(p) ? <FechaEntrega p={p} /> : <span className="text-white/30">—</span>}</td>
-                    <td className="px-2.5 py-3 min-[1600px]:px-3"><BarraProgresoConEstado progreso={p.progreso} ancho="w-20 min-[1600px]:w-28" estadoVisible="hidden min-[1600px]:inline" /></td>
+                    <td className="px-2.5 py-3 min-[1600px]:px-3">
+                      <BarraProgresoConEstado progreso={p.progreso} ancho="w-20 min-[1600px]:w-28" estadoVisible="hidden min-[1600px]:inline" />
+                      {planes[p.id] && <IndicadorPlan plan={planes[p.id]} avance={avancePlan[p.id]} entrega={entregaDe(p)} />}
+                    </td>
                     <td className="px-2.5 py-3 min-[1600px]:px-3 text-right">
                       <div className="flex justify-end items-center gap-1.5 whitespace-nowrap">
                         <button
@@ -637,6 +676,7 @@ export default function ProyectosPage() {
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
+                        <BotonPlanear id={p.id} codigo={p.codigo} conPlan={!!planes[p.id]} tamano="w-8 h-8 rounded-lg" />
                         <button
                           onClick={() => handleEliminarProyecto(p)}
                           title="Dar de baja"

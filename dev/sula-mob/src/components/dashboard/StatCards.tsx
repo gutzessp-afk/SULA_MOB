@@ -30,15 +30,18 @@ function Numero({ valor, sufijo = '', activo }: { valor: number; sufijo?: string
 
 // Tablet (sm): 6 columnas → las 3 primeras ocupan 2 y las 2 últimas 3, para que ambas filas llenen
 const SPAN = ['sm:col-span-2', 'sm:col-span-2', 'sm:col-span-2', 'sm:col-span-3', 'col-span-2 sm:col-span-3'];
+// Con un 6º indicador (proyectos en riesgo, solo si hay planes de tiempos): 2 + 2 + 2 en celular, 3 + 3 en tablet, 6 en fila en xl
+const SPAN_SEIS = 'sm:col-span-2';
 
 export function StatCards({ cards, cargando }: { cards: StatCard[]; cargando: boolean }) {
+  const seis = cards.length === 6;
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-6 sm:gap-3 xl:grid-cols-5">
+    <div className={`grid grid-cols-2 gap-2 sm:grid-cols-6 sm:gap-3 ${seis ? 'xl:grid-cols-6' : 'xl:grid-cols-5'}`}>
       {cards.map(({ icono: Icono, titulo, valor, sufijo, color, detalle }, i) => (
         <div
           key={titulo}
           title={detalle}
-          className={`${SPAN[i] ?? ''} xl:col-span-1 flex min-w-0 items-center gap-2.5 rounded-2xl border border-white/[0.08] bg-white/[0.04] p-3 backdrop-blur-xl sm:gap-4 sm:p-4`}
+          className={`${seis ? SPAN_SEIS : SPAN[i] ?? ''} xl:col-span-1 flex min-w-0 items-center gap-2.5 rounded-2xl border border-white/[0.08] bg-white/[0.04] p-3 backdrop-blur-xl sm:gap-4 sm:p-4`}
         >
           <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl sm:h-11 sm:w-11 ${color}`}>
             <Icono className="h-4 w-4 text-white sm:h-5 sm:w-5" />

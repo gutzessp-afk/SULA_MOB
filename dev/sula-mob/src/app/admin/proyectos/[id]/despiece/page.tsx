@@ -27,6 +27,8 @@ import { supabase } from '@/lib/supabase';
 import IncidenciasProyecto from '@/components/IncidenciasProyecto';
 import { EnVivo } from '@/components/EnVivo';
 import { useRealtimeAvances } from '@/hooks/useRealtimeAvances';
+import PlanTiempos from '@/components/PlanTiempos';
+import { fechaEntrega } from '@/lib/entregas';
 
 /* ═══════════════════════════════════════
    TIPOS (columnas reales de cada tabla)
@@ -39,6 +41,8 @@ interface Proyecto {
   cliente?: string | null;
   referencia_sucursal?: string | null;
   progreso: number;
+  descripcion?: string | null;
+  fecha_maxima?: string | null;
 }
 
 interface Partida {
@@ -275,7 +279,7 @@ export default function DespiecePage() {
   /* ── Carga de datos: cada nivel se pide con los ids del nivel anterior ── */
   const loadDespiece = useCallback(async () => {
     const [proyectoRes, partidasRes, areasRes] = await Promise.all([
-      supabase.from('proyectos').select('id, codigo, nombre, cliente, referencia_sucursal, progreso').eq('id', proyectoId).maybeSingle(),
+      supabase.from('proyectos').select('id, codigo, nombre, cliente, referencia_sucursal, progreso, descripcion, fecha_maxima').eq('id', proyectoId).maybeSingle(),
       supabase.from('partidas').select('id, clave, descripcion, cantidad, orden, progreso').eq('proyecto_id', proyectoId).order('orden'),
       supabase.from('areas').select('id, nombre, peso').eq('activo', true).order('orden', { ascending: true }),
     ]);
@@ -510,6 +514,9 @@ export default function DespiecePage() {
       {error && (
         <p className="text-xs text-red-300 font-semibold bg-red-500/10 border border-red-500/25 rounded-xl px-4 py-3">{error}</p>
       )}
+
+      {/* Plan de tiempos contra el avance real: solo aparece si el proyecto tiene plan */}
+      {proyecto && <PlanTiempos proyectoId={proyecto.id} entrega={fechaEntrega(proyecto)} />}
 
       {loading ? (
         <div className="py-16 flex justify-center items-center gap-2 text-white/50 text-sm">

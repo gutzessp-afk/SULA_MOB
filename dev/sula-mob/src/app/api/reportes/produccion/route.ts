@@ -24,7 +24,7 @@ interface ProyectoFila {
   id: string
   codigo: string | null
   nombre: string | null
-  cliente: string | null
+  referencia_sucursal: string | null
   descripcion: string | null
   progreso: number | null
   prioridad: string | null
@@ -53,7 +53,7 @@ const COLOR_ESTADO: Record<Estado, string> = {
 const COLUMNAS_PROYECTOS: Columna[] = [
   { titulo: 'Código', ancho: 16 },
   { titulo: 'Proyecto', ancho: 34 },
-  { titulo: 'Cliente', ancho: 26 },
+  { titulo: 'Sucursal', ancho: 26 },
   { titulo: 'Prioridad', ancho: 12, alineacion: 'center' },
   { titulo: 'Progreso', ancho: 11, alineacion: 'center', formato: '0%' },
   { titulo: 'Estado', ancho: 14, alineacion: 'center' },
@@ -95,7 +95,7 @@ export async function GET() {
       todasLasFilas<ProyectoFila>((desde, hasta) =>
         supabase
           .from('proyectos')
-          .select('id, codigo, nombre, cliente, descripcion, progreso, prioridad, fecha_maxima, estados:estado_id ( nombre )')
+          .select('id, codigo, nombre, referencia_sucursal, descripcion, progreso, prioridad, fecha_maxima, estados:estado_id ( nombre )')
           .order('created_at', { ascending: false })
           .order('id')
           .range(desde, hasta)
@@ -156,7 +156,7 @@ export async function GET() {
       proyectos.map((p) => [
         p.codigo || '',
         p.nombre || '',
-        p.cliente || 'No especificado',
+        p.referencia_sucursal?.trim() || p.descripcion?.match(/Ref:\s*([^|]+)/)?.[1]?.trim() || 'No especificado',
         mayuscula(p.prioridad || 'media'),
         p.progreso / 100,
         p.estado,

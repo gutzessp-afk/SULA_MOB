@@ -29,7 +29,10 @@ import { EnVivo } from '@/components/EnVivo';
 import { useRealtimeAvances } from '@/hooks/useRealtimeAvances';
 import type { DiaActividad } from '@/components/dashboard/ActividadAvances';
 import { ETIQUETA_ESTADO, estadoEntrega, fechaEntrega, fechaHoy, fechaLegible, ZONA_HORARIA, type EstadoEntrega } from '@/lib/entregas';
-import { AlertTriangle, Bell, Calendar, CheckCircle2, Download, FolderOpen, Gauge, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Bell, Calendar, CalendarClock, CheckCircle2, Download, FolderOpen, Gauge, RefreshCw } from 'lucide-react';
+import { evaluarPlan } from '@/lib/plan-tiempos';
+import { usePlanes } from '@/hooks/usePlanes';
+import { useAvanceReal } from '@/hooks/useAvanceReal';
 
 // Recharts pesa ~100 KB: se descarga aparte para que lo demás aparezca primero
 const ActividadAvances = dynamic(() => import('@/components/dashboard/ActividadAvances'), {
@@ -190,6 +193,18 @@ export default function DashboardPage() {
   }, [proyectos]);
   const cuenta = (...estados: EstadoEntrega[]) => proyectos.filter(p => estados.includes(estadoDe.get(p.id)!)).length;
 
+  // Plan de tiempos (opcional, guardado en este navegador): solo cuenta proyectos sin terminar que tengan plan
+  const planes = usePlanes();
+  const idsConPlan = useMemo(() => proyectos
+    .filter(p => planes[p.id] && ['en_proceso', 'pendiente', 'atrasado'].includes(estadoDe.get(p.id)!))
+    .map(p => p.id), [proyectos, planes, estadoDe]);
+  const { avance: avancePlan, cargando: cargandoPlan } = useAvanceReal(idsConPlan);
+  const enRiesgo = idsConPlan.filter(id => {
+    const p = proyectos.find(x => x.id === id)!;
+    const { margen } = evaluarPlan(planes[id], avancePlan[id] ?? {}, fechaHoy(), fechaEntrega(p)).estimacion;
+    return margen !== null && margen < 0;
+  }).length;
+
   // Activos: primero los atrasados, luego los que se entregan antes; sin fecha al final
   const activos = useMemo(() => {
     const orden = (p: Proyecto) => (estadoDe.get(p.id) === 'atrasado' ? 0 : 1);
@@ -277,6 +292,11 @@ export default function DashboardPage() {
       detalle: piezas.totales ? `${piezas.hechas.toLocaleString('es-MX')} de ${piezas.totales.toLocaleString('es-MX')} piezas terminadas en todas las áreas` : 'Avance promedio de los proyectos' },
     { icono: Bell, titulo: 'Alertas pendientes', valor: avisos.sinLeer, color: 'bg-amber-500/80', detalle: 'Notificaciones que todavía no has visto' },
   ];
+  // Sin proyectos con plan no se agrega nada y los indicadores quedan como siempre
+  if (idsConPlan.length > 0 && !cargandoPlan) {
+    tarjetas.push({ icono: CalendarClock, titulo: 'Proyectos en riesgo', valor: enRiesgo, color: 'bg-orange-500/80',
+      detalle: 'Proyectos con plan de tiempos cuyo término estimado pasa la fecha de entrega' });
+  }
 
   const exportarReporte = () => {
     const ahora = new Date();
