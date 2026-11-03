@@ -13,7 +13,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowRight, Boxes, Calendar, Camera, Clock, MapPin, User } from 'lucide-react';
+import { ArrowRight, Boxes, Calendar, Camera, Clock, User } from 'lucide-react';
 import { AreaBadge } from '@/components/AreaBadge';
 import { ZONA_HORARIA } from '@/lib/entregas';
 
@@ -115,15 +115,13 @@ export function TarjetaRetraso({ retraso: r, operador, resaltado = false }: Prop
         {p ? (
           <>
             <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-white/40">Pedido</p>
-              <p className="mt-0.5 text-[15px] font-bold leading-snug text-white">
-                {p.codigo && <span className="mr-2 font-mono text-xs text-blue-400">{p.codigo}</span>}
-                {p.nombre || 'Pedido sin nombre'}
+              <p className="text-[15px] font-bold leading-snug text-white">
+                {p.nombre || p.codigo || 'Pedido sin nombre'}
               </p>
             </div>
             {sucursal && (
               <span className={`${PILDORA} border-cyan-400/40 bg-gradient-to-br from-cyan-400/30 to-blue-500/20 text-sm uppercase tracking-wide text-cyan-200 shadow-[0_0_18px_-4px_rgba(34,211,238,0.45),inset_0_1px_0_rgba(255,255,255,0.25)]`}>
-                <MapPin className="h-3.5 w-3.5" /> {sucursal}
+                {sucursal}
               </span>
             )}
           </>
