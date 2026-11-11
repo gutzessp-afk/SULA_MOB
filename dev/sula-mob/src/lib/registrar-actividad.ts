@@ -16,6 +16,7 @@ import { supabaseServidor } from '@/lib/admin-api'
 export const TIPOS_ACTIVIDAD = [
   'login', 'logout', 'pedido_creado', 'pedido_completado',
   'plano_analizado', 'plano_actualizado', 'despiece_generado',
+  'bom_iniciado', 'bom_completado',
 ] as const
 
 export type TipoActividad = (typeof TIPOS_ACTIVIDAD)[number]

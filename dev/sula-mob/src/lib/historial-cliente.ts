@@ -9,7 +9,7 @@
  */
 
 export function registrarEnHistorial(evento: {
-  tipo: 'pedido_creado' | 'plano_analizado' | 'despiece_generado'
+  tipo: 'pedido_creado' | 'plano_analizado' | 'despiece_generado' | 'bom_iniciado' | 'bom_completado'
   referenciaId?: string
   referenciaTipo?: 'proyecto' | 'plano'
   detalle?: Record<string, unknown>

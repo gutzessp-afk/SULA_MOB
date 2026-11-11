@@ -357,6 +357,14 @@ export default function ProyectosPage() {
       alert('El proyecto se creó, pero no se pudieron guardar las partidas para el despiece: ' + partidasError.message);
     }
 
+    // Explosión de material: el pedido aparece en /admin/bom como "pendiente"
+    void fetch('/api/bom', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proyecto_id: projectData.id }),
+      keepalive: true,
+    }).catch(() => {});
+
     setCodigo(''); setNombre(''); setCliente(''); setFecha(''); setFechaEntrega('');
     setReferencia(''); setElaboradoPor('');
     setPartidas([{ cantidad: 1, clave: '', unidad: 'Pieza', descripcion: '', precio: 0 }]);

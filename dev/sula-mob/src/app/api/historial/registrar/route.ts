@@ -17,7 +17,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { esAdmin } from '@/lib/admin-api'
 import { registrarActividad, obtenerUsuarioDeSesion, type TipoActividad } from '@/lib/registrar-actividad'
 
-const TIPOS_NAVEGADOR: TipoActividad[] = ['pedido_creado', 'plano_analizado', 'despiece_generado']
+const TIPOS_NAVEGADOR: TipoActividad[] = [
+  'pedido_creado', 'plano_analizado', 'despiece_generado',
+  'bom_iniciado', 'bom_completado',
+]
 
 export async function POST(request: NextRequest) {
   if (!(await esAdmin())) return NextResponse.json({ error: 'Solo administradores.' }, { status: 403 })

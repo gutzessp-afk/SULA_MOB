@@ -22,6 +22,7 @@ import {
   Clock,
   Library,
   CircleCheckBig,
+  Zap,
 } from 'lucide-react';
 import { logoutAction } from '@/app/(auth)/login/actions';
 import { limpiarCache } from '@/lib/cache-datos';
@@ -49,6 +50,7 @@ const menuSections = [
       { name: 'Despiece', href: '/admin/despiece', icon: Layers, activoEn: (ruta: string) => (ruta.startsWith('/admin/despiece') && !ruta.startsWith('/admin/despiece/historial')) || (ruta.startsWith('/admin/proyectos/') && !esPlaneacion(ruta)) },
       { name: 'Historial', href: '/admin/despiece/historial', icon: Clock, activoEn: (ruta: string) => ruta.startsWith('/admin/despiece/historial') },
       { name: 'Catálogo', href: '/admin/catalogo', icon: Library, activoEn: (ruta: string) => ruta.startsWith('/admin/catalogo') },
+      { name: 'BOM', href: '/admin/bom', icon: Zap, activoEn: (ruta: string) => ruta.startsWith('/admin/bom') },
       { name: 'Calendario', href: '/admin/calendario', icon: CalendarDays },
       { name: 'Áreas', href: '/admin/actividades', icon: Warehouse },
       { name: 'Notificaciones', href: '/admin/notificaciones', icon: Bell },
