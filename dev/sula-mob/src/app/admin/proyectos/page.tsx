@@ -5,11 +5,12 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { cargarProyectos, useDatos } from '@/lib/cache-datos';
 import { eliminarProyecto } from '@/lib/eliminar-proyecto';
-import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, Pencil, Upload, X, Calendar, User, MapPin, Download, CalendarClock } from 'lucide-react';
+import { Plus, Search, FileUp, FileText, Loader2, FolderPlus, ListFilter, Trash2, Eye, Pencil, Upload, X, Calendar, User, MapPin, Download, CalendarClock, Zap } from 'lucide-react';
 import { limpiarHuerfanos, quitarPlan } from '@/lib/plan-almacen';
 import { usePlanes } from '@/hooks/usePlanes';
 import { useAvanceReal } from '@/hooks/useAvanceReal';
 import { IndicadorPlan } from '@/components/PlanTiempos';
+import { EstadoBom, useResumenBom } from '@/components/admin/EstadoBom';
 import { parsePedidoPdf } from '@/lib/parse-pedido';
 import { useDebounce } from '@/hooks/useDebounce';
 import { BadgePrioridad } from '@/components/BadgePrioridad';
@@ -124,6 +125,7 @@ export default function ProyectosPage() {
 
   // Plan de tiempos (opcional, guardado en este navegador): solo los proyectos con plan consultan su avance por área
   const planes = usePlanes();
+  const resumenBom = useResumenBom();
   const idsConPlan = useMemo(() => proyectos.filter(p => planes[p.id]).map(p => p.id), [proyectos, planes]);
   const { avance: avancePlan } = useAvanceReal(idsConPlan);
   // Con la lista recién leída de la base, se borran los planes de proyectos que ya no existen
@@ -606,10 +608,19 @@ export default function ProyectosPage() {
 
                 {/* Barra de progreso */}
                 <BarraProgresoConEstado progreso={p.progreso} />
+                <div className="flex items-center gap-2 text-xs text-white/45">BOM: <EstadoBom proyectoId={p.id} resumen={resumenBom[p.id]} /></div>
                 {planes[p.id] && <IndicadorPlan plan={planes[p.id]} avance={avancePlan[p.id]} entrega={entregaDe(p)} />}
 
                 {/* Botones de acción */}
                 <div className="flex gap-2 pt-1">
+                  <Link
+                    href={`/admin/bom?proyecto=${p.id}`}
+                    className="max-sm:min-h-[44px] w-10 h-10 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-400/30 rounded-xl inline-flex items-center justify-center backdrop-blur-md transition-all"
+                    title="Explosión de Material"
+                    aria-label={`Explosión de material de ${p.codigo}`}
+                  >
+                    <Zap className="w-4 h-4" />
+                  </Link>
                   <button
                     onClick={() => openVistaPedido(p)}
                     className="max-sm:min-h-[44px] w-10 h-10 bg-blue-500/15 hover:bg-blue-500/30 text-blue-300 border border-blue-400/30 rounded-xl inline-flex items-center justify-center backdrop-blur-md transition-all"
@@ -651,6 +662,7 @@ export default function ProyectosPage() {
                   <th className="px-2.5 py-3 min-[1600px]:px-3 whitespace-nowrap">Prioridad</th>
                   <th className="px-2.5 py-3 min-[1600px]:px-3 whitespace-nowrap">Entrega</th>
                   <th className="px-2.5 py-3 min-[1600px]:px-3 whitespace-nowrap">Progreso Global</th>
+                  <th className="px-2.5 py-3 min-[1600px]:px-3 whitespace-nowrap">BOM</th>
                   <th className="px-2.5 py-3 min-[1600px]:px-3 text-right">Acciones</th>
                 </tr>
               </thead>
@@ -668,8 +680,17 @@ export default function ProyectosPage() {
                       <BarraProgresoConEstado progreso={p.progreso} ancho="w-20 min-[1600px]:w-28" estadoVisible="hidden min-[1600px]:inline" />
                       {planes[p.id] && <IndicadorPlan plan={planes[p.id]} avance={avancePlan[p.id]} entrega={entregaDe(p)} />}
                     </td>
+                    <td className="px-2.5 py-3 min-[1600px]:px-3"><EstadoBom proyectoId={p.id} resumen={resumenBom[p.id]} /></td>
                     <td className="px-2.5 py-3 min-[1600px]:px-3 text-right">
                       <div className="flex justify-end items-center gap-1.5 whitespace-nowrap">
+                        <Link
+                          href={`/admin/bom?proyecto=${p.id}`}
+                          className="max-sm:min-h-[44px] w-8 h-8 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-400/30 rounded-lg inline-flex items-center justify-center backdrop-blur-md transition-all"
+                          title="Explosión de Material"
+                          aria-label={`Explosión de material de ${p.codigo}`}
+                        >
+                          <Zap className="w-4 h-4" />
+                        </Link>
                         <button
                           onClick={() => openVistaPedido(p)}
                           className="max-sm:min-h-[44px] w-8 h-8 bg-blue-500/15 hover:bg-blue-500/30 text-blue-300 border border-blue-400/30 rounded-lg inline-flex items-center justify-center backdrop-blur-md transition-all"
@@ -700,7 +721,7 @@ export default function ProyectosPage() {
                 ))}
                 {filtrados.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="p-8 text-center text-white/40 text-sm">{cargandoProyectos ? 'Cargando pedidos...' : 'No se encontraron órdenes.'}</td>
+                    <td colSpan={8} className="p-8 text-center text-white/40 text-sm">{cargandoProyectos ? 'Cargando pedidos...' : 'No se encontraron órdenes.'}</td>
                   </tr>
                 )}
               </tbody>

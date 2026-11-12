@@ -25,6 +25,7 @@ import { HeatMatrix, type FilaCalor } from '@/components/dashboard/HeatMatrix';
 import { StatCards, type StatCard } from '@/components/dashboard/StatCards';
 import { NotificationBellAdmin, useAvisos, type AvisosAdmin } from '@/components/dashboard/NotificationBellAdmin';
 import { PanelNotificaciones } from '@/components/dashboard/PanelNotificaciones';
+import { PanelBom } from '@/components/dashboard/PanelBom';
 import { EnVivo } from '@/components/EnVivo';
 import { useRealtimeAvances } from '@/hooks/useRealtimeAvances';
 import type { DiaActividad } from '@/components/dashboard/ActividadAvances';
@@ -393,6 +394,9 @@ export default function DashboardPage() {
           <PanelNotificaciones avisos={avisos} />
         </section>
       </div>
+
+      {/* ═══ EXPLOSIÓN DE MATERIAL (BOM) ═══ */}
+      <PanelBom proyectos={proyectos} tarjeta={tarjeta} />
 
       {/* ═══ PROYECTOS ACTIVOS ═══ */}
       <section className={`sula-entrada ${tarjeta} overflow-hidden`} style={{ animationDelay: '200ms' }}>
