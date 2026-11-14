@@ -16,7 +16,7 @@
  *   · La revisión importada queda CERRADA: es el archivo original. Al editarla, el sistema abre
  *     la siguiente revisión automáticamente.
  *   · Cada material se liga con el de la revisión anterior por su Clave (o por la descripción si
- *     no trae clave) para pintar qué cambió.
+ *     no trae clave) para pintar qué cambió, y conserva su OC y su casilla Compra.
  *
  * La explosión debe estar 'en_proceso' (la página la inicia antes de subir). Solo administradores.
  *
@@ -112,9 +112,12 @@ export async function POST(request: NextRequest) {
 
   /* ── 4. Ligar cada material con la revisión anterior (clave; si no hay, descripción) ── */
   const disponibles = new Map<string, string[]>()
+  // OC y Compra ya capturados pasan a la revisión nueva (son de compras, no del Excel)
+  const compras = new Map<string, { oc: string; comprado: boolean }>()
   if (anteriorId) {
-    const { data: previas } = await supabase.from('bom_revision_lineas').select('id, clave, descripcion').eq('revision_id', anteriorId).order('orden')
+    const { data: previas } = await supabase.from('bom_revision_lineas').select('id, clave, descripcion, oc, comprado').eq('revision_id', anteriorId).order('orden')
     for (const l of previas ?? []) {
+      compras.set(l.id, { oc: l.oc ?? '', comprado: !!l.comprado })
       const llave = normalizar(l.clave) || `d:${normalizar(l.descripcion)}`
       disponibles.set(llave, [...(disponibles.get(llave) ?? []), l.id])
     }
@@ -123,7 +126,7 @@ export async function POST(request: NextRequest) {
   const filas = importada.lineas.map((l, i) => {
     const llave = normalizar(l.clave) || `d:${normalizar(l.descripcion)}`
     const origen = disponibles.get(llave)?.shift() ?? null
-    return { ...l, revision_id: revision.id, explosion_id: explosionId, origen_id: origen, orden: i }
+    return { ...l, ...(origen ? compras.get(origen) : undefined), revision_id: revision.id, explosion_id: explosionId, origen_id: origen, orden: i }
   })
 
   // En bloques para no mandar una petición gigante

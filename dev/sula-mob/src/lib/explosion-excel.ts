@@ -256,6 +256,8 @@ export interface DatosExcel {
   reporte: DatosReporte
   /** "PED-3518 · Chedraui Supercito" para títulos */
   referencia: string
+  /** Órdenes de compra (PDF) subidas a la hoja */
+  ordenes?: { folio: string; referencia: string; proveedor: string; fecha: string; archivo_nombre: string | null; partidas: { encontrada?: boolean }[] }[]
 }
 
 const ARGB = (hex: string) => `FF${hex.replace('#', '').toUpperCase()}`
@@ -504,6 +506,18 @@ function hojaReporte(wb: ExcelJS.Workbook, d: DatosExcel) {
     f++
   }
   if (r.notas.trim()) { f++; par(f++, 'Descripción / reporte', r.notas.trim()); ws.getCell(f - 1, 2).alignment = { wrapText: true } }
+  f++
+
+  titulo(f++, 'ÓRDENES DE COMPRA')
+  const encOc = ['Folio OC', 'Proveedor', 'Fecha', 'Referencia', 'Archivo', 'Partidas en la hoja', 'Partidas OC']
+  encOc.forEach((t, i) => { const c = ws.getCell(f, i + 1); c.value = t; c.font = { name: 'Arial', size: 10, bold: true }; c.fill = relleno('#D9E1F2'); c.border = BORDES })
+  f++
+  if (!d.ordenes?.length) { ws.getCell(f, 1).value = 'Sin órdenes de compra.'; f++ }
+  for (const o of d.ordenes ?? []) {
+    const vals = [o.folio, o.proveedor || '—', o.fecha || '—', o.referencia || '—', o.archivo_nombre ?? '—', o.partidas.filter(p => p.encontrada).length, o.partidas.length]
+    vals.forEach((v, i) => { const c = ws.getCell(f, i + 1); c.value = v; c.font = { name: 'Arial', size: 10, bold: i === 0 }; c.border = BORDES; c.alignment = { wrapText: true, vertical: 'top' } })
+    f++
+  }
   f++
 
   titulo(f++, 'HISTORIAL DE REVISIONES')

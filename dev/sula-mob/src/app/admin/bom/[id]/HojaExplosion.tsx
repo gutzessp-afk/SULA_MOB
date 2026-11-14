@@ -12,7 +12,9 @@
  *     revisión (REV-01) automáticamente y pinta los cambios con la leyenda de SULA:
  *       azul = actualización actual · rosa = actualización anterior · rojo = disminución.
  *   · "Descargar Excel" baja la revisión en el mismo formato, nombrada por pedido o por sucursal.
- *   · OC y Compra ya aparecen como columnas, vacías y deshabilitadas (se definen después).
+ *   · Compras: arrastrar los PDF de ORDEN DE COMPRA escribe su folio (NÚMERO) en la columna OC de
+ *     cada material cuya Clave viene en la orden; se valida que la REFERENCIA sea este pedido.
+ *     OC también se escribe a mano y la casilla Compra se palomea. Ninguno de los dos abre revisión.
  *   · Menú "Excel" por si se subió el archivo equivocado: subir como nueva revisión, reemplazar la
  *     última revisión con otro Excel (conserva su número), eliminar la última revisión o vaciar la hoja.
  *
@@ -27,7 +29,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import {
-  AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Download, Eraser, FileSpreadsheet, History, Info, ListChecks, Replace,
+  AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Download, Eraser, FileSpreadsheet, FileText, History, Info, ListChecks, Replace, ShoppingCart,
   Loader2, Lock, Plus, Search, Trash2, Undo2, Upload, X,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
@@ -49,6 +51,15 @@ export interface ResumenHoja {
 
 interface Partida { id: string; clave: string; descripcion: string; cantidad: number }
 
+/** Orden de compra (PDF) ya subida — tabla bom_ordenes_compra */
+interface OrdenCompra {
+  id: string; folio: string; referencia: string; proveedor: string; fecha: string;
+  archivo_nombre: string | null; subido_por: string | null; created_at: string;
+  partidas: { clave: string; descripcion: string; cantidad: number; unidad: string; encontrada?: boolean }[];
+}
+
+type CambiosCompra = Partial<Pick<LineaRev, 'oc' | 'comprado'>>;
+
 interface Props {
   explosionId: string;
   estado: 'pendiente' | 'en_proceso' | 'completado';
@@ -68,7 +79,7 @@ interface Props {
 const TARJETA = 'rounded-[20px] sm:rounded-[26px] border border-white/20 bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7]';
 
 /** Columnas de la tabla (escritorio): Clave · Descripción · Unidad · Clasificación · Moneda · Costo · Cantidad · Costo est. · OC · Compra · borrar */
-const COLUMNAS = 'grid grid-cols-[104px_minmax(200px,1fr)_88px_112px_108px_90px_96px_108px_64px_54px_28px]';
+const COLUMNAS = 'grid grid-cols-[104px_minmax(190px,1fr)_88px_112px_104px_88px_92px_104px_92px_54px_28px]';
 
 const ETIQUETA_CAMPO: Record<CampoEditable, string> = {
   clave: 'clave', descripcion: 'descripción', unidad: 'unidad', clasificacion: 'clasificación',
@@ -152,8 +163,8 @@ function CampoClasificacion({ valor, disabled, onCambio }: { valor: string; disa
   );
 }
 
-/** OC y Compra: visibles pero vacías hasta que se defina cómo funcionan */
-const TITULO_COMPRAS = 'Compras: se activa más adelante';
+/** Casillas OC / Compra */
+const CAMPO_OC = 'w-full min-w-0 bg-white/70 px-1.5 py-1 rounded-md border border-slate-300 text-center font-mono font-semibold focus:border-sky-600 focus:bg-white focus:outline-none disabled:bg-transparent disabled:border-transparent placeholder:text-slate-300';
 
 /* ═══ Componente principal ═══ */
 
@@ -170,6 +181,8 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   const [cerradas, setCerradas] = useState<Set<string>>(new Set());
   const [verPartidas, setVerPartidas] = useState(false);
   const [menuExcel, setMenuExcel] = useState(false);
+  const [ordenes, setOrdenes] = useState<OrdenCompra[]>([]);
+  const [subiendoOc, setSubiendoOc] = useState(false);
   const [enfocar, setEnfocar] = useState<string | null>(null);
   const [encLocal, setEncLocal] = useState<Partial<EncabezadoRev>>({});
   const [motivoLocal, setMotivoLocal] = useState<string | null>(null);
@@ -181,6 +194,10 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   const menuRef = useRef<HTMLDivElement>(null);
   // Cómo se va a importar el archivo que se elija: como siguiente revisión o reemplazando la última
   const modoImport = useRef<'siguiente' | 'reemplazar'>('siguiente');
+  const inputPdf = useRef<HTMLInputElement>(null);
+  // OC / Compra escritos a mano: esperando el debounce (no abren revisión, van por /compras)
+  const pendCompra = useRef<Record<string, CambiosCompra>>({});
+  const timersCompra = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const contadorArrastre = useRef(0);
   // Cambios por línea esperando el debounce y enviados sin respuesta: se aplican encima de cada recarga
   const pendientes = useRef<Record<string, CambiosLinea>>({});
@@ -199,9 +216,14 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   /* ── Cargar revisiones ── */
   const cargar = useCallback(async () => {
     try {
-      const res = await fetch(`/api/bom/revisiones?explosion_id=${encodeURIComponent(explosionId)}`, { cache: 'no-store' });
+      const [res, resOc] = await Promise.all([
+        fetch(`/api/bom/revisiones?explosion_id=${encodeURIComponent(explosionId)}`, { cache: 'no-store' }),
+        fetch(`/api/bom/revisiones/compras?explosion_id=${encodeURIComponent(explosionId)}`, { cache: 'no-store' }),
+      ]);
       if (!res.ok) throw new Error();
       const d = await res.json();
+      // Si la tabla de OC todavía no existe (falta el SQL), la hoja sigue funcionando sin ellas
+      if (resOc.ok) setOrdenes(((await resOc.json()).ordenes ?? []) as OrdenCompra[]);
       const lista = (d.revisiones as Revision[]).map(r => ({
         ...r,
         // Lo que se está escribiendo gana sobre lo que llega (también si la línea ya es la copia en la REV nueva)
@@ -209,6 +231,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
           ...l,
           ...(l.origen_id ? enviando.current[l.origen_id] : undefined), ...enviando.current[l.id],
           ...(l.origen_id ? pendientes.current[l.origen_id] : undefined), ...pendientes.current[l.id],
+          ...(l.origen_id ? pendCompra.current[l.origen_id] : undefined), ...pendCompra.current[l.id],
         })),
       }));
       setRevisiones(lista);
@@ -225,6 +248,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
       .channel(`bom-hoja-${explosionId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bom_revisiones', filter: `explosion_id=eq.${explosionId}` }, recargar)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bom_revision_lineas', filter: `explosion_id=eq.${explosionId}` }, recargar)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bom_ordenes_compra', filter: `explosion_id=eq.${explosionId}` }, recargar)
       .subscribe(status => { if (status === 'SUBSCRIBED' || status === 'CHANNEL_ERROR') recargar(); });
     const primera = setTimeout(() => void cargar(), 0);
     return () => { clearTimeout(primera); void supabase.removeChannel(ch); };
@@ -255,6 +279,9 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   }, [lineasVista, busqueda, filtroClasif]);
   const grupos = useMemo(() => agruparPorUnidad(filtradas), [filtradas]);
   const totalCosto = useMemo(() => lineasVista.reduce((s, l) => s + costoEstimado(l), 0), [lineasVista]);
+  const conContenido = useMemo(() => lineasVista.filter(lineaConContenido), [lineasVista]);
+  const compradas = conContenido.filter(l => l.comprado).length;
+  const conOc = conContenido.filter(l => l.oc.trim()).length;
   const clasificacionesUsadas = useMemo(() => [...new Set(lineasVista.map(l => l.clasificacion).filter(Boolean))], [lineasVista]);
   const eliminadasPorUnidad = useMemo(() => {
     const m = new Map<string, LineaRev[]>();
@@ -372,6 +399,84 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
     guardarRef.current = guardarTodo;
     return () => { guardarRef.current = null; };
   }, [guardarRef, guardarTodo]);
+
+  /* ── Compras: OC a mano y casilla Compra (no abren revisión) ── */
+  const puedeComprar = esUltima && !!ultima;
+
+  const enviarCompra = useCallback(async (lineaId: string) => {
+    clearTimeout(timersCompra.current[lineaId]);
+    const campos = pendCompra.current[lineaId];
+    if (!campos) return;
+    const r = await pedir('/api/bom/revisiones/compras', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ explosion_id: explosionId, linea_id: lineaId, ...campos }),
+    }, 'No se pudo guardar la OC.');
+    // Solo se suelta si no se escribió algo más mientras se guardaba
+    if (pendCompra.current[lineaId] === campos) delete pendCompra.current[lineaId];
+    if (!r.ok || r.datos.linea?.id !== lineaId) recargar();
+  }, [explosionId, pedir, recargar]);
+
+  const cambiarCompra = useCallback((linea: LineaRev, campos: CambiosCompra, inmediato = false) => {
+    if (!puedeComprar) return;
+    setRevisiones(prev => prev.map(r => (r.id !== linea.revision_id ? r : { ...r, lineas: r.lineas.map(l => (l.id === linea.id ? { ...l, ...campos } : l)) })));
+    pendCompra.current[linea.id] = { ...pendCompra.current[linea.id], ...campos };
+    clearTimeout(timersCompra.current[linea.id]);
+    if (inmediato) void enviarCompra(linea.id);
+    else timersCompra.current[linea.id] = setTimeout(() => void enviarCompra(linea.id), 700);
+  }, [puedeComprar, enviarCompra]);
+
+  /** Sube uno o varios PDF de órdenes de compra y escribe sus folios en la columna OC */
+  const subirOrdenes = async (archivos: File[]) => {
+    const pdfs = archivos.filter(f => /\.pdf$/i.test(f.name));
+    if (!pdfs.length) return;
+    if (!ultima) { onAviso('Primero sube la explosión (Excel) y después las órdenes de compra.'); return; }
+    setSubiendoOc(true);
+    setMensaje(null);
+    const lineasMsg: string[] = [];
+    const avisos: string[] = [];
+    try {
+      await Promise.all(Object.keys(pendCompra.current).map(enviarCompra));
+      for (const archivo of pdfs) {
+        const enviar = async (forzar: boolean) => {
+          const form = new FormData();
+          form.append('explosion_id', explosionId);
+          form.append('archivo', archivo);
+          if (forzar) form.append('forzar', '1');
+          try {
+            const res = await fetch('/api/bom/revisiones/compras', { method: 'POST', body: form });
+            return { res, datos: await res.json().catch(() => ({})) };
+          } catch {
+            return { res: null, datos: { error: `${archivo.name}: no hay conexión con el servidor.` } };
+          }
+        };
+        let { res, datos } = await enviar(false);
+        if (res?.status === 409 && datos.confirmar) {
+          if (!confirm(`${datos.error}\n\n¿Aplicar la OC ${datos.folio} a este pedido de todos modos?`)) { avisos.push(`OC ${datos.folio} no se aplicó (es de otro pedido).`); continue; }
+          ({ res, datos } = await enviar(true));
+        }
+        if (!res?.ok) { avisos.push(datos.error || `${archivo.name}: no se pudo leer.`); continue; }
+        const o = datos.orden as OrdenCompra;
+        lineasMsg.push(`OC ${o.folio}${o.proveedor ? ` (${o.proveedor})` : ''}: ${o.partidas.length - (datos.no_encontradas?.length ?? 0)} de ${o.partidas.length} partida(s) en la hoja.`);
+        for (const p of (datos.no_encontradas ?? []) as OrdenCompra['partidas']) avisos.push(`OC ${o.folio}: ${p.clave} ${p.descripcion.slice(0, 50)} no está en la explosión.`);
+      }
+      if (lineasMsg.length || avisos.length) setMensaje({ texto: lineasMsg.join(' · ') || 'No se aplicó ninguna orden de compra.', avisos });
+      await cargar();
+    } finally {
+      setSubiendoOc(false);
+    }
+  };
+
+  const quitarOrden = async (o: OrdenCompra) => {
+    if (!confirm(`¿Quitar la OC ${o.folio}? Se borra su folio de la columna OC (las casillas de Compra no se tocan).`)) return;
+    setSubiendoOc(true);
+    try {
+      await pedir(`/api/bom/revisiones/compras?explosion_id=${encodeURIComponent(explosionId)}&folio=${encodeURIComponent(o.folio)}`, { method: 'DELETE' }, 'No se pudo quitar la OC.');
+      await cargar();
+    } finally {
+      setSubiendoOc(false);
+    }
+  };
 
   /* ── Agregar y quitar materiales ── */
   const agregarLinea = async (unidad: string) => {
@@ -541,7 +646,9 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
 
   /* ── Arrastrar y soltar ── */
   const puedeImportar = !bloqueado && estado !== 'completado';
-  const eventosArrastre = puedeImportar ? {
+  // Los PDF de OC se pueden soltar siempre que ya haya hoja (también con la explosión terminada)
+  const aceptaArrastre = puedeImportar || !!ultima;
+  const eventosArrastre = aceptaArrastre ? {
     onDragEnter: (e: React.DragEvent) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); contadorArrastre.current++; setArrastrando(true); } },
     onDragOver: (e: React.DragEvent) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); },
     onDragLeave: () => { contadorArrastre.current = Math.max(0, contadorArrastre.current - 1); if (!contadorArrastre.current) setArrastrando(false); },
@@ -549,8 +656,14 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
       e.preventDefault();
       contadorArrastre.current = 0;
       setArrastrando(false);
-      const archivo = e.dataTransfer.files?.[0];
-      if (archivo) void importar(archivo);
+      const archivos = Array.from(e.dataTransfer.files ?? []);
+      const pdfs = archivos.filter(f => /\.pdf$/i.test(f.name));
+      const excel = archivos.find(f => /\.xlsx$/i.test(f.name));
+      if (excel) {
+        if (puedeImportar) void importar(excel);
+        else onAviso(estado === 'completado' ? 'La explosión está terminada: da clic en "Editar" para subir otro Excel.' : 'Resuelve el estatus del pedido antes de subir el Excel.');
+      } else if (pdfs.length) void subirOrdenes(pdfs);
+      else onAviso('Suelta un Excel (.xlsx) de explosión o PDF de órdenes de compra.');
     },
   } : {};
 
@@ -561,6 +674,16 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
       accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       className="hidden"
       onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void importar(f, modoImport.current); }}
+    />
+  );
+  const inputOcultoPdf = (
+    <input
+      ref={inputPdf}
+      type="file"
+      multiple
+      accept=".pdf,application/pdf"
+      className="hidden"
+      onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) void subirOrdenes(fs); }}
     />
   );
 
@@ -633,8 +756,8 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
         <CampoNumero etiqueta="Costo" valor={l.costo} disabled={off} onCambio={n => cambiarLinea(l, { costo: n })} />
         <CampoNumero etiqueta="Cantidad necesaria" valor={l.cantidad} disabled={off} onCambio={n => cambiarLinea(l, { cantidad: n })} className="font-bold" />
         <span className="text-right tabular-nums px-1.5 font-semibold">{dinero(costoEstimado(l))}</span>
-        <span title={TITULO_COMPRAS} className="text-center opacity-40 select-none">{l.oc || '—'}</span>
-        <span title={TITULO_COMPRAS} className="flex justify-center"><input type="checkbox" checked={l.comprado} disabled aria-label="Compra" className="w-4 h-4 opacity-40" /></span>
+        <input aria-label="Orden de compra" title={l.oc ? `OC ${l.oc}` : 'Folio de la orden de compra'} value={l.oc} disabled={!puedeComprar} placeholder="—" onChange={e => cambiarCompra(l, { oc: e.target.value })} className={`${CAMPO_OC} text-[11.5px]`} />
+        <span className="flex justify-center"><input type="checkbox" checked={l.comprado} disabled={!puedeComprar} onChange={e => cambiarCompra(l, { comprado: e.target.checked }, true)} aria-label="Compra" title="Comprado" className="w-4 h-4 accent-emerald-600 cursor-pointer disabled:cursor-default" /></span>
         {puedeEscribir ? (
           <button type="button" onClick={() => void eliminarLinea(l)} aria-label="Quitar material" className="flex justify-center opacity-40 hover:opacity-100 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
         ) : <span />}
@@ -663,11 +786,13 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
           <label className={campoChico}>Moneda<span className="normal-case text-sm font-normal"><CampoLista etiqueta="Moneda" valor={l.moneda} opciones={MONEDAS} disabled={off} onCambio={v => cambiarLinea(l, { moneda: v })} /></span></label>
         </div>
         {tip && <p className="text-[11px] font-semibold opacity-80">{tip}</p>}
-        <div className="flex items-center justify-between gap-2 pt-1 border-t border-black/10 text-[12px]">
+        <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-black/10 text-[12px]">
           <span>Costo est. <b className="tabular-nums">${dinero(costoEstimado(l))}</b></span>
-          <span className="flex items-center gap-3 opacity-50" title={TITULO_COMPRAS}>
-            <span>OC {l.oc || '—'}</span>
-            <span className="flex items-center gap-1"><input type="checkbox" checked={l.comprado} disabled aria-label="Compra" className="w-4 h-4" />Compra</span>
+          <span className="order-last w-full flex items-center justify-between gap-3 pt-1">
+            <label className="flex items-center gap-1 font-bold">OC
+              <input aria-label="Orden de compra" value={l.oc} disabled={!puedeComprar} placeholder="—" onChange={e => cambiarCompra(l, { oc: e.target.value })} className={`${CAMPO_OC} w-32 text-[13px]`} />
+            </label>
+            <label className="flex items-center gap-1 font-bold"><input type="checkbox" checked={l.comprado} disabled={!puedeComprar} onChange={e => cambiarCompra(l, { comprado: e.target.checked }, true)} aria-label="Compra" className="w-5 h-5 accent-emerald-600" />Compra</label>
           </span>
           {puedeEscribir && (
             <button type="button" onClick={() => void eliminarLinea(l)} aria-label="Quitar material" className="p-1.5 -m-1 opacity-50 hover:opacity-100 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
@@ -699,12 +824,16 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   return (
     <section className={`${TARJETA} relative`} {...eventosArrastre}>
       {inputOculto}
+      {inputOcultoPdf}
 
       {/* Capa al arrastrar un archivo encima */}
       {arrastrando && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-emerald-950/80 backdrop-blur-sm border-2 border-dashed border-emerald-400 rounded-[inherit] pointer-events-none">
           <Upload className="w-12 h-12 text-emerald-300" />
-          <p className="text-lg font-bold text-white text-center px-4">Suelta para importar como {ultima?.estado === 'borrador' ? etiquetaRev(ultima.numero) : etiquetaRev((ultima?.numero ?? -1) + 1)}</p>
+          <p className="text-lg font-bold text-white text-center px-4">Suelta aquí</p>
+          <p className="text-xs text-emerald-100/80 text-center px-4 max-w-md">
+            {puedeImportar ? `Excel → se importa como ${ultima?.estado === 'borrador' ? etiquetaRev(ultima.numero) : etiquetaRev((ultima?.numero ?? -1) + 1)}` : 'Excel: la explosión no admite otro archivo ahora'} · PDF de órdenes de compra → su folio va a la columna OC
+          </p>
         </div>
       )}
 
@@ -900,8 +1029,10 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
               </span>
             ))}
           </div>
-          <div className="flex items-center gap-4 text-[11px] text-slate-600">
-            <span><b className="text-slate-900">{lineasVista.filter(lineaConContenido).length}</b> materiales</span>
+          <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-[11px] text-slate-600">
+            <span><b className="text-slate-900">{conContenido.length}</b> materiales</span>
+            <span title="Materiales con folio de orden de compra">Con OC <b className="text-slate-900">{conOc}</b></span>
+            <span title="Casilla Compra palomeada">Comprados <b className="text-emerald-700">{compradas}/{conContenido.length}</b></span>
             <span>Costo estimado <b className="text-slate-900 tabular-nums">${dinero(totalCosto)}</b></span>
           </div>
         </div>
@@ -929,6 +1060,30 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
           )}
         </div>
 
+        {/* Órdenes de compra subidas (PDF) */}
+        {esUltima && (
+          <div className="px-3 sm:px-6 py-2.5 flex items-center gap-2 flex-wrap border-b border-slate-300 bg-emerald-50/50">
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wide text-slate-600"><ShoppingCart className="w-3.5 h-3.5" /> Órdenes de compra</span>
+            {ordenes.length === 0 && <span className="text-[11px] text-slate-500">Arrastra aquí los PDF o súbelos con el botón.</span>}
+            {ordenes.map(o => {
+              const enHoja = o.partidas.filter(p => p.encontrada).length;
+              return (
+                <span key={o.id} title={`${o.archivo_nombre ?? ''}${o.fecha ? ` · ${o.fecha}` : ''}${o.referencia ? ` · Ref. ${o.referencia}` : ''}${o.subido_por ? ` · subió ${o.subido_por}` : ''}`}
+                  className="inline-flex items-center gap-1.5 pl-2.5 pr-1 py-1 rounded-full border border-emerald-300 bg-white text-[11px] text-slate-700 max-w-full">
+                  <FileText className="w-3 h-3 text-emerald-700 shrink-0" />
+                  <b className="font-mono">OC {o.folio}</b>
+                  {o.proveedor && <span className="truncate max-w-[140px] text-slate-500">{o.proveedor}</span>}
+                  <span className={`font-semibold ${enHoja === o.partidas.length ? 'text-emerald-700' : 'text-amber-700'}`}>{enHoja}/{o.partidas.length}</span>
+                  <button type="button" disabled={subiendoOc} onClick={() => void quitarOrden(o)} aria-label={`Quitar OC ${o.folio}`} className="p-0.5 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"><X className="w-3 h-3" /></button>
+                </span>
+              );
+            })}
+            <button type="button" disabled={subiendoOc} onClick={() => inputPdf.current?.click()} className="ml-auto shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-emerald-600 bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-500 disabled:opacity-50">
+              {subiendoOc ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Subir OC (PDF)
+            </button>
+          </div>
+        )}
+
         {/* Partidas del pedido (referencia) */}
         {verPartidas && (
           <div className="px-3 sm:px-6 py-3 border-b border-slate-300 bg-amber-50/70 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 max-h-72 overflow-y-auto">
@@ -946,7 +1101,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
 
         {/* ── Tabla (tablet y escritorio) ── */}
         <div className="hidden md:block overflow-x-auto">
-          <div className="min-w-[1100px]">
+          <div className="min-w-[1110px]">
             <div className={`${COLUMNAS} gap-1 px-2 py-2 text-[10.5px] font-extrabold uppercase tracking-wide text-slate-700 border-b-[3px] border-double border-slate-800 bg-white sticky top-0`}>
               <span className="px-1.5">Clave</span>
               <span className="px-1.5">Descripción</span>
@@ -956,8 +1111,8 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
               <span className="px-1.5 text-right">Costo</span>
               <span className="px-1.5 text-right">Cant. necesaria</span>
               <span className="px-1.5 text-right">Costo estimado</span>
-              <span className="px-1.5 text-center text-slate-400" title={TITULO_COMPRAS}>OC</span>
-              <span className="px-1.5 text-center text-slate-400" title={TITULO_COMPRAS}>Compra</span>
+              <span className="px-1.5 text-center" title="Folio de la orden de compra">OC</span>
+              <span className="px-1.5 text-center">Compra</span>
               <span />
             </div>
 

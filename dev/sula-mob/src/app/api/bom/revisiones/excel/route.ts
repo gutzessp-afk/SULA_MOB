@@ -10,7 +10,7 @@
  *        "EXPLOSION DE MATERIALES Chedraui Supercito REV-01.xlsx" (sucursal / referencia)
  *
  * El archivo trae: hoja de explosión con colores de revisión + OC y Compra, hoja REPORTE
- * (tiempos, estatus del pedido, historial de revisiones) y las hojas REGISTRO y FORMATO DE CONTROL.
+ * (tiempos, estatus del pedido, órdenes de compra, historial de revisiones) y las hojas REGISTRO y FORMATO DE CONTROL.
  * Solo administradores.
  *
  * RUTA DEL ARCHIVO: src/app/api/bom/revisiones/excel/route.ts
@@ -34,10 +34,11 @@ export async function GET(request: NextRequest) {
   const { data: explosion } = await supabase.from('bom_explosiones').select('*').eq('id', explosionId).maybeSingle()
   if (!explosion) return errorJson('Explosión no encontrada.', 404)
 
-  const [{ data: proyecto }, { data: revs }, { data: lineas }] = await Promise.all([
+  const [{ data: proyecto }, { data: revs }, { data: lineas }, { data: ordenes }] = await Promise.all([
     supabase.from('proyectos').select('codigo, nombre, referencia_sucursal').eq('id', explosion.proyecto_id).maybeSingle(),
     supabase.from('bom_revisiones').select('*').eq('explosion_id', explosionId).order('numero', { ascending: true }),
     supabase.from('bom_revision_lineas').select('*').eq('explosion_id', explosionId).order('orden', { ascending: true }),
+    supabase.from('bom_ordenes_compra').select('folio, referencia, proveedor, fecha, archivo_nombre, partidas').eq('explosion_id', explosionId).order('created_at'),
   ])
 
   const porRevision = new Map<string, LineaRev[]>()
@@ -65,6 +66,7 @@ export async function GET(request: NextRequest) {
     marcas,
     eliminadas,
     referencia: [codigo, sucursal].filter(Boolean).join(' · '),
+    ordenes: ordenes ?? [],
     reporte: {
       estado: ESTATUS_BOM[estatusBom(explosion)].txt,
       fecha_inicio: explosion.fecha_inicio,
