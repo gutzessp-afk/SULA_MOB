@@ -50,6 +50,10 @@ interface PedidoData {
   referencia_sucursal: string
   elaborado_por: string
   partidas: Partida[]
+  /** Plantilla nueva (emisor WATTS SUSTENTABLES): nota que viene bajo "Elaborado por:" */
+  observaciones?: string
+  /** Plantilla nueva: el cliente final (renglón debajo del número, ej. "MANGO MNG") */
+  cliente_final?: string
   _raw_text?: string
 }
 
@@ -90,6 +94,63 @@ async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
    UTILIDADES DE PARSEO
    (exactamente la misma lógica de siempre)
    ═══════════════════════════════════════ */
+
+/* ═══════════════════════════════════════
+   PLANTILLA NUEVA DE CLICK BALANCE (emisor WATTS SUSTENTABLES, nov-2026)
+   ───────────────────────────────────────
+   Diferencias contra la plantilla anterior (GRUPO AVANT CIM):
+     · El número de pedido es corto ("2") y va solo en el primer renglón.
+     · Debajo del número va el cliente final con su dirección ("MANGO MNG .").
+     · "Elaborado por:" trae: nota/observaciones → emisor (WATTS SUSTENTABLES) → nombre de quien
+       elaboró → importe con letra ("CERO PESOS…").
+     · Fecha de entrega y Referencia van ANTES de su etiqueta:
+         "2026-11-20\nFecha de Entrega:"   "MUESTRAS MANGO…\nReferencia / Sucursal:"
+     · En cada partida la descripción va pegada después de la clave:
+         "Pieza1.000.000.002-1-0063-0001NM_BIOMBO 2.0 …"   (la plantilla anterior la ponía abajo)
+   Se detecta por la fecha de entrega antes de su etiqueta Y porque el emisor ya no es GRUPO AVANT CIM
+   (con pdf-parse muchos pedidos de la plantilla anterior también traen la fecha antes de la
+   etiqueta). Si no se detecta, no se toca nada: la plantilla anterior se lee exactamente igual.
+   ═══════════════════════════════════════ */
+
+const RE_FORMATO_WATTS = /\d{4}-\d{2}-\d{2}[ \t]*\n\s*Fecha\s+de\s+Entrega:?/i
+/** Emisor de la plantilla anterior */
+const RE_EMISOR_ANTERIOR = /GRUPO\s+AVANT/i
+
+/** Renglones de la dirección del emisor (se repiten en el encabezado y no son descripción) */
+const RE_DIRECCION_EMISOR = /Camino\s+Antig|Cocotitlan|Cobarrubias|C\.\s*P\.\s*\d{5}|Edo\.\s*de\s+M[eé]xico/i
+
+function leerEncabezadoWatts(raw: string, result: PedidoData): void {
+  const lineas = raw.split('\n').map(l => l.trim()).filter(Boolean)
+
+  // Número: el primer renglón, solo dígitos. Se rellena a 4 ("2" → "0002") como en la explosión de SULA
+  if (/^\d{1,6}$/.test(lineas[0] ?? '')) result.numero_pedido = lineas[0].padStart(4, '0')
+
+  // Cliente final: el renglón de abajo del número
+  if (lineas[1] && !/^\d{4}-\d{2}-\d{2}/.test(lineas[1])) result.cliente_final = lineas[1].replace(/\s*\.\s*$/, '').trim()
+
+  const fecha = raw.match(/(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}/)
+  if (fecha) result.fecha = fecha[1]
+
+  const entrega = raw.match(/(\d{4}-\d{2}-\d{2})[ \t]*\n\s*Fecha\s+de\s+Entrega:?/i)
+  if (entrega) result.fecha_entrega = entrega[1]
+
+  const ref = raw.match(/\n([^\n]+)\n\s*Referencia\s*\/?\s*Sucursal:?/i)
+  if (ref && ref[1].trim()) result.referencia_sucursal = ref[1].trim()
+
+  // Bloque "Elaborado por:" → [nota…] [EMISOR] [nombre] [IMPORTE CON LETRA]
+  const iElab = lineas.findIndex(l => /^Elaborado\s+por:?$/i.test(l))
+  if (iElab >= 0) {
+    const iLetra = lineas.findIndex((l, i) => i > iElab && /\b(PESOS|D[OÓ]LARES|M\.N\.|USD)\b/i.test(l))
+    if (iLetra > iElab + 1) {
+      result.elaborado_por = lineas[iLetra - 1]
+      const emisor = iLetra - 2 > iElab ? lineas[iLetra - 2] : ''
+      // El emisor es el cliente con el que SULA registra el pedido (WATTS SUSTENTABLES)
+      if (emisor) result.cliente = emisor
+      const nota = lineas.slice(iElab + 1, Math.max(iElab + 1, iLetra - 2)).join(' ').replace(/\s+/g, ' ').trim()
+      if (nota) result.observaciones = nota
+    }
+  }
+}
 
 function parseText(raw: string): PedidoData {
   const result: PedidoData = {
@@ -234,6 +295,10 @@ function parseText(raw: string): PedidoData {
     result.fecha_entrega = hojaFechas[1] || ''
   }
 
+  // ── Plantilla nueva (emisor WATTS SUSTENTABLES): reemplaza los campos del encabezado ──
+  const formatoWatts = RE_FORMATO_WATTS.test(raw) && !RE_EMISOR_ANTERIOR.test(raw)
+  if (formatoWatts) leerEncabezadoWatts(raw, result)
+
   // ── Partidas (tabla de items) ──
   const cleanedRaw = raw
     .replace(/--\s*\d+\s+of\s+\d+\s*--/g, '\n@@PAGE_BREAK@@\n')
@@ -307,7 +372,11 @@ function parseText(raw: string): PedidoData {
   // Cada número tiene exactamente 2 decimales (.XX), así los separamos.
   // La descripción viene en la(s) línea(s) siguientes.
   if (result.partidas.length === 0) {
-    const partidaRegex3 = /^(Pieza|Juego|Metro|Kg|Litro|Servicio)([\d,]+\.\d{2})([\d,]+\.\d{2})([\d,]+\.\d{2})([\d][\d-]+-[\d-]+)$/i
+    // Plantilla anterior: la clave termina el renglón y la descripción va abajo.
+    // Plantilla nueva: la descripción va pegada después de la clave (grupo 6).
+    // La clave de SULA es d-d-dddd-dddd; se prueba primero así para no comerse una descripción
+    // que empiece con número.
+    const partidaRegex3 = /^(Pieza|Juego|Metro|Kg|Litro|Servicio)([\d,]+\.\d{2})([\d,]+\.\d{2})([\d,]+\.\d{2})(\d-\d-\d{4}-\d{4}|[\d][\d-]+-[\d-]+?)(?=$|[^\d-])(.*)$/i
     const rawLines = raw.split('\n')
     let idx = 0
     let afterPageHeader = false
@@ -318,8 +387,8 @@ function parseText(raw: string): PedidoData {
 
       if (m3) {
         afterPageHeader = false
-        // Recolectar descripción de las líneas siguientes
-        const descParts: string[] = []
+        // Recolectar descripción: lo pegado a la clave (plantilla nueva) + las líneas siguientes
+        const descParts: string[] = m3[6]?.trim() ? [m3[6].trim()] : []
         idx++
         while (idx < rawLines.length) {
           const nextLine = rawLines[idx].trim()
@@ -327,8 +396,12 @@ function parseText(raw: string): PedidoData {
           if (
             !nextLine ||
             partidaRegex3.test(nextLine) ||
-            /^(Subtotal|IVA|Total|Descuento|Moneda|Condici|Elaborado|Fecha|Referencia|Pedido)/i.test(nextLine)
+            /^(Subtotal|IVA|Total|Descuento|Moneda|Condici|Elaborado|Fecha|Referencia|Pedido)/i.test(nextLine) ||
+            // Plantilla nueva: al cambiar de página se repite el encabezado, que empieza con el número
+            // de pedido solo o con una fecha
+            (formatoWatts && (/^\d{1,6}$/.test(nextLine) || /^\d{4}-\d{2}-\d{2}/.test(nextLine)))
           ) break
+          if (formatoWatts && RE_DIRECCION_EMISOR.test(nextLine)) { idx++; continue }
           descParts.push(nextLine)
           idx++
         }
@@ -342,7 +415,7 @@ function parseText(raw: string): PedidoData {
       } else {
         // Descripción cortada por salto de página: continúa después del
         // encabezado repetido (que termina en "Referencia / Sucursal:")
-        if (afterPageHeader && line && result.partidas.length > 0) {
+        if (afterPageHeader && line && result.partidas.length > 0 && !(formatoWatts && RE_DIRECCION_EMISOR.test(line))) {
           const last = result.partidas[result.partidas.length - 1]
           last.descripcion = `${last.descripcion} ${line}`.replace(/\s+/g, ' ').trim()
         }
