@@ -3,8 +3,8 @@
  * ─────────────────
  * Explosiones de material (tabla bom_explosiones).
  *
- *   GET    /api/bom                        → lista con datos del proyecto y conteos (sin los
- *                                            pedidos terminados, progreso 100%)
+ *   GET    /api/bom                        → lista con datos del proyecto, conteos y la revisión
+ *                                            actual de la hoja (sin los pedidos terminados, progreso 100%)
  *   GET    /api/bom?estado=pendiente,...   → filtro por estado (coma-separados)
  *   GET    /api/bom?id=UUID                → una explosión con proyecto, partidas y materiales
  *   GET    /api/bom?proyecto_id=UUID       → la explosión de un proyecto (para el ⚡ de Proyectos)
@@ -23,7 +23,7 @@
  * (columnas de sql/bom_pausa.sql). duracion_seg guarda el tiempo trabajado sin las pausas;
  * checklist.pausas cuenta las pausas. reiniciar = 00:00:00 detenido (la fecha_inicio se conserva).
  *
- * Finalizar exige que todas las líneas de material (bom_detalles) estén marcadas.
+ * Finalizar exige que la última revisión de la hoja (bom_revisiones) tenga materiales y la cierra.
  * El Historial (bom_iniciado / bom_completado) se registra SOLO aquí, no en la página.
  * Solo administradores.
  *
@@ -144,12 +144,14 @@ export async function GET(request: NextRequest) {
   const proyectos: Record<string, { codigo: string; nombre: string; sucursal: string | null; prioridad: string; progreso: number }> = {}
   const partidasPorProyecto: Record<string, number> = {}
   const materiales: Record<string, { total: number; checked: number }> = {}
+  const revisionActual: Record<string, { numero: number; estado: string; lineas: number }> = {}
 
   if (proyectoIds.length > 0) {
-    const [{ data: proys }, { data: pts }, { data: dets }] = await Promise.all([
+    const [{ data: proys }, { data: pts }, { data: dets }, { data: revs }] = await Promise.all([
       supabase.from('proyectos').select('id, codigo, nombre, referencia_sucursal, prioridad, progreso').in('id', proyectoIds),
       supabase.from('partidas').select('proyecto_id').in('proyecto_id', proyectoIds),
       supabase.from('bom_detalles').select('explosion_id, checked').in('explosion_id', explosionIds),
+      supabase.from('bom_revisiones').select('id, explosion_id, numero, estado').in('explosion_id', explosionIds),
     ])
     for (const p of proys ?? []) {
       proyectos[p.id] = { codigo: p.codigo, nombre: p.nombre, sucursal: p.referencia_sucursal, prioridad: p.prioridad, progreso: Number(p.progreso) || 0 }
@@ -162,6 +164,21 @@ export async function GET(request: NextRequest) {
       c.total++
       if (d.checked) c.checked++
     }
+    // Última revisión de cada explosión y cuántos materiales tiene
+    const ultimas = new Map<string, { id: string; numero: number; estado: string }>()
+    for (const r of revs ?? []) {
+      const previa = ultimas.get(r.explosion_id)
+      if (!previa || r.numero > previa.numero) ultimas.set(r.explosion_id, r)
+    }
+    if (ultimas.size > 0) {
+      const { data: lins } = await supabase
+        .from('bom_revision_lineas')
+        .select('revision_id')
+        .in('revision_id', [...ultimas.values()].map(r => r.id))
+      const porRevision: Record<string, number> = {}
+      for (const l of lins ?? []) porRevision[l.revision_id] = (porRevision[l.revision_id] || 0) + 1
+      for (const [explosionId, r] of ultimas) revisionActual[explosionId] = { numero: r.numero, estado: r.estado, lineas: porRevision[r.id] || 0 }
+    }
   }
 
   // Los pedidos terminados (100%, módulo Terminados) ya no necesitan explosión
@@ -170,6 +187,7 @@ export async function GET(request: NextRequest) {
     proyecto: proyectos[e.proyecto_id] || null,
     total_partidas: partidasPorProyecto[e.proyecto_id] || 0,
     detalles_count: materiales[e.id] || { total: 0, checked: 0 },
+    revision: revisionActual[e.id] || null,
   }))
 
   return NextResponse.json({ explosiones: resultado }, SIN_CACHE)
@@ -256,15 +274,33 @@ export async function PATCH(request: NextRequest) {
       if (actual.estado !== 'en_proceso')
         return NextResponse.json({ error: 'Solo se puede terminar una explosión en proceso.' }, { status: 400 })
 
-      // Las líneas que quedaron vacías (sin material ni descripción) se descartan
-      await supabase.from('bom_detalles').delete().eq('explosion_id', id).eq('material', '').eq('descripcion', '')
-      const { data: dets, error: errDets } = await supabase.from('bom_detalles').select('checked').eq('explosion_id', id)
+      // La explosión se termina con la última revisión de la hoja (bom_revisiones): debe tener
+      // materiales; si está en borrador, aquí se cierra (queda congelada como REV-xx)
+      const { data: ultimaRev, error: errRev } = await supabase
+        .from('bom_revisiones')
+        .select('id, numero, estado')
+        .eq('explosion_id', id)
+        .order('numero', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (errRev) return NextResponse.json({ error: errRev.message }, { status: 500 })
+      if (!ultimaRev)
+        return NextResponse.json({ error: 'Importa el Excel o captura materiales antes de terminar.' }, { status: 400 })
+      await supabase.from('bom_revision_lineas').delete().eq('revision_id', ultimaRev.id).eq('clave', '').eq('descripcion', '')
+      const { count: materiales, error: errDets } = await supabase
+        .from('bom_revision_lineas')
+        .select('id', { count: 'exact', head: true })
+        .eq('revision_id', ultimaRev.id)
       if (errDets) return NextResponse.json({ error: errDets.message }, { status: 500 })
-      if (!dets?.length)
+      if (!materiales)
         return NextResponse.json({ error: 'Agrega al menos un material antes de terminar.' }, { status: 400 })
-      const faltan = dets.filter(d => !d.checked).length
-      if (faltan > 0)
-        return NextResponse.json({ error: `Faltan ${faltan} material(es) por marcar.` }, { status: 400 })
+      if (ultimaRev.estado === 'borrador') {
+        const { error: errCerrar } = await supabase
+          .from('bom_revisiones')
+          .update({ estado: 'cerrada', cerrada_en: new Date().toISOString(), cerrada_por: usuario.nombre })
+          .eq('id', ultimaRev.id)
+        if (errCerrar) return NextResponse.json({ error: errCerrar.message }, { status: 500 })
+      }
 
       const ahora = new Date()
       const duracionSeg = segundosTrabajados(actual, ahora.getTime())
@@ -285,7 +321,8 @@ export async function PATCH(request: NextRequest) {
           explosion_id: id,
           duracion_seg: duracionSeg,
           pausas: pausasDe(actual.checklist),
-          materiales: dets.length,
+          materiales,
+          revision: ultimaRev.numero,
           fecha_inicio: actual.fecha_inicio,
           fecha_termino: ahora.toISOString(),
         },

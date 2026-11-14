@@ -41,6 +41,8 @@ interface Explosion {
   proyecto: Proyecto | null;
   total_partidas: number;
   detalles_count: { total: number; checked: number };
+  /** Última revisión de la hoja de explosión (REV-00, REV-01…); null = todavía no hay */
+  revision: { numero: number; estado: 'borrador' | 'cerrada'; lineas: number } | null;
 }
 
 const TARJETA = 'rounded-[20px] sm:rounded-[26px] border border-white/20 bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7]';
@@ -130,6 +132,7 @@ function BomLista() {
       .channel('bom-lista-rt')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bom_explosiones' }, recargar)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bom_detalles' }, recargar)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bom_revisiones' }, recargar)
       .subscribe(status => { if (status === 'SUBSCRIBED' || status === 'CHANNEL_ERROR') recargar(); });
     // Primera carga de inmediato, sin esperar a que se conecte el tiempo real
     const primera = setTimeout(() => void cargar(), 0);
@@ -236,8 +239,13 @@ function BomLista() {
                     {exp.proyecto?.sucursal && <span>Sucursal: <span className="text-white/70">{exp.proyecto.sucursal}</span></span>}
                     {exp.proyecto?.prioridad && <BadgePrioridad prioridad={exp.proyecto.prioridad} />}
                     <span>Partidas: <span className="text-white/70">{exp.total_partidas}</span></span>
-                    {exp.detalles_count.total > 0 && (
-                      <span>Materiales: <span className="text-emerald-400">{exp.detalles_count.checked}/{exp.detalles_count.total}</span></span>
+                    {exp.revision && (
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className={`px-1.5 py-0.5 rounded-md font-mono font-bold text-[10px] border ${exp.revision.estado === 'borrador' ? 'bg-sky-500/15 text-sky-300 border-sky-400/30' : 'bg-white/[0.06] text-white/75 border-white/15'}`}>
+                          REV-{String(exp.revision.numero).padStart(2, '0')}{exp.revision.estado === 'borrador' ? ' · borrador' : ''}
+                        </span>
+                        <span>Materiales: <span className="text-white/70">{exp.revision.lineas}</span></span>
+                      </span>
                     )}
                     <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{fechaCorta(exp.created_at)}</span>
                   </div>
