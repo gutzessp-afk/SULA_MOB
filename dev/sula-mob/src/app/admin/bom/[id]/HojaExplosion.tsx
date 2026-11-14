@@ -14,7 +14,8 @@
  *   · "Descargar Excel" baja la revisión en el mismo formato, nombrada por pedido o por sucursal.
  *   · Compras: arrastrar los PDF de ORDEN DE COMPRA escribe su folio (NÚMERO) en la columna OC de
  *     cada material cuya Clave viene en la orden; se valida que la REFERENCIA sea este pedido.
- *     OC también se escribe a mano y la casilla Compra se palomea. Ninguno de los dos abre revisión.
+ *     OC también se escribe a mano; Compra y Almacén se palomean y llevan su fecha (a mano; al
+ *     palomear se propone la de hoy). Nada de esto abre revisión.
  *   · Menú "Excel" por si se subió el archivo equivocado: subir como nueva revisión, reemplazar la
  *     última revisión con otro Excel (conserva su número), eliminar la última revisión o vaciar la hoja.
  *
@@ -36,7 +37,7 @@ import { supabase } from '@/lib/supabase';
 import { useRecargaAgrupada } from '@/hooks/useRecargaAgrupada';
 import {
   agruparPorUnidad, CLASIFICACIONES, colorClasificacion, colorMarca, compararRevision, costoEstimado, etiquetaRev, LEYENDA,
-  lineaConContenido, MONEDAS, normalizar, UNIDADES,
+  hoyMexico, lineaConContenido, MONEDAS, normalizar, UNIDADES,
   type CambiosLinea, type CampoEditable, type EncabezadoRev, type LineaRev, type Marca, type NombrarPor, type Revision,
 } from '@/lib/explosion-revisiones';
 
@@ -58,7 +59,7 @@ interface OrdenCompra {
   partidas: { clave: string; descripcion: string; cantidad: number; unidad: string; encontrada?: boolean }[];
 }
 
-type CambiosCompra = Partial<Pick<LineaRev, 'oc' | 'comprado'>>;
+type CambiosCompra = Partial<Pick<LineaRev, 'oc' | 'comprado' | 'fecha_compra' | 'almacen' | 'fecha_almacen'>>;
 
 interface Props {
   explosionId: string;
@@ -79,7 +80,7 @@ interface Props {
 const TARJETA = 'rounded-[20px] sm:rounded-[26px] border border-white/20 bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7]';
 
 /** Columnas de la tabla (escritorio): Clave · Descripción · Unidad · Clasificación · Moneda · Costo · Cantidad · Costo est. · OC · Compra · borrar */
-const COLUMNAS = 'grid grid-cols-[104px_minmax(190px,1fr)_88px_112px_104px_88px_92px_104px_92px_54px_28px]';
+const COLUMNAS = 'grid grid-cols-[104px_minmax(190px,1fr)_88px_112px_104px_88px_92px_104px_92px_54px_124px_62px_124px_28px]';
 
 const ETIQUETA_CAMPO: Record<CampoEditable, string> = {
   clave: 'clave', descripcion: 'descripción', unidad: 'unidad', clasificacion: 'clasificación',
@@ -164,6 +165,12 @@ function CampoClasificacion({ valor, disabled, onCambio }: { valor: string; disa
 }
 
 /** Casillas OC / Compra */
+/** Fechas de compra / almacén (input date) */
+/** Fondo de la hoja (las filas sin color lo usan para que la clave fija tape lo que pasa debajo) */
+const FONDO_HOJA = '#f8f7f3';
+
+const CAMPO_FECHA = 'w-full min-w-0 bg-white/70 px-1 py-1 rounded-md border border-slate-300 text-[11.5px] tabular-nums text-slate-800 focus:border-sky-600 focus:bg-white focus:outline-none disabled:bg-transparent disabled:border-transparent';
+
 const CAMPO_OC = 'w-full min-w-0 bg-white/70 px-1.5 py-1 rounded-md border border-slate-300 text-center font-mono font-semibold focus:border-sky-600 focus:bg-white focus:outline-none disabled:bg-transparent disabled:border-transparent placeholder:text-slate-300';
 
 /* ═══ Componente principal ═══ */
@@ -281,6 +288,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   const totalCosto = useMemo(() => lineasVista.reduce((s, l) => s + costoEstimado(l), 0), [lineasVista]);
   const conContenido = useMemo(() => lineasVista.filter(lineaConContenido), [lineasVista]);
   const compradas = conContenido.filter(l => l.comprado).length;
+  const enAlmacen = conContenido.filter(l => l.almacen).length;
   const conOc = conContenido.filter(l => l.oc.trim()).length;
   const clasificacionesUsadas = useMemo(() => [...new Set(lineasVista.map(l => l.clasificacion).filter(Boolean))], [lineasVista]);
   const eliminadasPorUnidad = useMemo(() => {
@@ -425,6 +433,12 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
     if (inmediato) void enviarCompra(linea.id);
     else timersCompra.current[linea.id] = setTimeout(() => void enviarCompra(linea.id), 700);
   }, [puedeComprar, enviarCompra]);
+
+  /** Palomear Compra / Almacén: si no tiene fecha, propone la de hoy (se puede cambiar o borrar) */
+  const palomear = (linea: LineaRev, campo: 'comprado' | 'almacen', valor: boolean) => {
+    const campoFecha = campo === 'comprado' ? 'fecha_compra' : 'fecha_almacen';
+    cambiarCompra(linea, { [campo]: valor, ...(valor && !linea[campoFecha] ? { [campoFecha]: hoyMexico() } : {}) }, true);
+  };
 
   /** Sube uno o varios PDF de órdenes de compra y escribe sus folios en la columna OC */
   const subirOrdenes = async (archivos: File[]) => {
@@ -747,8 +761,9 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
     const tip = detalleCambios(comparacion.cambios[l.id], l.origen_id ? previasPorId.get(l.origen_id) : undefined, l);
     const off = !puedeEscribir;
     return (
-      <div key={l.id} title={tip || undefined} className={`${COLUMNAS} items-center gap-1 px-2 py-1 border-b border-slate-300/70 text-[12.5px] ${est.texto}`} style={est.fondo ? { backgroundColor: est.fondo } : undefined}>
-        <input aria-label="Clave" autoFocus={enfocar === l.id} value={l.clave} disabled={off} placeholder="Clave" onChange={e => cambiarLinea(l, { clave: e.target.value })} className={`${CAMPO_HOJA} font-mono font-semibold`} />
+      <div key={l.id} title={tip || undefined} className={`${COLUMNAS} items-center gap-1 px-2 py-1 border-b border-slate-300/70 text-[12.5px] ${est.texto}`} style={{ backgroundColor: est.fondo ?? FONDO_HOJA }}>
+        {/* La clave se queda fija a la izquierda al desplazar la tabla hacia las fechas */}
+        <input aria-label="Clave" autoFocus={enfocar === l.id} value={l.clave} disabled={off} placeholder="Clave" onChange={e => cambiarLinea(l, { clave: e.target.value })} className={`${CAMPO_HOJA} font-mono font-semibold sticky left-0 z-[1] shadow-[6px_0_8px_-6px_rgba(0,0,0,0.25)]`} style={{ backgroundColor: est.fondo ?? FONDO_HOJA }} />
         <input aria-label="Descripción" title={l.descripcion} value={l.descripcion} disabled={off} placeholder="Descripción del material" onChange={e => cambiarLinea(l, { descripcion: e.target.value })} className={CAMPO_HOJA} />
         <CampoLista etiqueta="Unidad" valor={l.unidad} opciones={UNIDADES} disabled={off} onCambio={v => cambiarLinea(l, { unidad: v })} />
         <CampoClasificacion valor={l.clasificacion} disabled={off} onCambio={v => cambiarLinea(l, { clasificacion: v })} />
@@ -757,7 +772,10 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
         <CampoNumero etiqueta="Cantidad necesaria" valor={l.cantidad} disabled={off} onCambio={n => cambiarLinea(l, { cantidad: n })} className="font-bold" />
         <span className="text-right tabular-nums px-1.5 font-semibold">{dinero(costoEstimado(l))}</span>
         <input aria-label="Orden de compra" title={l.oc ? `OC ${l.oc}` : 'Folio de la orden de compra'} value={l.oc} disabled={!puedeComprar} placeholder="—" onChange={e => cambiarCompra(l, { oc: e.target.value })} className={`${CAMPO_OC} text-[11.5px]`} />
-        <span className="flex justify-center"><input type="checkbox" checked={l.comprado} disabled={!puedeComprar} onChange={e => cambiarCompra(l, { comprado: e.target.checked }, true)} aria-label="Compra" title="Comprado" className="w-4 h-4 accent-emerald-600 cursor-pointer disabled:cursor-default" /></span>
+        <span className="flex justify-center"><input type="checkbox" checked={l.comprado} disabled={!puedeComprar} onChange={e => palomear(l, 'comprado', e.target.checked)} aria-label="Compra" title="Comprado" className="w-4 h-4 accent-emerald-600 cursor-pointer disabled:cursor-default" /></span>
+        <input type="date" aria-label="Fecha de compra" value={l.fecha_compra ?? ''} disabled={!puedeComprar} onChange={e => cambiarCompra(l, { fecha_compra: e.target.value || null }, true)} className={CAMPO_FECHA} />
+        <span className="flex justify-center"><input type="checkbox" checked={l.almacen} disabled={!puedeComprar} onChange={e => palomear(l, 'almacen', e.target.checked)} aria-label="Almacén" title="Recibido en almacén" className="w-4 h-4 accent-sky-600 cursor-pointer disabled:cursor-default" /></span>
+        <input type="date" aria-label="Fecha de almacén" value={l.fecha_almacen ?? ''} disabled={!puedeComprar} onChange={e => cambiarCompra(l, { fecha_almacen: e.target.value || null }, true)} className={CAMPO_FECHA} />
         {puedeEscribir ? (
           <button type="button" onClick={() => void eliminarLinea(l)} aria-label="Quitar material" className="flex justify-center opacity-40 hover:opacity-100 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
         ) : <span />}
@@ -788,11 +806,13 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
         {tip && <p className="text-[11px] font-semibold opacity-80">{tip}</p>}
         <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-black/10 text-[12px]">
           <span>Costo est. <b className="tabular-nums">${dinero(costoEstimado(l))}</b></span>
-          <span className="order-last w-full flex items-center justify-between gap-3 pt-1">
-            <label className="flex items-center gap-1 font-bold">OC
-              <input aria-label="Orden de compra" value={l.oc} disabled={!puedeComprar} placeholder="—" onChange={e => cambiarCompra(l, { oc: e.target.value })} className={`${CAMPO_OC} w-32 text-[13px]`} />
-            </label>
-            <label className="flex items-center gap-1 font-bold"><input type="checkbox" checked={l.comprado} disabled={!puedeComprar} onChange={e => cambiarCompra(l, { comprado: e.target.checked }, true)} aria-label="Compra" className="w-5 h-5 accent-emerald-600" />Compra</label>
+          <span className="order-last w-full grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 pt-1">
+            <span className="font-bold">OC</span>
+            <input aria-label="Orden de compra" value={l.oc} disabled={!puedeComprar} placeholder="—" onChange={e => cambiarCompra(l, { oc: e.target.value })} className={`${CAMPO_OC} text-[13px]`} />
+            <label className="flex items-center gap-1.5 font-bold"><input type="checkbox" checked={l.comprado} disabled={!puedeComprar} onChange={e => palomear(l, 'comprado', e.target.checked)} aria-label="Compra" className="w-5 h-5 accent-emerald-600" />Compra</label>
+            <input type="date" aria-label="Fecha de compra" value={l.fecha_compra ?? ''} disabled={!puedeComprar} onChange={e => cambiarCompra(l, { fecha_compra: e.target.value || null }, true)} className={`${CAMPO_FECHA} text-[13px] py-1.5`} />
+            <label className="flex items-center gap-1.5 font-bold"><input type="checkbox" checked={l.almacen} disabled={!puedeComprar} onChange={e => palomear(l, 'almacen', e.target.checked)} aria-label="Almacén" className="w-5 h-5 accent-sky-600" />Almacén</label>
+            <input type="date" aria-label="Fecha de almacén" value={l.fecha_almacen ?? ''} disabled={!puedeComprar} onChange={e => cambiarCompra(l, { fecha_almacen: e.target.value || null }, true)} className={`${CAMPO_FECHA} text-[13px] py-1.5`} />
           </span>
           {puedeEscribir && (
             <button type="button" onClick={() => void eliminarLinea(l)} aria-label="Quitar material" className="p-1.5 -m-1 opacity-50 hover:opacity-100 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
@@ -810,14 +830,14 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
     </div>
   ) : (
     <div key={`q-${l.id}`} title={`Quitado en ${etiquetaRev(vista.numero)}`} className={`${COLUMNAS} items-center gap-1 px-2 py-1.5 border-b border-red-200 bg-red-50 text-[12.5px] text-red-700`}>
-      <span className="px-1.5 font-mono line-through">{l.clave}</span>
+      <span className="px-1.5 font-mono line-through sticky left-0 z-[1] bg-red-50">{l.clave}</span>
       <span className="px-1.5 line-through truncate">{l.descripcion}</span>
       <span className="px-1.5">{l.unidad}</span>
       <span className="px-1.5">{l.clasificacion}</span>
       <span className="px-1.5">{l.moneda}</span>
       <span className="px-1.5 text-right tabular-nums">{dinero(l.costo)}</span>
       <span className="px-1.5 text-right tabular-nums line-through">{cantidadTxt(l.cantidad)}</span>
-      <span className="px-1.5 text-right text-[10px] font-bold uppercase col-span-4">Quitado</span>
+      <span className="px-1.5 text-right text-[10px] font-bold uppercase col-span-7">Quitado</span>
     </div>
   );
 
@@ -1033,6 +1053,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
             <span><b className="text-slate-900">{conContenido.length}</b> materiales</span>
             <span title="Materiales con folio de orden de compra">Con OC <b className="text-slate-900">{conOc}</b></span>
             <span title="Casilla Compra palomeada">Comprados <b className="text-emerald-700">{compradas}/{conContenido.length}</b></span>
+            <span title="Casilla Almacén palomeada">En almacén <b className="text-sky-700">{enAlmacen}/{conContenido.length}</b></span>
             <span>Costo estimado <b className="text-slate-900 tabular-nums">${dinero(totalCosto)}</b></span>
           </div>
         </div>
@@ -1101,9 +1122,9 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
 
         {/* ── Tabla (tablet y escritorio) ── */}
         <div className="hidden md:block overflow-x-auto">
-          <div className="min-w-[1110px]">
+          <div className="min-w-[1420px]">
             <div className={`${COLUMNAS} gap-1 px-2 py-2 text-[10.5px] font-extrabold uppercase tracking-wide text-slate-700 border-b-[3px] border-double border-slate-800 bg-white sticky top-0`}>
-              <span className="px-1.5">Clave</span>
+              <span className="px-1.5 sticky left-0 z-[1] bg-white">Clave</span>
               <span className="px-1.5">Descripción</span>
               <span className="px-1.5">Unidad</span>
               <span className="px-1.5">Clasificación</span>
@@ -1113,6 +1134,9 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
               <span className="px-1.5 text-right">Costo estimado</span>
               <span className="px-1.5 text-center" title="Folio de la orden de compra">OC</span>
               <span className="px-1.5 text-center">Compra</span>
+              <span className="px-1.5 text-center">Fecha compra</span>
+              <span className="px-1.5 text-center">Almacén</span>
+              <span className="px-1.5 text-center">Fecha almacén</span>
               <span />
             </div>
 

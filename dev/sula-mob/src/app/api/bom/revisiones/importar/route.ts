@@ -16,7 +16,7 @@
  *   · La revisión importada queda CERRADA: es el archivo original. Al editarla, el sistema abre
  *     la siguiente revisión automáticamente.
  *   · Cada material se liga con el de la revisión anterior por su Clave (o por la descripción si
- *     no trae clave) para pintar qué cambió, y conserva su OC y su casilla Compra.
+ *     no trae clave) para pintar qué cambió, y conserva su OC, Compra, Almacén y sus fechas.
  *
  * La explosión debe estar 'en_proceso' (la página la inicia antes de subir). Solo administradores.
  *
@@ -113,11 +113,11 @@ export async function POST(request: NextRequest) {
   /* ── 4. Ligar cada material con la revisión anterior (clave; si no hay, descripción) ── */
   const disponibles = new Map<string, string[]>()
   // OC y Compra ya capturados pasan a la revisión nueva (son de compras, no del Excel)
-  const compras = new Map<string, { oc: string; comprado: boolean }>()
+  const compras = new Map<string, { oc: string; comprado: boolean; fecha_compra: string | null; almacen: boolean; fecha_almacen: string | null }>()
   if (anteriorId) {
-    const { data: previas } = await supabase.from('bom_revision_lineas').select('id, clave, descripcion, oc, comprado').eq('revision_id', anteriorId).order('orden')
+    const { data: previas } = await supabase.from('bom_revision_lineas').select('id, clave, descripcion, oc, comprado, fecha_compra, almacen, fecha_almacen').eq('revision_id', anteriorId).order('orden')
     for (const l of previas ?? []) {
-      compras.set(l.id, { oc: l.oc ?? '', comprado: !!l.comprado })
+      compras.set(l.id, { oc: l.oc ?? '', comprado: !!l.comprado, fecha_compra: l.fecha_compra ?? null, almacen: !!l.almacen, fecha_almacen: l.fecha_almacen ?? null })
       const llave = normalizar(l.clave) || `d:${normalizar(l.descripcion)}`
       disponibles.set(llave, [...(disponibles.get(llave) ?? []), l.id])
     }

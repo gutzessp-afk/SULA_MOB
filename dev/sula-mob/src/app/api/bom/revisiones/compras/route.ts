@@ -8,7 +8,8 @@
  *          → lee la OC (folio, REFERENCIA = pedido, partidas) y escribe el folio en la columna OC
  *            de cada material cuya Clave aparece en la orden. Si la REFERENCIA no coincide con el
  *            pedido, responde 409 { confirmar: true } y la página pregunta; con forzar=1 se aplica.
- *   PATCH  { explosion_id, linea_id, oc?, comprado? }       → edición a mano de OC / casilla Compra
+ *   PATCH  { explosion_id, linea_id, oc?, comprado?, fecha_compra?, almacen?, fecha_almacen? }
+ *          → edición a mano de OC, Compra, Almacén y sus fechas (fecha: 'AAAA-MM-DD' o '' para borrarla)
  *   DELETE ?explosion_id=UUID&folio=5621                    → quita esa OC: borra su registro y su folio
  *
  * OC y Compra NO abren revisión nueva (son de compras, no de la explosión) y se pueden editar aunque
@@ -146,9 +147,18 @@ export async function PATCH(request: NextRequest) {
   const lineaId = body?.linea_id
   if (typeof explosionId !== 'string' || typeof lineaId !== 'string') return errorJson('Faltan explosion_id o linea_id.', 400)
 
-  const campos: { oc?: string; comprado?: boolean } = {}
+  const campos: { oc?: string; comprado?: boolean; almacen?: boolean; fecha_compra?: string | null; fecha_almacen?: string | null } = {}
   if (typeof body.oc === 'string') campos.oc = body.oc.slice(0, 200)
   if (typeof body.comprado === 'boolean') campos.comprado = body.comprado
+  if (typeof body.almacen === 'boolean') campos.almacen = body.almacen
+  for (const k of ['fecha_compra', 'fecha_almacen'] as const) {
+    const v = body[k]
+    if (v === null || v === '') campos[k] = null
+    else if (typeof v === 'string') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v))) return errorJson('Fecha no válida (AAAA-MM-DD).', 400)
+      campos[k] = v
+    }
+  }
   if (!Object.keys(campos).length) return errorJson('No hay cambios.', 400)
 
   const supabase = supabaseServidor()

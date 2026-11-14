@@ -45,6 +45,12 @@ export interface LineaRev {
   cantidad: number
   oc: string
   comprado: boolean
+  /** YYYY-MM-DD o null */
+  fecha_compra: string | null
+  /** Ya se recibió en almacén */
+  almacen: boolean
+  /** YYYY-MM-DD o null */
+  fecha_almacen: string | null
 }
 
 export type EstadoRev = 'borrador' | 'cerrada'

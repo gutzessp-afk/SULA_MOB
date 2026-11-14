@@ -288,7 +288,7 @@ function hojaExplosion(wb: ExcelJS.Workbook, d: DatosExcel) {
   })
   ws.columns = [
     { width: 28.3 }, { width: 54 }, { width: 16.4 }, { width: 16.4 }, { width: 15 },
-    { width: 16.6 }, { width: 22 }, { width: 17 }, { width: 14 }, { width: 10 },
+    { width: 16.6 }, { width: 22 }, { width: 17 }, { width: 14 }, { width: 10 }, { width: 14 }, { width: 10 }, { width: 14 },
   ]
   const enc = d.revision.encabezado
   const arial = (extra: Partial<ExcelJS.Font> = {}): Partial<ExcelJS.Font> => ({ name: 'Arial', size: 11, ...extra })
@@ -347,7 +347,7 @@ function hojaExplosion(wb: ExcelJS.Workbook, d: DatosExcel) {
   ws.mergeCells('B7:F7')
 
   // Fila 8: encabezados de columna (+ OC y Compra, nuevas)
-  const titulos = ['Clave', 'Descripción', 'Unidad', 'Clasificación', 'Moneda', 'Costo', 'Cantidad Necesaria', 'Costo Estimado', 'OC', 'Compra']
+  const titulos = ['Clave', 'Descripción', 'Unidad', 'Clasificación', 'Moneda', 'Costo', 'Cantidad Necesaria', 'Costo Estimado', 'OC', 'Compra', 'Fecha compra', 'Almacén', 'Fecha almacén']
   const filaEnc = ws.getRow(8)
   titulos.forEach((t, i) => {
     const c = filaEnc.getCell(i + 1)
@@ -397,12 +397,16 @@ function hojaExplosion(wb: ExcelJS.Workbook, d: DatosExcel) {
       r.getCell(8).value = { formula: `F${fila}*G${fila}`, result: quitada ? 0 : Math.round(Number(l.costo) * Number(l.cantidad) * 100) / 100 }
       r.getCell(9).value = quitada ? 'QUITADO' : l.oc || ''
       r.getCell(10).value = !quitada && l.comprado ? '✓' : ''
-      for (let c = 1; c <= 10; c++) {
+      r.getCell(11).value = !quitada && l.fecha_compra ? fechaExcel(l.fecha_compra) : ''
+      r.getCell(12).value = !quitada && l.almacen ? '✓' : ''
+      r.getCell(13).value = !quitada && l.fecha_almacen ? fechaExcel(l.fecha_almacen) : ''
+      for (let c = 1; c <= 13; c++) {
         const cell = r.getCell(c)
         cell.font = arial(marca === 'disminucion' ? { color: { argb: 'FFFFFFFF' }, bold: true } : {})
         cell.border = BORDES
         cell.alignment = { vertical: 'middle', horizontal: c >= 6 && c <= 8 ? 'right' : c >= 9 ? 'center' : 'left', wrapText: c === 2 }
         if (c >= 6 && c <= 8) cell.numFmt = NUM
+        if (c === 11 || c === 13) cell.numFmt = 'dd/mm/yyyy'
         // La clasificación conserva su color; el resto de la fila lleva el color de la revisión
         if (c === 4) cell.fill = relleno(colorClasificacion(l.clasificacion))
         else if (marca && c <= 8) cell.fill = relleno(colorMarca(marca))
@@ -449,7 +453,7 @@ function hojaExplosion(wb: ExcelJS.Workbook, d: DatosExcel) {
     ws.getCell(fila, 1).alignment = { wrapText: true }
   }
 
-  ws.pageSetup.printArea = `A1:J${fila}`
+  ws.pageSetup.printArea = `A1:M${fila}`
   ws.pageSetup.printTitlesRow = '8:8'
 }
 
