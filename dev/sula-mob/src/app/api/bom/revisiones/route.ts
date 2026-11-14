@@ -13,8 +13,13 @@
  *   PATCH { explosion_id, accion: 'motivo', motivo } → "qué cambió" del borrador actual
  *   PATCH { explosion_id, accion: 'cerrar' }         → congela el borrador actual
  *   PATCH { explosion_id, accion: 'descartar' }      → borra el borrador actual (vuelve a la anterior)
+ *   PATCH { explosion_id, accion: 'eliminar_ultima' } → borra la última revisión aunque esté cerrada
+ *                                                      (ej. se subió el Excel equivocado)
+ *   PATCH { explosion_id, accion: 'vaciar' }         → borra TODAS las revisiones: la hoja queda vacía
+ *                                                      para volver a subir el Excel
  *
- * Escribir solo se puede con la explosión 'en_proceso'. Solo administradores.
+ * Escribir solo se puede con la explosión 'en_proceso'. Eliminar/vaciar se permite también en
+ * 'pendiente' (no arranca el cronómetro), pero nunca con la explosión terminada. Solo administradores.
  *
  * RUTA DEL ARCHIVO: src/app/api/bom/revisiones/route.ts
  */
@@ -75,6 +80,25 @@ export async function PATCH(request: NextRequest) {
 
   const supabase = supabaseServidor()
   const explosion = await leerExplosion(supabase, explosionId)
+
+  /* ── Quitar revisiones (Excel equivocado): no necesita que la explosión esté en proceso ── */
+  if (accion === 'eliminar_ultima' || accion === 'vaciar') {
+    if (!explosion) return errorJson('Explosión no encontrada.', 404)
+    if (explosion.estado === 'completado')
+      return errorJson('La explosión está terminada: da clic en "Editar" antes de quitar revisiones.', 409)
+    if (accion === 'vaciar') {
+      // Las líneas se borran solas (ON DELETE CASCADE)
+      const { error } = await supabase.from('bom_revisiones').delete().eq('explosion_id', explosionId)
+      if (error) return errorJson(error.message, 500)
+      return NextResponse.json({ ok: true })
+    }
+    const ultima = await ultimaRevision(supabase, explosionId)
+    if (!ultima) return errorJson('No hay revisiones que quitar.', 400)
+    const { error } = await supabase.from('bom_revisiones').delete().eq('id', ultima.id)
+    if (error) return errorJson(error.message, 500)
+    return NextResponse.json({ ok: true, eliminada: ultima.numero })
+  }
+
   const bloqueo = bloqueoEdicion(explosion)
   if (bloqueo) return bloqueo
   const usuario = await obtenerUsuarioDeSesion()

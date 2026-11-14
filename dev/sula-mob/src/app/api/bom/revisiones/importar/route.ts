@@ -3,7 +3,10 @@
  * ─────────────────────────────────────
  * Importa el Excel "EXPLOSION DE MATERIALES … REV-xx.xlsx" de SULA como una revisión.
  *
- *   POST multipart/form-data { explosion_id, archivo }  → { revision, avisos }
+ *   POST multipart/form-data { explosion_id, archivo }                   → { revision, avisos }
+ *   POST multipart/form-data { explosion_id, archivo, modo: 'reemplazar' } → el archivo sustituye a la
+ *        ÚLTIMA revisión (aunque esté cerrada) y conserva su número. Para cuando se subió el Excel
+ *        equivocado: REV-00 equivocado → se sube el bueno y sigue siendo REV-00.
  *
  * Reglas:
  *   · Si es la primera revisión, se respeta el número del archivo (A1 = "REV-01" → REV-01;
@@ -35,6 +38,7 @@ export async function POST(request: NextRequest) {
   const form = await request.formData().catch(() => null)
   const explosionId = form?.get('explosion_id')
   const archivo = form?.get('archivo')
+  const reemplazar = form?.get('modo') === 'reemplazar'
   if (typeof explosionId !== 'string' || !explosionId) return errorJson('Falta explosion_id.', 400)
   if (!(archivo instanceof File)) return errorJson('Falta el archivo.', 400)
   if (!/\.xlsx$/i.test(archivo.name)) return errorJson('El archivo debe ser .xlsx (Excel).', 400)
@@ -62,12 +66,14 @@ export async function POST(request: NextRequest) {
 
   if (!ultima) {
     numero = importada.numero ?? 0
-  } else if (ultima.estado === 'borrador') {
+  } else if (ultima.estado === 'borrador' || reemplazar) {
     numero = ultima.numero
     const { data: previa } = await supabase
       .from('bom_revisiones').select('id').eq('explosion_id', explosionId).eq('numero', ultima.numero - 1).maybeSingle()
     anteriorId = previa?.id ?? null
-    // El archivo reemplaza el borrador
+    // Si se reemplaza la primera revisión, manda el número que traiga el archivo
+    if (!previa && reemplazar && importada.numero !== null) numero = importada.numero
+    // El archivo reemplaza el borrador (o la última revisión, si se pidió reemplazar)
     const { error } = await supabase.from('bom_revisiones').delete().eq('id', ultima.id)
     if (error) return errorJson(error.message, 500)
   } else {

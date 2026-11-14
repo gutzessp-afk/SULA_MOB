@@ -13,6 +13,8 @@
  *       azul = actualización actual · rosa = actualización anterior · rojo = disminución.
  *   · "Descargar Excel" baja la revisión en el mismo formato, nombrada por pedido o por sucursal.
  *   · OC y Compra ya aparecen como columnas, vacías y deshabilitadas (se definen después).
+ *   · Menú "Excel" por si se subió el archivo equivocado: subir como nueva revisión, reemplazar la
+ *     última revisión con otro Excel (conserva su número), eliminar la última revisión o vaciar la hoja.
  *
  * Responsive: en escritorio es una tabla tipo hoja (con scroll horizontal si no cabe);
  * en celular cada material es una tarjeta.
@@ -25,7 +27,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import {
-  AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Download, FileSpreadsheet, History, Info, ListChecks,
+  AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Download, Eraser, FileSpreadsheet, History, Info, ListChecks, Replace,
   Loader2, Lock, Plus, Search, Trash2, Undo2, Upload, X,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
@@ -167,6 +169,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   const [filtroClasif, setFiltroClasif] = useState<string>('todas');
   const [cerradas, setCerradas] = useState<Set<string>>(new Set());
   const [verPartidas, setVerPartidas] = useState(false);
+  const [menuExcel, setMenuExcel] = useState(false);
   const [enfocar, setEnfocar] = useState<string | null>(null);
   const [encLocal, setEncLocal] = useState<Partial<EncabezadoRev>>({});
   const [motivoLocal, setMotivoLocal] = useState<string | null>(null);
@@ -175,6 +178,9 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   });
 
   const inputArchivo = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Cómo se va a importar el archivo que se elija: como siguiente revisión o reemplazando la última
+  const modoImport = useRef<'siguiente' | 'reemplazar'>('siguiente');
   const contadorArrastre = useRef(0);
   // Cambios por línea esperando el debounce y enviados sin respuesta: se aplican encima de cada recarga
   const pendientes = useRef<Record<string, CambiosLinea>>({});
@@ -401,11 +407,13 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   };
 
   /* ── Importar el Excel ── */
-  const importar = async (archivo: File) => {
+  const importar = async (archivo: File, modo: 'siguiente' | 'reemplazar' = 'siguiente') => {
     if (!/\.xlsx$/i.test(archivo.name)) { onAviso('El archivo debe ser un Excel .xlsx.'); return; }
     if (ultima) {
-      const destino = ultima.estado === 'borrador' ? `reemplaza el borrador ${etiquetaRev(ultima.numero)}` : `se guarda como ${etiquetaRev(ultima.numero + 1)}`;
-      if (!confirm(`¿Importar "${archivo.name}"? El contenido del archivo ${destino}. Las revisiones anteriores se conservan.`)) return;
+      const destino = modo === 'reemplazar'
+        ? `sustituye a ${etiquetaRev(ultima.numero)} (se borra lo que tenía y conserva el número)`
+        : ultima.estado === 'borrador' ? `reemplaza el borrador ${etiquetaRev(ultima.numero)}` : `se guarda como ${etiquetaRev(ultima.numero + 1)}`;
+      if (!confirm(`¿Importar "${archivo.name}"? El contenido del archivo ${destino}.`)) return;
     }
     if (!(await prepararEscritura())) return;
     setImportando(true);
@@ -414,6 +422,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
       await guardarTodo();
       const form = new FormData();
       form.append('explosion_id', explosionId);
+      form.append('modo', modo);
       form.append('archivo', archivo);
       const r = await pedir('/api/bom/revisiones/importar', { method: 'POST', body: form }, 'No se pudo importar el Excel.');
       if (r.ok) {
@@ -466,6 +475,58 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
     }
   };
 
+  /* ── Quitar revisiones (Excel equivocado) ── */
+  const limpiarPendientes = () => {
+    for (const t of Object.values(timers.current)) clearTimeout(t);
+    clearTimeout(timerEnc.current);
+    clearTimeout(timerMotivo.current);
+    pendientes.current = {};
+    encPendiente.current = {};
+    motivoPendiente.current = null;
+    setEncLocal({});
+    setMotivoLocal(null);
+  };
+
+  const quitarRevisiones = async (accion: 'eliminar_ultima' | 'vaciar') => {
+    if (!ultima) return;
+    if (estado === 'completado') { onAviso('La explosión está terminada. Da clic en "Editar" (arriba) antes de quitar revisiones.'); return; }
+    const pregunta = accion === 'vaciar'
+      ? `¿Vaciar la hoja? Se borran TODAS las revisiones (${ordenadas.map(r => etiquetaRev(r.numero)).join(', ')}) y sus materiales. Podrás volver a subir el Excel. No se puede deshacer.`
+      : `¿Eliminar ${etiquetaRev(ultima.numero)}${ultima.origen === 'importado' && ultima.archivo_nombre ? ` (${ultima.archivo_nombre})` : ''}? La hoja regresa a ${ultima.numero > 0 && ordenadas.length > 1 ? etiquetaRev(ordenadas[ordenadas.length - 2].numero) : 'vacía'}. No se puede deshacer.`;
+    if (!confirm(pregunta)) return;
+    setTrabajando(true);
+    try {
+      limpiarPendientes();
+      const r = await pedir('/api/bom/revisiones', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ explosion_id: explosionId, accion }),
+      }, accion === 'vaciar' ? 'No se pudo vaciar la hoja.' : 'No se pudo eliminar la revisión.');
+      if (r.ok) setMensaje({ texto: accion === 'vaciar' ? 'La hoja quedó vacía. Ya puedes subir el Excel correcto.' : `Se eliminó ${etiquetaRev(ultima.numero)}.`, avisos: [] });
+      setVistaId(null);
+      await cargar();
+    } finally {
+      setTrabajando(false);
+    }
+  };
+
+  /** Abre el selector de archivo para importar de cierta forma */
+  const elegirArchivo = (modo: 'siguiente' | 'reemplazar') => {
+    modoImport.current = modo;
+    setMenuExcel(false);
+    inputArchivo.current?.click();
+  };
+
+  // El menú se cierra al hacer clic fuera o con Escape
+  useEffect(() => {
+    if (!menuExcel) return;
+    const fuera = (e: MouseEvent) => { if (!menuRef.current?.contains(e.target as Node)) setMenuExcel(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuExcel(false); };
+    document.addEventListener('mousedown', fuera);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', fuera); document.removeEventListener('keydown', esc); };
+  }, [menuExcel]);
+
   const descargar = async () => {
     if (!vista) return;
     await guardarTodo();
@@ -499,7 +560,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
       type="file"
       accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       className="hidden"
-      onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void importar(f); }}
+      onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void importar(f, modoImport.current); }}
     />
   );
 
@@ -538,7 +599,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
               <p className="text-xs text-white/45 mt-1 break-all">EXPLOSION DE MATERIALES … REV-00.xlsx</p>
             </div>
             <div className="flex items-center gap-3 flex-wrap justify-center">
-              <button type="button" disabled={importando} onClick={() => inputArchivo.current?.click()} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50">
+              <button type="button" disabled={importando} onClick={() => elegirArchivo('siguiente')} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50">
                 <FileSpreadsheet className="w-4 h-4" /> Elegir archivo
               </button>
               <button type="button" disabled={importando || trabajando} onClick={() => void empezarEnBlanco()} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-white/75 text-sm font-semibold border border-white/10 disabled:opacity-50">
@@ -636,7 +697,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   );
 
   return (
-    <section className={`${TARJETA} relative overflow-hidden`} {...eventosArrastre}>
+    <section className={`${TARJETA} relative`} {...eventosArrastre}>
       {inputOculto}
 
       {/* Capa al arrastrar un archivo encima */}
@@ -659,7 +720,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
             {vista.creado_por ? ` · ${vista.creado_por}` : ''}
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative flex items-center gap-2 flex-wrap">
           <div className="inline-flex rounded-xl border border-white/10 bg-white/[0.04] p-0.5 text-[11px] font-semibold" role="group" aria-label="Nombre del archivo">
             {(['pedido', 'sucursal'] as const).map(op => (
               <button key={op} type="button" onClick={() => setNombrarPor(op)} aria-pressed={nombrarPor === op} className={`px-2.5 py-1.5 rounded-lg transition-all ${nombrarPor === op ? 'bg-white/[0.12] text-white' : 'text-white/45 hover:text-white/75'}`}>
@@ -670,10 +731,41 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
           <button type="button" onClick={() => void descargar()} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">
             <Download className="w-4 h-4" /> Descargar {etiquetaRev(vista.numero)}
           </button>
-          {puedeImportar && (
-            <button type="button" disabled={importando} onClick={() => inputArchivo.current?.click()} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-white/75 text-xs font-semibold border border-white/10 disabled:opacity-50">
-              {importando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} Subir Excel
-            </button>
+          {estado !== 'completado' && ultima && (
+            <div ref={menuRef}>
+              <button type="button" disabled={importando || trabajando} onClick={() => setMenuExcel(v => !v)} aria-haspopup="menu" aria-expanded={menuExcel} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-white/75 text-xs font-semibold border border-white/10 disabled:opacity-50">
+                {importando || trabajando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} Excel <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+              {menuExcel && (
+                <div role="menu" className="absolute left-0 right-0 sm:left-auto sm:w-80 top-full mt-2 z-30 rounded-2xl border border-white/15 bg-[#0d111a] shadow-[0_20px_60px_-15px_rgba(0,0,0,0.9)] p-1.5 text-left">
+                  {!bloqueado && (<>
+                    <button type="button" role="menuitem" onClick={() => elegirArchivo('siguiente')} className="w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-xl hover:bg-white/[0.07]">
+                      <Upload className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
+                      <span className="min-w-0 flex-1"><span className="block text-xs font-semibold text-white">Subir como nueva revisión</span>
+                        <span className="block text-[11px] text-white/45">{ultima.estado === 'borrador' ? `Reemplaza el borrador ${etiquetaRev(ultima.numero)}` : `Entra como ${etiquetaRev(ultima.numero + 1)}`}</span></span>
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => elegirArchivo('reemplazar')} className="w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-xl hover:bg-white/[0.07]">
+                      <Replace className="w-4 h-4 text-sky-400 mt-0.5 shrink-0" />
+                      <span className="min-w-0 flex-1"><span className="block text-xs font-semibold text-white">Reemplazar {etiquetaRev(ultima.numero)} con otro Excel</span>
+                        <span className="block text-[11px] text-white/45">Me equivoqué de archivo: se cambia y conserva el número</span></span>
+                    </button>
+                    <div className="my-1 h-px bg-white/10" />
+                  </>)}
+                  <button type="button" role="menuitem" onClick={() => { setMenuExcel(false); void quitarRevisiones('eliminar_ultima'); }} className="w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-xl hover:bg-red-500/10">
+                    <Trash2 className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+                    <span className="min-w-0 flex-1"><span className="block text-xs font-semibold text-red-200">Eliminar {etiquetaRev(ultima.numero)}</span>
+                      <span className="block text-[11px] text-white/45">{ordenadas.length > 1 ? `Regresa a ${etiquetaRev(ordenadas[ordenadas.length - 2].numero)}` : 'La hoja queda vacía'}</span></span>
+                  </button>
+                  {ordenadas.length > 1 && (
+                    <button type="button" role="menuitem" onClick={() => { setMenuExcel(false); void quitarRevisiones('vaciar'); }} className="w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-xl hover:bg-red-500/10">
+                      <Eraser className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+                      <span className="min-w-0 flex-1"><span className="block text-xs font-semibold text-red-200">Vaciar la hoja</span>
+                        <span className="block text-[11px] text-white/45">Borra todas las revisiones y empiezas de cero</span></span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
