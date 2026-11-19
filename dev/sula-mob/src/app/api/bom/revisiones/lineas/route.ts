@@ -36,6 +36,8 @@ function camposDe(body: Record<string, unknown>): Record<string, unknown> {
     if (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1e9) c[k] = Math.round(n * 10000) / 10000
   }
   if (typeof body.orden === 'number' && Number.isInteger(body.orden)) c.orden = body.orden
+  // "Se compra o no": true / false / null (no dice)
+  if (body.se_compra === true || body.se_compra === false || body.se_compra === null) c.se_compra = body.se_compra
   return c
 }
 

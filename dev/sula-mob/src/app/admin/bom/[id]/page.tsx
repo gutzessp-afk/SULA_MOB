@@ -12,6 +12,7 @@
  *    Se arrastra el Excel, se edita aquí y el sistema abre la siguiente revisión solo.
  *
  * El cronómetro arranca al importar o capturar el primer cambio (o con "Iniciar Explosión").
+ * "Reiniciar desde cero" (cualquier estado) borra la hoja, las OC, el tiempo y las fechas.
  * "Terminar Explosión" cierra la revisión actual y guarda tiempos, días y pausas.
  *
  * Supabase Realtime sincroniza entre admins.
@@ -23,7 +24,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   Zap, Play, Square, Pencil, Clock, Calendar, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Download, X,
-  MapPin, Pause, RotateCcw, Timer, ShieldAlert, ShieldCheck, Undo2,
+  MapPin, Pause, RotateCcw, Timer, ShieldAlert, ShieldCheck, Undo2, Trash2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useRecargaAgrupada } from '@/hooks/useRecargaAgrupada';
@@ -118,6 +119,10 @@ export default function BomTrabajoPage() {
   const [accionando, setAccionando] = useState(false);
   const [editandoTiempo, setEditandoTiempo] = useState<{ h: string; m: string; s: string } | null>(null);
   const [showCompletado, setShowCompletado] = useState(false);
+  // "Reiniciar desde cero": lo que se escribe para confirmar y si también se borra el estatus
+  const [reinicio, setReinicio] = useState<{ texto: string; borrarEstatus: boolean } | null>(null);
+  // Cambia al reiniciar para que la hoja de explosión se vuelva a montar vacía
+  const [versionHoja, setVersionHoja] = useState(0);
   const [hoja, setHoja] = useState<ResumenHoja | null>(null);
 
   const estadoRef = useRef<Explosion['estado'] | null>(null);
@@ -154,8 +159,8 @@ export default function BomTrabajoPage() {
     return () => { clearTimeout(primera); void supabase.removeChannel(ch); };
   }, [explosionId, cargar, recargar]);
 
-  /* ── PATCH de estado (iniciar, pausar, reanudar, reiniciar, finalizar, reabrir, cancelar, editar_tiempo) ── */
-  const patchExplosion = useCallback(async (accion: AccionExplosion | 'editar_tiempo', extra?: Record<string, unknown>): Promise<boolean> => {
+  /* ── PATCH de estado (iniciar, pausar, reanudar, reiniciar, finalizar, reabrir, cancelar, editar_tiempo, reiniciar_todo) ── */
+  const patchExplosion = useCallback(async (accion: AccionExplosion | 'editar_tiempo' | 'reiniciar_todo', extra?: Record<string, unknown>): Promise<boolean> => {
     let res: Response;
     try {
       res = await fetch('/api/bom', {
@@ -197,6 +202,25 @@ export default function BomTrabajoPage() {
       const ok = tipo === 'iniciar' ? await asegurarIniciada() : await patchExplosion(tipo);
       if (ok && tipo === 'finalizar') setShowCompletado(true);
       if (ok && tipo === 'cancelar') setEditandoTiempo(null);
+      await cargar();
+    } finally {
+      setAccionando(false);
+    }
+  };
+
+  /* ── Reiniciar desde cero: borra hoja, OC, tiempo y fechas (cualquier estado) ── */
+  const reiniciarTodo = async () => {
+    if (!reinicio) return;
+    setAccionando(true);
+    try {
+      await guardarHoja.current?.();
+      if (await patchExplosion('reiniciar_todo', { borrar_estatus: reinicio.borrarEstatus })) {
+        setReinicio(null);
+        setEditandoTiempo(null);
+        setShowCompletado(false);
+        setHoja(null);
+        setVersionHoja(v => v + 1);
+      }
       await cargar();
     } finally {
       setAccionando(false);
@@ -293,6 +317,52 @@ export default function BomTrabajoPage() {
           </div>
         </div>
       )}
+
+      {/* ═══ Modal "Reiniciar desde cero" ═══ */}
+      {reinicio && (() => {
+        const codigo = data.proyecto?.codigo || '';
+        // Se acepta "PED-3492" o solo "3492"
+        const normal = (t: string) => t.trim().toUpperCase().replace(/^PED-?/, '').replace(/^0+(?=\d)/, '');
+        const coincide = !!codigo && normal(reinicio.texto) === normal(codigo);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" role="dialog" aria-modal="true" aria-labelledby="bom-reiniciar">
+            <div className={`${TARJETA} p-6 sm:p-8 max-w-md w-full`}>
+              <div className="flex items-center gap-3 mb-3">
+                <span className="w-10 h-10 rounded-xl bg-red-500/15 border border-red-400/30 flex items-center justify-center text-red-300"><Trash2 className="w-5 h-5" /></span>
+                <h2 id="bom-reiniciar" className="text-lg font-bold text-white">Reiniciar {codigo} desde cero</h2>
+              </div>
+              <p className="text-sm text-white/70">La explosión regresa a <b>PENDIENTE</b>, como si el pedido se acabara de subir. Se borra:</p>
+              <ul className="mt-2 mb-4 space-y-1 text-sm text-white/65 list-disc list-inside">
+                <li>La hoja de explosión: todas las revisiones{hoja ? ` (hasta ${etiquetaRev(hoja.numero)})` : ''} y sus materiales</li>
+                <li>Las órdenes de compra subidas, OC, Compra, Almacén y sus fechas</li>
+                <li>El cronómetro, la fecha de inicio y término y las pausas</li>
+              </ul>
+              <label className="flex items-start gap-2 mb-4 text-sm text-white/70 cursor-pointer">
+                <input type="checkbox" checked={reinicio.borrarEstatus} onChange={e => setReinicio(r => r && { ...r, borrarEstatus: e.target.checked })} className="mt-0.5 w-4 h-4 accent-red-500" />
+                <span>También borrar el estatus del pedido (motivos de bloqueo y descripción)</span>
+              </label>
+              <p className="text-xs font-bold text-red-300 mb-1.5">No se puede deshacer. Escribe <span className="font-mono">{codigo}</span> para confirmar:</p>
+              <form onSubmit={e => { e.preventDefault(); if (coincide) void reiniciarTodo(); }} className="space-y-4">
+                <input
+                  type="text"
+                  autoFocus
+                  value={reinicio.texto}
+                  onChange={e => setReinicio(r => r && { ...r, texto: e.target.value })}
+                  placeholder={codigo}
+                  aria-label={`Escribe ${codigo} para confirmar`}
+                  className="w-full px-3 py-2.5 rounded-xl bg-white/[0.05] border border-white/15 text-white font-mono focus:outline-none focus:border-red-400/60"
+                />
+                <div className="flex gap-3 justify-end flex-wrap">
+                  <button type="button" onClick={() => setReinicio(null)} className="px-4 py-2.5 rounded-xl text-white/60 hover:text-white text-sm">Cancelar</button>
+                  <button type="submit" disabled={!coincide || accionando} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed">
+                    {accionando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} Reiniciar desde cero
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ═══ Volver ═══ */}
       <button type="button" onClick={() => router.push('/admin/bom')} className="inline-flex items-center gap-2 text-sm text-white/50 hover:text-white">
@@ -420,6 +490,15 @@ export default function BomTrabajoPage() {
               </button>
             </>
           )}
+          <button
+            type="button"
+            onClick={() => setReinicio({ texto: '', borrarEstatus: false })}
+            disabled={accionando}
+            title="Borra la hoja, las órdenes de compra, el tiempo y las fechas: el pedido queda como recién subido"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-red-300 hover:text-white hover:bg-red-600/80 text-xs font-semibold border border-red-400/40 disabled:opacity-50 sm:ml-auto"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Reiniciar desde cero
+          </button>
         </div>
 
         {editandoTiempo && data.estado === 'en_proceso' && (
@@ -448,7 +527,7 @@ export default function BomTrabajoPage() {
 
       {/* ═══ ESTATUS DEL PEDIDO ═══ */}
       <EstatusPedido
-        key={data.id}
+        key={`${data.id}-${versionHoja}`}
         motivos={motivosGuardados}
         notas={data.notas ?? ''}
         editable={data.estado === 'pendiente'}
@@ -484,6 +563,7 @@ export default function BomTrabajoPage() {
 
       {/* ═══ HOJA DE EXPLOSIÓN (formato SULA con revisiones) ═══ */}
       <HojaExplosion
+        key={versionHoja}
         explosionId={data.id}
         estado={data.estado}
         bloqueado={bloqueado}

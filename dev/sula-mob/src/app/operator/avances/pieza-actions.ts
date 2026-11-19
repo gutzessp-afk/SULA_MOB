@@ -65,6 +65,8 @@ export interface AreaOperador {
   meta: number
   porcentaje: number
   piezas: number
+  /** Piezas con hechas < meta (las que faltan por terminar) */
+  pendientes: number
   enCurso: number
   pausa: { tipo: string; motivo: string } | null
   cerrada: boolean
@@ -570,6 +572,7 @@ export async function getProyectoOperador(proyectoId: string): Promise<ProyectoO
       const nombre = area.nombre as string
 
       let piezas = 0
+      let pendientes = 0
       let hechas = 0
       let meta = 0
 
@@ -579,6 +582,7 @@ export async function getProyectoOperador(proyectoId: string): Promise<ProyectoO
         propias.forEach((p) => {
           meta += p.meta
           hechas += Math.min(hechasMapa.get(p.id) ?? 0, p.meta)
+          if ((hechasMapa.get(p.id) ?? 0) < p.meta) pendientes++
         })
       } else {
         const visibles = productos.filter((p) =>
@@ -587,8 +591,10 @@ export async function getProyectoOperador(proyectoId: string): Promise<ProyectoO
         piezas = visibles.length
         visibles.forEach((p) => {
           const f = claves.get(`${p.id}|${areaId}`)
+          const metaPieza = f?.piezas_totales ?? (p.cantidad as number | null) ?? 0
           hechas += f?.piezas_completadas ?? 0
-          meta += f?.piezas_totales ?? (p.cantidad as number | null) ?? 0
+          meta += metaPieza
+          if ((f?.piezas_completadas ?? 0) < metaPieza) pendientes++
         })
       }
 
@@ -604,6 +610,7 @@ export async function getProyectoOperador(proyectoId: string): Promise<ProyectoO
         meta,
         porcentaje: meta > 0 ? Math.min(100, Math.round((hechas / meta) * 100)) : 0,
         piezas,
+        pendientes,
         enCurso,
         pausa: pausaArea ? { tipo: pausaArea.tipo, motivo: pausaArea.motivo } : null,
         cerrada: cerradas.has(areaId),
@@ -647,25 +654,24 @@ export async function getPantallaOperador(proyectoId: string, areaId: string | n
 /*  Lectura: piezas de un area                                         */
 /* ------------------------------------------------------------------ */
 
-export async function getAreaOperador(
+type TrabajoAbierto = { id: string; producto_id: string | null; pieza_id: string | null; inicio: string }
+
+/**
+ * Piezas de un área tal como las ve el operador (la misma cuenta para la pantalla y para
+ * terminar el área). En proyectos por producto solo cuentan los productos visibles en esa área.
+ * `nombreArea` puede llegar como promesa para pedir todo al mismo tiempo que el nombre.
+ */
+async function piezasDelArea(
+  supabase: Supabase,
   proyectoId: string,
-  areaId: string
-): Promise<{ vista?: AreaVista; error?: string }> {
-  const usuario = await getUsuarioActual()
-  if (!usuario) return { error: 'No autenticado' }
-
-  const supabase = await createClient()
-
-  const [acceso, areaRes, prodRes, cierreRes, trabRes, piezasPdf] = await Promise.all([
-    tieneAccesoArea(supabase, usuario, areaId),
-    supabase.from('areas').select('id, nombre').eq('id', areaId).maybeSingle(),
+  areaId: string,
+  nombreArea: string | PromiseLike<string>
+): Promise<
+  | { piezas: PiezaOperador[]; trabajos: TrabajoAbierto[]; pausas: PausaFila[]; usaPdf: boolean; error?: undefined }
+  | { error: string }
+> {
+  const [prodRes, trabRes, piezasPdf] = await Promise.all([
     supabase.from('proyecto_productos').select('*').eq('proyecto_id', proyectoId).order('created_at'),
-    supabase
-      .from('area_cierres')
-      .select('id')
-      .eq('proyecto_id', proyectoId)
-      .eq('area_id', areaId)
-      .maybeSingle(),
     supabase
       .from('trabajos_pieza')
       .select('id, producto_id, pieza_id, inicio')
@@ -675,22 +681,13 @@ export async function getAreaOperador(
     cargarPiezasPdf(supabase, proyectoId),
   ])
 
-  if (!acceso) return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
-  if (!areaRes.data) return { error: 'No se encontró el área.' }
   if (prodRes.error) {
     console.error('Error al traer piezas:', prodRes.error)
     return { error: 'No se pudieron cargar las piezas.' }
   }
 
-  const nombreArea = areaRes.data.nombre as string
   const usaPdf = piezasPdf.length > 0
-
-  const trabajos = (trabRes.data ?? []) as {
-    id: string
-    producto_id: string | null
-    pieza_id: string | null
-    inicio: string
-  }[]
+  const trabajos = (trabRes.data ?? []) as TrabajoAbierto[]
   const propias = piezasPdf.filter((p) => p.area_id === areaId)
   const productosArea = (prodRes.data ?? []) as Record<string, unknown>[]
 
@@ -723,13 +720,14 @@ export async function getAreaOperador(
       }
     })
   } else {
+    const nombre = await nombreArea
     const claves = new Map<string, FilaAvance>()
     filasProducto.forEach((f) => claves.set(`${f.producto_id}|${f.area_id}`, f))
     const clavesSet = new Set(claves.keys())
     const conFilas = new Set(filasProducto.map((f) => f.producto_id))
 
     piezas = productosArea
-      .filter((p) => esVisible(nombreArea, p.id as string, areaId, clavesSet, conFilas))
+      .filter((p) => esVisible(nombre, p.id as string, areaId, clavesSet, conFilas))
       .map((p) => {
         const id = p.id as string
         const f = claves.get(`${id}|${areaId}`)
@@ -753,6 +751,39 @@ export async function getAreaOperador(
       })
   }
 
+  return { piezas, trabajos, pausas, usaPdf }
+}
+
+export async function getAreaOperador(
+  proyectoId: string,
+  areaId: string
+): Promise<{ vista?: AreaVista; error?: string }> {
+  const usuario = await getUsuarioActual()
+  if (!usuario) return { error: 'No autenticado' }
+
+  const supabase = await createClient()
+
+  // Promise.resolve: la consulta del área se ejecuta una sola vez aunque se use en dos lugares
+  const areaP = Promise.resolve(supabase.from('areas').select('id, nombre').eq('id', areaId).maybeSingle())
+  const [acceso, areaRes, cierreRes, datos] = await Promise.all([
+    tieneAccesoArea(supabase, usuario, areaId),
+    areaP,
+    supabase
+      .from('area_cierres')
+      .select('id')
+      .eq('proyecto_id', proyectoId)
+      .eq('area_id', areaId)
+      .maybeSingle(),
+    piezasDelArea(supabase, proyectoId, areaId, areaP.then((r) => (r.data?.nombre as string | undefined) ?? '')),
+  ])
+
+  if (!acceso) return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
+  if (!areaRes.data) return { error: 'No se encontró el área.' }
+  if (datos.error !== undefined) return { error: datos.error }
+
+  const nombreArea = areaRes.data.nombre as string
+  const { piezas, pausas, usaPdf } = datos
+
   const pausaArea = pausas.find((p) => p.fin === null && TIPOS_PAUSA_AREA.includes(p.tipo))
 
   return {
@@ -765,6 +796,72 @@ export async function getAreaOperador(
       ahora: ahoraISO(),
     },
   }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Terminar un área (botón "Marcar área terminada")                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Valida con la MISMA cuenta que ve el operador (piezasDelArea): todas las piezas completas y
+ * ningún reloj corriendo. Reemplaza en esta pantalla a marcarAreaTerminada (actions.ts), que
+ * contaba también los productos que no pasan por el área.
+ */
+export async function terminarArea(proyectoId: string, areaId: string): Promise<Resultado> {
+  const usuario = await getUsuarioActual()
+  if (!usuario) return { error: 'No autenticado' }
+
+  const supabase = await createClient()
+  if (!(await tieneAccesoArea(supabase, usuario, areaId))) {
+    return { error: 'Esta área está bloqueada. Escribe tu clave para entrar.' }
+  }
+
+  const [{ data: cierre }, { data: area }, { data: proyecto }] = await Promise.all([
+    supabase.from('area_cierres').select('id').eq('proyecto_id', proyectoId).eq('area_id', areaId).maybeSingle(),
+    supabase.from('areas').select('nombre').eq('id', areaId).maybeSingle(),
+    supabase.from('proyectos').select('nombre').eq('id', proyectoId).maybeSingle(),
+  ])
+  // Ya estaba terminada: no es error
+  if (cierre) return { success: true }
+  if (!area) return { error: 'No se encontró el área.' }
+
+  const datos = await piezasDelArea(supabase, proyectoId, areaId, area.nombre as string)
+  if (datos.error !== undefined) return { error: datos.error }
+  const { piezas, trabajos } = datos
+
+  if (piezas.length === 0) return { error: 'Esta área no tiene piezas en este pedido.' }
+  if (trabajos.length > 0) {
+    return { error: `Hay ${trabajos.length} pieza(s) con el reloj corriendo. Finalízalas antes de terminar el área.` }
+  }
+  const incompletas = piezas.filter((p) => p.faltan > 0)
+  if (incompletas.length > 0) {
+    const nombres = incompletas.slice(0, 3).map((p) => `${p.nombre} (faltan ${p.faltan})`).join(', ')
+    const mas = incompletas.length > 3 ? ` y ${incompletas.length - 3} más` : ''
+    return { error: `Faltan piezas: ${nombres}${mas}.` }
+  }
+
+  const { error } = await supabase
+    .from('area_cierres')
+    .upsert(
+      { proyecto_id: proyectoId, area_id: areaId, operador_id: usuario.id },
+      { onConflict: 'proyecto_id,area_id', ignoreDuplicates: true }
+    )
+  if (error) {
+    console.error('Error al marcar área terminada:', error)
+    return { error: `No se pudo marcar el área como terminada${detalleError(error)}` }
+  }
+
+  await cerrarAccesoArea(supabase, usuario, areaId)
+
+  await avisarAdmins(
+    supabase,
+    usuario.id,
+    proyectoId,
+    'area_terminada',
+    `${usuario.nombre ?? usuario.correo} terminó ${area.nombre ?? 'un área'} en ${proyecto?.nombre ?? 'un proyecto'}`
+  )
+
+  return { success: true }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1003,6 +1100,9 @@ export async function finalizarPieza(trabajoId: string, piezas: number): Promise
 /*  Corregir las piezas registradas (error al capturar la cantidad)     */
 /* ------------------------------------------------------------------ */
 
+/** Un update/delete bloqueado por RLS no da error: afecta 0 renglones. Nunca se reporta como éxito */
+const NO_SE_GUARDO = 'No se guardó la corrección (la base no dejó cambiar el registro). Avísale al administrador.'
+
 /** Suma `delta` (positivo o negativo) a las filas más recientes, sin dejar ninguna en negativo */
 function repartirAjuste(filas: { id: string; piezas: number }[], delta: number) {
   const cambios: { id: string; piezas: number }[] = []
@@ -1083,7 +1183,7 @@ export async function corregirPieza(
   if (delta > 0 && filasTrabajo.length === 0) {
     // Nunca se registró con reloj: queda un registro sin tiempo con las piezas que faltaban
     const ahora = ahoraISO()
-    const { error } = await supabase.from('trabajos_pieza').insert({
+    const { data: insertadas, error } = await supabase.from('trabajos_pieza').insert({
       proyecto_id: proyectoId,
       area_id: areaId,
       operador_id: usuario.id,
@@ -1092,22 +1192,30 @@ export async function corregirPieza(
       fin: ahora,
       piezas_hechas: delta,
       ...(tipo === 'pdf' ? { pieza_id: id } : { producto_id: id }),
-    })
+    }).select('id')
     if (error) {
       console.error('Error al corregir piezas:', error)
       return { error: `No se pudo corregir${detalleError(error)}` }
+    }
+    if (!insertadas?.length) {
+      console.error('Corrección sin guardar: trabajos_pieza insert devolvió 0 renglones', { proyectoId, areaId, id })
+      return { error: NO_SE_GUARDO }
     }
   } else {
     for (const c of repartirAjuste(filasTrabajo, delta)) {
       // Si queda en 0 ya no se registró nada: se borra para que no salga en el PDF de evidencia
       if (c.piezas === 0) await supabase.from('pausas_pieza').delete().eq('trabajo_id', c.id)
-      const { error } =
+      const { data: tocadas, error } =
         c.piezas === 0
-          ? await supabase.from('trabajos_pieza').delete().eq('id', c.id)
-          : await supabase.from('trabajos_pieza').update({ piezas_hechas: c.piezas }).eq('id', c.id)
+          ? await supabase.from('trabajos_pieza').delete().eq('id', c.id).select('id')
+          : await supabase.from('trabajos_pieza').update({ piezas_hechas: c.piezas }).eq('id', c.id).select('id')
       if (error) {
         console.error('Error al corregir piezas:', error)
         return { error: `No se pudo corregir${detalleError(error)}` }
+      }
+      if (!tocadas?.length) {
+        console.error('Corrección sin guardar: trabajos_pieza devolvió 0 renglones', { trabajoId: c.id })
+        return { error: NO_SE_GUARDO }
       }
     }
   }
@@ -1115,14 +1223,19 @@ export async function corregirPieza(
   // 3a. Proyecto por producto: el avance que ve la pantalla se corrige ya
   if (tipo !== 'pdf') {
     const porcentaje = meta > 0 ? Math.min(100, Math.round((total / meta) * 100)) : 0
-    const { error } = await supabase
+    const { data: tocadas, error } = await supabase
       .from('producto_area_avance')
       .update({ piezas_completadas: total, porcentaje, completado: porcentaje >= 100 })
       .eq('producto_id', id)
       .eq('area_id', areaId)
+      .select('id')
     if (error) {
       console.error('Error al corregir el avance:', error)
       return { error: 'Se corrigió el registro, pero no el avance del proyecto.' }
+    }
+    if (!tocadas?.length) {
+      console.error('Corrección sin guardar: producto_area_avance devolvió 0 renglones', { productoId: id, areaId })
+      return { error: NO_SE_GUARDO }
     }
   }
 

@@ -28,6 +28,7 @@ import { logoutAction } from '@/app/(auth)/login/actions';
 import { limpiarCache } from '@/lib/cache-datos';
 import InstallPWA from '@/components/InstallPWA';
 import MobiChat from '@/components/MobiChat';
+import { SoltarPedido } from '@/components/admin/SoltarPedido';
 import { AlertaRetrasos } from '@/components/AlertaRetrasos';
 import { AvisoNotificaciones } from '@/components/AvisoNotificaciones';
 import { AvisosAdminProvider } from '@/components/dashboard/NotificationBellAdmin';
@@ -353,6 +354,8 @@ function PanelAdmin({ children }: { children: React.ReactNode }) {
       </main>
 
       <MobiChat />
+      {/* Arrastrar el PDF de un pedido en Dashboard, Terminados, Calendario o Reportes → orden nueva */}
+      <SoltarPedido />
       {/* Tono de celular y aviso cuando un operador reporta un atraso */}
       <AlertaRetrasos />
       {/* Con la app instalada: invita a activar las notificaciones del celular */}

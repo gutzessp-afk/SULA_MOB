@@ -9,14 +9,11 @@
  *   REFERENCIA: 3531       → número de pedido (se valida contra el pedido de la explosión)
  *   Proveedor / Fecha      → informativos
  *   Detalle de la Compra   → partidas: Cantidad · Unidad · Clave · Descripción
+ *   Subtotal / IVA / Total → importes de la OC (para "pagado / por pagar")
  *
- * pdf-parse pega las columnas sin espacios, y el orden depende de cómo se generó el PDF:
- *   · OC real de SULA:  "Litro483.79361.00003,023.71001-03-0243" = unidad + IVA + cantidad + precio
- *                       + CLAVE, luego el importe y la descripción en los renglones siguientes;
- *                       "3531REFERENCIA:" (el número va antes de la etiqueta).
- *   · Otro formato:     "1.0000Litro1-03-0243SELLADOR…" = cantidad + unidad + CLAVE + descripción.
- * Se prueba primero el de la OC real y si no hay partidas, el otro. La Clave (d-dd-dddd) es la misma
- * que usa la explosión, por eso el cruce es exacto (no hay que adivinar por descripción).
+ * pdf-parse pega las columnas sin espacios ("1.0000Litro1-03-0243SELLADOR…"), así que cada partida
+ * se reconoce por el patrón cantidad + unidad + CLAVE (d-dd-dddd). La Clave es la misma que usa la
+ * explosión, por eso el cruce es exacto (no hay que adivinar por descripción).
  *
  * RUTA: src/lib/explosion-oc.ts
  */
@@ -38,6 +35,18 @@ export interface OrdenCompraLeida {
   proveedor: string
   fecha: string
   partidas: PartidaOC[]
+  subtotal: number | null
+  iva: number | null
+  /** Total a pagar de la OC (si no viene, subtotal + IVA − retenciones) */
+  total: number | null
+}
+
+/** Primer importe después de una etiqueta: "Subtotal6,368.7100" → 6368.71 */
+function importeDe(texto: string, etiqueta: RegExp): number | null {
+  const m = new RegExp(etiqueta.source + String.raw`\s*:?\s*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,4})?)`, 'i').exec(texto)
+  if (!m) return null
+  const n = Number(m[1].replace(/,/g, ''))
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null
 }
 
 /* Polyfills que pdf.js pide al cargarse en Node (igual que /api/parse-pdf) */
@@ -69,47 +78,6 @@ export async function textoDePdf(bytes: Uint8Array): Promise<string> {
 /** Número de 4 decimales como los de la OC ("3,023.7100") */
 const NUM4 = /\d{1,3}(?:,\d{3})*\.\d{4}/
 
-/** Descripción entre el final de una partida y el inicio de la siguiente, sin importes */
-function descripcionEntre(detalle: string, desde: number, hasta: number): string {
-  return detalle.slice(desde, hasta)
-    .replace(/\d{1,3}(?:,\d{3})*\.\d{4}/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 300)
-}
-
-/** OC real de SULA: unidad + IVA + cantidad + precio + CLAVE, y la descripción después */
-function partidasOcReal(detalle: string): PartidaOC[] {
-  const n = '(\\d{1,3}(?:,\\d{3})*\\.\\d{4})'
-  const patron = new RegExp(`([A-Za-zÁÉÍÓÚáéíóúÑñ.]{1,15})\\s*${n}\\s*${n}\\s*${n}\\s*(\\d-\\d{2}-\\d{4})(?!\\d)`, 'g')
-  const encontrados = [...detalle.matchAll(patron)]
-  return encontrados.map((m, i) => ({
-    clave: m[5],
-    descripcion: descripcionEntre(detalle, (m.index ?? 0) + m[0].length, encontrados[i + 1]?.index ?? detalle.length),
-    cantidad: Number(m[3].replace(/,/g, '')) || 0,
-    unidad: m[1],
-  }))
-}
-
-/** Otro formato: cantidad + unidad + CLAVE + descripción (luego precio e importes) */
-function partidasCantidadPrimero(detalle: string): PartidaOC[] {
-  const patron = /(\d{1,3}(?:,\d{3})*\.\d{1,4})\s*([A-Za-zÁÉÍÓÚáéíóúÑñ.]{1,15})\s*(\d-\d{2}-\d{4})(?!\d)/g
-  const encontrados = [...detalle.matchAll(patron)]
-  return encontrados.map((m, i) => {
-    const inicioDesc = (m.index ?? 0) + m[0].length
-    const finDesc = encontrados[i + 1]?.index ?? detalle.length
-    let descripcion = detalle.slice(inicioDesc, finDesc)
-    const precio = NUM4.exec(descripcion)
-    if (precio) descripcion = descripcion.slice(0, precio.index)
-    return {
-      clave: m[3],
-      descripcion: descripcion.replace(/\s+/g, ' ').trim().slice(0, 300),
-      cantidad: Number(m[1].replace(/,/g, '')) || 0,
-      unidad: m[2],
-    }
-  })
-}
-
 /** Saca folio, referencia, proveedor, fecha y partidas del texto. Lanza Error si no parece una OC. */
 export function leerOrdenCompra(texto: string, nombreArchivo = ''): OrdenCompraLeida {
   const limpio = texto.replace(/\r/g, '')
@@ -126,14 +94,16 @@ export function leerOrdenCompra(texto: string, nombreArchivo = ''): OrdenCompraL
     ''
   if (!folio) throw new Error('No encontré el folio (NÚMERO) de la orden de compra.')
 
-  // "REFERENCIA: 3531" (mismo renglón, que no sea un importe como 0.0000) o "3531REFERENCIA:"
+  // Referencia (= número de pedido). Normal: "REFERENCIA: 3531". En el PDF original de Click Balance
+  // pdf-parse la pega al revés: "3531REFERENCIA:" seguido de "0.0000" (que NO es la referencia)
   const referencia =
-    /REFERENCIA[ \t]*:?[ \t]*([A-Z0-9-]{2,20})(?![.,]\d)/i.exec(limpio)?.[1] ??
-    /([A-Z0-9-]{2,20})[ \t]*REFERENCIA\s*:/i.exec(limpio)?.[1] ??
+    /REFERENCIA\s*:?\s*([A-Z0-9-]{1,20})(?![.,\d])/i.exec(limpio)?.[1] ??
+    /(\d{2,10})\s*REFERENCIA\s*:/i.exec(limpio)?.[1] ??
     ''
+  // Fecha: junto a "Fecha" o, si las etiquetas vienen apiladas, la primera fecha AAAA-MM-DD del documento
   const fecha =
     /Fecha\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})/i.exec(limpio)?.[1] ??
-    /(\d{4}-\d{2}-\d{2})/.exec(limpio)?.[1] ??
+    /\b(\d{4}-\d{2}-\d{2})\b/.exec(limpio)?.[1] ??
     ''
 
   // Proveedor: el renglón de abajo del encabezado "Proveedor"; se le quita el nombre de la empresa
@@ -141,8 +111,8 @@ export function leerOrdenCompra(texto: string, nombreArchivo = ''): OrdenCompraL
   const lineas = limpio.split('\n').map(l => l.trim())
   const empresa = lineas.find(l => l.length > 3) ?? ''
   const iProv = lineas.findIndex(l => /proveedor/i.test(l))
-  // (se saltan las etiquetas de la otra columna, como "Facturar a")
-  let proveedor = iProv >= 0 ? lineas.slice(iProv + 1).find(l => l.length > 2 && !/^facturar\s*a:?$/i.test(l)) ?? '' : ''
+  // (se brincan los encabezados que pdf-parse a veces pone en medio, como "Facturar a")
+  let proveedor = iProv >= 0 ? lineas.slice(iProv + 1).find(l => l.length > 2 && !/^facturar\s*a\b|^para\b/i.test(l)) ?? '' : ''
   if (empresa && proveedor.toLowerCase().endsWith(empresa.toLowerCase())) proveedor = proveedor.slice(0, -empresa.length)
   proveedor = proveedor.trim().slice(0, 120)
 
@@ -152,12 +122,62 @@ export function leerOrdenCompra(texto: string, nombreArchivo = ''): OrdenCompraL
   const fin = cuerpo.search(/TOTAL\s*CON\s*LETRA|Subtotal/i)
   const detalle = (fin > 0 ? cuerpo.slice(0, fin) : cuerpo).replace(/\n/g, ' ')
 
-  const partidas = partidasOcReal(detalle)
-  if (!partidas.length) partidas.push(...partidasCantidadPrimero(detalle))
+  // Dos acomodos de columnas, según cómo pdf-parse lea el PDF:
+  //  A) "1.0000 Litro 1-03-0243 SELLADOR…"            (cantidad, unidad, clave)
+  //  B) "Litro483.79361.00003,023.71001-03-0243"       (unidad, IVA, cantidad, precio, clave, todo pegado)
+  //     Así sale el PDF original de Click Balance (OC 5621). Los números traen siempre 4 decimales,
+  //     por eso se pueden separar aunque vengan pegados.
+  const N = String.raw`\d{1,3}(?:,\d{3})*\.\d{4}`
+  const patronA = /(\d{1,3}(?:,\d{3})*\.\d{1,4})\s*([A-Za-zÁÉÍÓÚáéíóúÑñ.]{1,15})\s*(\d-\d{2}-\d{4})(?!\d)/g
+  const patronB = new RegExp(String.raw`([A-Za-zÁÉÍÓÚáéíóúÑñ.]{1,15})\s*(${N})\s*(${N})\s*(${N})\s*(\d-\d{2}-\d{4})(?!\d)`, 'g')
+
+  const enB = [...detalle.matchAll(patronB)]
+  const enA = enB.length ? [] : [...detalle.matchAll(patronA)]
+  const encontrados = enB.length
+    ? enB.map(m => ({ index: m.index ?? 0, largo: m[0].length, cantidad: m[3], unidad: m[1], clave: m[5], iva: m[2], precio: m[4] }))
+    : enA.map(m => ({ index: m.index ?? 0, largo: m[0].length, cantidad: m[1], unidad: m[2], clave: m[3], iva: '', precio: '' }))
+
+  const num = (t: string) => Number(t.replace(/,/g, '')) || 0
+  let sumaSubtotal = 0
+  let sumaIva = 0
+  const partidas: PartidaOC[] = encontrados.map((m, i) => {
+    const inicioDesc = m.index + m.largo
+    const finDesc = encontrados[i + 1]?.index ?? detalle.length
+    let descripcion = detalle.slice(inicioDesc, finDesc)
+    if (enB.length) {
+      // B: después de la clave viene el importe y luego la descripción
+      descripcion = descripcion.replace(new RegExp(String.raw`^\s*${N}`), '')
+      sumaSubtotal += num(m.precio) * num(m.cantidad)
+      sumaIva += num(m.iva)
+    } else {
+      const precio = NUM4.exec(descripcion)
+      if (precio) descripcion = descripcion.slice(0, precio.index)
+    }
+    return {
+      clave: m.clave,
+      descripcion: descripcion.replace(/\s+/g, ' ').trim().slice(0, 300),
+      cantidad: Number(m.cantidad.replace(/,/g, '')) || 0,
+      unidad: m.unidad,
+    }
+  })
   if (!partidas.length)
     throw new Error(`Leí la OC ${folio} pero no encontré partidas con clave (ej. 1-03-0243).`)
 
-  return { folio, referencia, proveedor, fecha, partidas }
+  // Importes: "Subtotal", "IVA", "Retención ISR/IVA" y "Total" (que no sea "TOTAL CON LETRA" ni "Subtotal")
+  const subtotal = importeDe(limpio, /Subtotal/)
+  const iva = importeDe(limpio, /(?<![A-Za-z])I\.?V\.?A\.?(?!\s*Ret)/)
+  const retenciones = [importeDe(limpio, /Retenci[oó]n\s*ISR/), importeDe(limpio, /Retenci[oó]n\s*IVA/)].reduce<number>((s, n) => s + (n ?? 0), 0)
+  let total = importeDe(limpio, /(?<![A-Za-z])Total(?!\s*CON)(?:\s*a\s*pagar)?/)
+  if (total === null && subtotal !== null) total = Math.round((subtotal + (iva ?? 0) - retenciones) * 100) / 100
+
+  // Acomodo B: las etiquetas de importes vienen apiladas y no se puede saber qué número es de cuál.
+  // Se calculan de las partidas (precio × cantidad e IVA de cada renglón), que sí vienen completos.
+  if (enB.length) {
+    const r2 = (n: number) => Math.round(n * 100) / 100
+    return { folio, referencia, proveedor, fecha, partidas, subtotal: r2(sumaSubtotal), iva: r2(sumaIva), total: r2(sumaSubtotal + sumaIva - retenciones) }
+  }
+
+  return { folio, referencia, proveedor, fecha, partidas, subtotal, iva, total }
 }
 
 /** Solo los dígitos, sin ceros a la izquierda: "PED-0002" → "2", "3531" → "3531" */

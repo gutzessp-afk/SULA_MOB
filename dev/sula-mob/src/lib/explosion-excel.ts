@@ -4,10 +4,14 @@
  * Lee y escribe el Excel de "EXPLOSION DE MATERIALES" con el formato de SULA (GRUPO AVANT CIM).
  * Solo servidor (usa exceljs): lo importan las rutas de /api/bom/revisiones.
  *
- *   leerExcelExplosion(buffer)  → encabezado + líneas de la hoja "EXPLOSION DE MATERIALES"
- *   crearExcelExplosion(datos)  → .xlsx con el mismo formato + columnas OC y Compra, colores de
- *                                 revisión, hoja REPORTE (tiempos, estatus, revisiones) y las hojas
- *                                 REGISTRO y FORMATO DE CONTROL en blanco, como el original.
+ *   leerExcelExplosion(buffer)  → encabezado + líneas de la hoja "EXPLOSION DE MATERIALES" (con las
+ *                                 columnas COMPRAS / FINANZAS / ALMACEN si el archivo las trae)
+ *   crearExcelExplosion(datos)  → .xlsx con la plantilla de SULA (la de ingeniería): A–H materiales,
+ *                                 J–L COMPRAS (orden de compra, fecha, check), M–N FINANZAS (estado,
+ *                                 fecha), O–R ALMACEN (estado, recibido, faltan = fórmula, fecha), leyenda de
+ *                                 estados en N3:N5 y P3:P5 (fuente de las listas desplegables de M y O) y
+ *                                 "Se compra" en S; colores de revisión, hoja REPORTE (tiempos, estatus, revisiones) y
+ *                                 las hojas REGISTRO y FORMATO DE CONTROL en blanco, como el original.
  *
  * Formato original (las dos muestras: P-0002 REV-00 y P-3492 REV-01):
  *   A1 REV-xx · B1:G1 GRUPO AVANT CIM · A2 FECHA: · A3 fecha · B3:G3 REPORTE DE EXPLOSIÓN …
@@ -15,15 +19,18 @@
  *   Fila 8 encabezados: Clave | Descripción | Unidad | Clasificación | Moneda | Costo |
  *                       Cantidad Necesaria | Costo Estimado
  *   Secciones por unidad ("Kilo", "Pieza") con "Totales Kilo:" al final de cada una.
- *   "Usuario: …" al final. Las columnas J en adelante (calendario) NO se importan.
+ *   "Usuario: …" al final. Del resto solo se leen COMPRAS / FINANZAS / ALMACEN (plantilla P-3518 con
+ *   CANTIDAD, o la del sistema con RECIBIDO · FALTAN; FALTAN no se importa, se calcula):
+ *   el calendario de la derecha (U en adelante) NO se importa.
  *
  * RUTA: src/lib/explosion-excel.ts
  */
 
 import ExcelJS from 'exceljs'
 import {
-  agruparPorUnidad, colorClasificacion, colorMarca, etiquetaRev, LEYENDA, normalizar,
-  type EncabezadoRev, type LineaRev, type Marca, type Revision,
+  agruparPorUnidad, COLOR_ESTADO, colorClasificacion, colorMarca, esEstadoAlmacen, esEstadoPago, estadoAlmacenDe, estadoPagoDe,
+  ESTADOS_ALMACEN, ESTADOS_PAGO, etiquetaRev, faltanDe, LEYENDA, normalizar, normalizarEstado,
+  type EncabezadoRev, type EstadoAlmacen, type EstadoPago, type LineaRev, type Marca, type Revision,
 } from './explosion-revisiones'
 
 /* ═══════════════════════ LEER ═══════════════════════ */
@@ -36,7 +43,21 @@ export interface LineaImportada {
   moneda: string
   costo: number
   cantidad: number
+  /** Columna "SE COMPRA O NO": true = SI, false = NO, null = vacía o el Excel no la trae */
+  se_compra: boolean | null
+  /* COMPRAS / FINANZAS / ALMACEN: solo vienen si la celda trae algo (si no, la BD pone los defaults) */
+  oc?: string
+  fecha_compra?: string
+  comprado?: boolean
+  estado_pago?: EstadoPago
+  fecha_estado_pago?: string
+  estado_almacen?: EstadoAlmacen
+  cantidad_recibida?: number
+  fecha_almacen?: string
 }
+
+/** Columnas de compras, finanzas y almacén (no son de la explosión: no cuentan para detectar secciones) */
+type CampoSeguimiento = 'oc' | 'fecha_compra' | 'comprado' | 'estado_pago' | 'fecha_estado_pago' | 'estado_almacen' | 'cantidad_recibida' | 'fecha_almacen'
 
 export interface ExplosionImportada {
   /** Número de revisión que trae el archivo en A1 ("REV-01" → 1); null si no trae */
@@ -89,6 +110,30 @@ function numero(v: ExcelJS.CellValue): number | null {
 const formulaSinResultado = (v: ExcelJS.CellValue) =>
   !!v && typeof v === 'object' && ('formula' in v || 'sharedFormula' in v) && (v as { result?: unknown }).result === undefined
 
+/** "SI" / "SÍ" → true, "NO" → false, vacío u otra cosa → null */
+function siNo(t: string): boolean | null {
+  const n = normalizar(t)
+  return n === 'si' ? true : n === 'no' ? false : null
+}
+
+/** Palomita de la plantilla ("✓", "SI", "X", "true", 1) */
+function marcado(v: ExcelJS.CellValue): boolean {
+  const x = valorDe(v)
+  if (typeof x === 'number') return x !== 0
+  return ['✓', '✔', 'si', 'x', 'true', 'ok'].includes(normalizar(x instanceof Date ? '' : x))
+}
+
+/** Fecha de una celda (Date de Excel o "dd/mm/aaaa" / "aaaa-mm-dd") → 'AAAA-MM-DD'; null si no es fecha */
+function fechaDe(v: ExcelJS.CellValue): string | null {
+  const x = valorDe(v)
+  if (x instanceof Date) return Number.isNaN(x.getTime()) ? null : x.toISOString().slice(0, 10)
+  if (typeof x !== 'string') return null
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(x.trim())
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
+  const mx = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(x.trim())
+  return mx ? `${mx[3]}-${mx[2].padStart(2, '0')}-${mx[1].padStart(2, '0')}` : null
+}
+
 /** Lee el Excel de explosión. Lanza Error con mensaje claro si el archivo no tiene el formato. */
 export async function leerExcelExplosion(buffer: ArrayBuffer): Promise<ExplosionImportada> {
   const wb = new ExcelJS.Workbook()
@@ -122,11 +167,27 @@ export async function leerExcelExplosion(buffer: ArrayBuffer): Promise<Explosion
 
   // Columna de cada campo según el texto del encabezado (por si mueven columnas)
   const columnas: Partial<Record<keyof LineaImportada, number>> = {}
-  // Columna OC: las filas que el sistema exportó como "QUITADO" no se vuelven a importar
-  let colOc = 0
+  // Columnas de COMPRAS / FINANZAS / ALMACEN. "FECHA" a secas es la del grupo de la columna anterior
+  // (plantilla: ORDEN DE COMPRA, FECHA, CHECK · FINANZAS, FECHA · ALMACEN, CANTIDAD, FECHA)
+  const seguimiento: Partial<Record<CampoSeguimiento, number>> = {}
+  let grupo: 'compras' | 'finanzas' | 'almacen' | null = null
   hoja.getRow(filaEnc).eachCell({ includeEmpty: false }, (cell, col) => {
     const t = normalizar(texto(cell.value))
-    if (t === 'oc') colOc ||= col
+    // Columna OC: las filas que el sistema exportó como "QUITADO" no se vuelven a importar
+    if (t === 'oc' || t === 'orden de compra') { seguimiento.oc ??= col; grupo = 'compras' }
+    else if (t === 'check' || t === 'compra') { seguimiento.comprado ??= col; grupo = 'compras' }
+    else if (t === 'finanzas') { seguimiento.estado_pago ??= col; grupo = 'finanzas' }
+    else if (t === 'almacen') { seguimiento.estado_almacen ??= col; grupo = 'almacen' }
+    else if (t === 'fecha compra') seguimiento.fecha_compra ??= col
+    else if (t === 'fecha almacen') seguimiento.fecha_almacen ??= col
+    else if (t === 'fecha' && grupo) {
+      const campo = grupo === 'compras' ? 'fecha_compra' : grupo === 'finanzas' ? 'fecha_estado_pago' : 'fecha_almacen'
+      seguimiento[campo] ??= col
+    }
+    // La primera "Cantidad…" es la necesaria; la segunda (grupo ALMACEN) es la recibida. "RECIBIDO" es la
+    // del formato nuevo; "FALTAN" se calcula y no se lee
+    else if (t === 'recibido' || t === 'cantidad recibida') seguimiento.cantidad_recibida ??= col
+    else if (t.startsWith('cantidad') && columnas.cantidad) seguimiento.cantidad_recibida ??= col
     else if (t === 'clave') columnas.clave ??= col
     else if (t.startsWith('descrip')) columnas.descripcion ??= col
     else if (t === 'unidad') columnas.unidad ??= col
@@ -134,6 +195,7 @@ export async function leerExcelExplosion(buffer: ArrayBuffer): Promise<Explosion
     else if (t === 'moneda') columnas.moneda ??= col
     else if (t === 'costo' || t === 'costo unitario') columnas.costo ??= col
     else if (t.startsWith('cantidad')) columnas.cantidad ??= col
+    else if (t.includes('se compra')) columnas.se_compra ??= col
   })
   if (!columnas.clave || !columnas.descripcion || !columnas.cantidad)
     throw new Error('Faltan columnas obligatorias: Clave, Descripción y Cantidad Necesaria.')
@@ -187,6 +249,27 @@ export async function leerExcelExplosion(buffer: ArrayBuffer): Promise<Explosion
   let sinResultado = 0
   const colMax = Math.max(...Object.values(columnas).map(Number))
 
+  /** Compras / finanzas / almacén de una fila: solo lo que trae algo */
+  const leerSeguimiento = (valor: (col: number) => ExcelJS.CellValue): Partial<LineaImportada> => {
+    const r: Partial<LineaImportada> = {}
+    const col = seguimiento
+    if (col.oc) { const oc = texto(valor(col.oc)); if (oc) r.oc = oc.slice(0, 200) }
+    if (col.comprado && marcado(valor(col.comprado))) r.comprado = true
+    if (col.estado_pago) { const e = normalizarEstado(texto(valor(col.estado_pago))); if (esEstadoPago(e)) r.estado_pago = e }
+    if (col.estado_almacen) {
+      const v = valor(col.estado_almacen)
+      const e = normalizarEstado(texto(v))
+      // Excel viejo del sistema: la columna "Almacén" era una palomita
+      if (esEstadoAlmacen(e)) r.estado_almacen = e
+      else if (marcado(v)) r.estado_almacen = 'RECIBIDO'
+    }
+    if (col.cantidad_recibida) { const n = numero(valor(col.cantidad_recibida)); if (n !== null && n > 0) r.cantidad_recibida = n }
+    for (const k of ['fecha_compra', 'fecha_estado_pago', 'fecha_almacen'] as const) {
+      if (col[k]) { const fch = fechaDe(valor(col[k]!)); if (fch) r[k] = fch }
+    }
+    return r
+  }
+
   for (let f = filaEnc + 1; f <= hoja.rowCount; f++) {
     const primera = texto(celda(f, columnas.clave))
     const t = normalizar(primera)
@@ -211,7 +294,7 @@ export async function leerExcelExplosion(buffer: ArrayBuffer): Promise<Explosion
     if (clave && otrasVacias) { unidadSeccion = clave; continue }
 
     if (!clave && !descripcion) continue
-    if (colOc && normalizar(texto(celda(f, colOc))) === 'quitado') continue
+    if (seguimiento.oc && normalizar(texto(celda(f, seguimiento.oc))) === 'quitado') continue
 
     if (formulaSinResultado(vCantidad)) sinResultado++
     if (lineas.length >= MAX_LINEAS) { avisos.push(`Solo se importaron las primeras ${MAX_LINEAS} líneas.`); break }
@@ -224,6 +307,8 @@ export async function leerExcelExplosion(buffer: ArrayBuffer): Promise<Explosion
       moneda: (columnas.moneda && texto(celda(f, columnas.moneda))) || 'Peso Mexicano',
       costo: costo ?? 0,
       cantidad: cantidad ?? 0,
+      se_compra: columnas.se_compra ? siNo(texto(celda(f, columnas.se_compra))) : null,
+      ...leerSeguimiento(c => celda(f, c)),
     })
   }
 
@@ -256,6 +341,8 @@ export interface DatosExcel {
   reporte: DatosReporte
   /** "PED-3518 · Chedraui Supercito" para títulos */
   referencia: string
+  /** Perfil almacén: Costo y Costo Estimado van vacíos y ocultos, sin totales en $ */
+  sinCostos?: boolean
   /** Órdenes de compra (PDF) subidas a la hoja */
   ordenes?: { folio: string; referencia: string; proveedor: string; fecha: string; archivo_nombre: string | null; partidas: { encontrada?: boolean }[] }[]
 }
@@ -286,9 +373,11 @@ function hojaExplosion(wb: ExcelJS.Workbook, d: DatosExcel) {
     pageSetup: { orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 } },
     views: [{ state: 'frozen', ySplit: 8 }],
   })
+  // Anchos de la plantilla de ingeniería (P-3518): I queda vacía entre la explosión y COMPRAS
   ws.columns = [
     { width: 28.3 }, { width: 54 }, { width: 16.4 }, { width: 16.4 }, { width: 15 },
-    { width: 16.6 }, { width: 22 }, { width: 17 }, { width: 14 }, { width: 10 }, { width: 14 }, { width: 10 }, { width: 14 },
+    { width: 16.6 }, { width: 22 }, { width: 17 }, { width: 4 },
+    { width: 17 }, { width: 13 }, { width: 9 }, { width: 24 }, { width: 13 }, { width: 25 }, { width: 13 }, { width: 11 }, { width: 13 }, { width: 11 },
   ]
   const enc = d.revision.encabezado
   const arial = (extra: Partial<ExcelJS.Font> = {}): Partial<ExcelJS.Font> => ({ name: 'Arial', size: 11, ...extra })
@@ -346,18 +435,53 @@ function hojaExplosion(wb: ExcelJS.Workbook, d: DatosExcel) {
   ws.getCell('H6').alignment = { horizontal: 'center' }
   ws.mergeCells('B7:F7')
 
-  // Fila 8: encabezados de columna (+ OC y Compra, nuevas)
-  const titulos = ['Clave', 'Descripción', 'Unidad', 'Clasificación', 'Moneda', 'Costo', 'Cantidad Necesaria', 'Costo Estimado', 'OC', 'Compra', 'Fecha compra', 'Almacén', 'Fecha almacén']
-  const filaEnc = ws.getRow(8)
-  titulos.forEach((t, i) => {
-    const c = filaEnc.getCell(i + 1)
-    c.value = t
+  // Leyenda de estados (N3:N5 pago, P3:P5 almacén): también es la fuente de las listas desplegables
+  for (let i = 0; i < 3; i++) {
+    for (const [col, estado] of [[14, ESTADOS_PAGO[i]], [16, ESTADOS_ALMACEN[i]]] as const) {
+      const c = ws.getCell(3 + i, col)
+      c.value = estado
+      c.font = arial({ bold: true, size: 9, color: { argb: ARGB(COLOR_ESTADO[estado].texto) } })
+      c.fill = relleno(COLOR_ESTADO[estado].fondo)
+      c.border = BORDES
+      c.alignment = { horizontal: 'center', vertical: 'middle' }
+    }
+  }
+
+  // Fila 7: grupos COMPRAS (J:L) · FINANZAS (M:N) · ALMACEN (O:R)
+  for (const [desde, hasta, nombre, color] of [[10, 12, 'COMPRAS', '#C6E0B4'], [13, 14, 'FINANZAS', '#BDD7EE'], [15, 18, 'ALMACEN', '#F8CBAD']] as const) {
+    ws.mergeCells(7, desde, 7, hasta)
+    const c = ws.getCell(7, desde)
+    c.value = nombre
     c.font = arial({ bold: true })
     c.alignment = { horizontal: 'center', vertical: 'middle' }
+    c.fill = relleno(color)
+    c.border = BORDES
+  }
+
+  // Fila 8: encabezados de columna (A–H de la explosión, I vacía, J–R seguimiento, S "Se compra")
+  const titulos: [number, string][] = [
+    [1, 'Clave'], [2, 'Descripción'], [3, 'Unidad'], [4, 'Clasificación'], [5, 'Moneda'], [6, 'Costo'], [7, 'Cantidad Necesaria'], [8, 'Costo Estimado'],
+    [10, 'ORDEN DE COMPRA'], [11, 'FECHA'], [12, 'CHECK'], [13, 'FINANZAS'], [14, 'FECHA'], [15, 'ALMACEN'], [16, 'RECIBIDO'], [17, 'FALTAN'], [18, 'FECHA'], [19, 'SE COMPRA'],
+  ]
+  const filaEnc = ws.getRow(8)
+  for (const [col, t] of titulos) {
+    const c = filaEnc.getCell(col)
+    c.value = t
+    c.font = arial({ bold: true })
+    c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: col >= 10 }
     c.border = { top: { style: 'thin' }, bottom: { style: 'double' } }
-    if (i >= 8) c.fill = relleno('#F2F2F2')
-  })
+    if (col === 10 || col === 11) c.fill = relleno('#92D050')
+    else if (col === 12) c.fill = relleno('#FFFF00')
+    else if (col >= 13) c.fill = relleno('#F2F2F2')
+  }
   filaEnc.height = 18.75
+  // Almacén: sin columnas de costo (vacías y ocultas para no mover el formato)
+  if (d.sinCostos) {
+    for (const c of [6, 8]) {
+      filaEnc.getCell(c).value = null
+      ws.getColumn(c).hidden = true
+    }
+  }
 
   // Secciones por unidad; las líneas que se quitaron van al final de su sección en rojo con cantidad 0
   const eliminadasPorUnidad = new Map<string, LineaRev[]>()
@@ -371,6 +495,8 @@ function hojaExplosion(wb: ExcelJS.Workbook, d: DatosExcel) {
   }
 
   let fila = 9
+  // Filas de partidas: para las listas desplegables y el formato condicional de M y O
+  const filasPartida: number[] = []
   for (const g of grupos) {
     ws.mergeCells(fila, 1, fila, 8)
     const sec = ws.getCell(fila, 1)
@@ -392,24 +518,42 @@ function hojaExplosion(wb: ExcelJS.Workbook, d: DatosExcel) {
       r.getCell(3).value = l.unidad
       r.getCell(4).value = l.clasificacion
       r.getCell(5).value = l.moneda
-      r.getCell(6).value = Number(l.costo) || 0
+      r.getCell(6).value = d.sinCostos ? null : Number(l.costo) || 0
       r.getCell(7).value = quitada ? 0 : Number(l.cantidad) || 0
-      r.getCell(8).value = { formula: `F${fila}*G${fila}`, result: quitada ? 0 : Math.round(Number(l.costo) * Number(l.cantidad) * 100) / 100 }
-      r.getCell(9).value = quitada ? 'QUITADO' : l.oc || ''
-      r.getCell(10).value = !quitada && l.comprado ? '✓' : ''
+      r.getCell(8).value = d.sinCostos ? null : { formula: `F${fila}*G${fila}`, result: quitada ? 0 : Math.round(Number(l.costo) * Number(l.cantidad) * 100) / 100 }
+      const pago = estadoPagoDe(l)
+      const almacen = estadoAlmacenDe(l)
+      r.getCell(10).value = quitada ? 'QUITADO' : l.oc || ''
       r.getCell(11).value = !quitada && l.fecha_compra ? fechaExcel(l.fecha_compra) : ''
-      r.getCell(12).value = !quitada && l.almacen ? '✓' : ''
-      r.getCell(13).value = !quitada && l.fecha_almacen ? fechaExcel(l.fecha_almacen) : ''
-      for (let c = 1; c <= 13; c++) {
+      r.getCell(12).value = !quitada && l.comprado ? '✓' : ''
+      r.getCell(13).value = quitada ? '' : pago
+      r.getCell(14).value = !quitada && l.fecha_estado_pago ? fechaExcel(l.fecha_estado_pago) : ''
+      r.getCell(15).value = quitada ? '' : almacen
+      r.getCell(16).value = !quitada && l.cantidad_recibida != null ? Number(l.cantidad_recibida) : ''
+      // FALTAN: fórmula (si cambian RECIBIDO en Excel se recalcula); el resultado va guardado
+      r.getCell(17).value = quitada ? '' : { formula: `MAX(0,G${fila}-P${fila})`, result: faltanDe(l) }
+      r.getCell(18).value = !quitada && l.fecha_almacen ? fechaExcel(l.fecha_almacen) : ''
+      r.getCell(19).value = l.se_compra === true ? 'SI' : l.se_compra === false ? 'NO' : ''
+      for (let c = 1; c <= 19; c++) {
+        if (c === 9) continue
         const cell = r.getCell(c)
         cell.font = arial(marca === 'disminucion' ? { color: { argb: 'FFFFFFFF' }, bold: true } : {})
         cell.border = BORDES
-        cell.alignment = { vertical: 'middle', horizontal: c >= 6 && c <= 8 ? 'right' : c >= 9 ? 'center' : 'left', wrapText: c === 2 }
+        cell.alignment = { vertical: 'middle', horizontal: c >= 6 && c <= 8 ? 'right' : c >= 10 ? 'center' : 'left', wrapText: c === 2 }
         if (c >= 6 && c <= 8) cell.numFmt = NUM
-        if (c === 11 || c === 13) cell.numFmt = 'dd/mm/yyyy'
+        if (c === 16 || c === 17) cell.numFmt = '#,##0.###'
+        if (c === 11 || c === 14 || c === 18) cell.numFmt = 'dd/mm/yyyy'
         // La clasificación conserva su color; el resto de la fila lleva el color de la revisión
         if (c === 4) cell.fill = relleno(colorClasificacion(l.clasificacion))
         else if (marca && c <= 8) cell.fill = relleno(colorMarca(marca))
+      }
+      // Estados con su color (el formato condicional los vuelve a pintar si se cambian en Excel)
+      if (!quitada) {
+        for (const [c, e] of [[13, pago], [15, almacen]] as const) {
+          r.getCell(c).fill = relleno(COLOR_ESTADO[e].fondo)
+          r.getCell(c).font = arial({ bold: true, size: 10, color: { argb: ARGB(COLOR_ESTADO[e].texto) } })
+        }
+        filasPartida.push(fila)
       }
       fila++
     }
@@ -424,7 +568,7 @@ function hojaExplosion(wb: ExcelJS.Workbook, d: DatosExcel) {
     const sumaCant = filas.reduce((s, x) => s + (x.quitada ? 0 : Number(x.l.cantidad) || 0), 0)
     const sumaCosto = filas.reduce((s, x) => s + (x.quitada ? 0 : Math.round(Number(x.l.costo) * Number(x.l.cantidad) * 100) / 100), 0)
     ws.getCell(fila, 7).value = filas.length ? { formula: `SUM(G${primera}:G${ultima})`, result: sumaCant } : 0
-    ws.getCell(fila, 8).value = filas.length ? { formula: `SUM(H${primera}:H${ultima})`, result: sumaCosto } : 0
+    ws.getCell(fila, 8).value = d.sinCostos ? null : filas.length ? { formula: `SUM(H${primera}:H${ultima})`, result: sumaCosto } : 0
     for (const c of [7, 8]) {
       ws.getCell(fila, c).font = arial({ bold: true })
       ws.getCell(fila, c).numFmt = NUM
@@ -453,7 +597,25 @@ function hojaExplosion(wb: ExcelJS.Workbook, d: DatosExcel) {
     ws.getCell(fila, 1).alignment = { wrapText: true }
   }
 
-  ws.pageSetup.printArea = `A1:M${fila}`
+  // Listas desplegables (M: $N$3:$N$5, O: $P$3:$P$5) y color por estado, como la plantilla
+  for (const f of filasPartida) {
+    ws.getCell(f, 13).dataValidation = { type: 'list', allowBlank: true, formulae: ['$N$3:$N$5'], showErrorMessage: true }
+    ws.getCell(f, 15).dataValidation = { type: 'list', allowBlank: true, formulae: ['$P$3:$P$5'], showErrorMessage: true }
+  }
+  if (filasPartida.length) {
+    const ultimaFila = filasPartida[filasPartida.length - 1]
+    for (const [col, estados] of [['M', ESTADOS_PAGO], ['O', ESTADOS_ALMACEN]] as const) {
+      ws.addConditionalFormatting({
+        ref: `${col}${filasPartida[0]}:${col}${ultimaFila}`,
+        rules: estados.map((e, i) => ({
+          type: 'cellIs' as const, operator: 'equal' as const, priority: i + 1, formulae: [`"${e}"`],
+          style: { fill: { type: 'pattern' as const, pattern: 'solid' as const, bgColor: { argb: ARGB(COLOR_ESTADO[e].fondo) } }, font: { bold: true, color: { argb: ARGB(COLOR_ESTADO[e].texto) } } },
+        })),
+      })
+    }
+  }
+
+  ws.pageSetup.printArea = `A1:S${fila}`
   ws.pageSetup.printTitlesRow = '8:8'
 }
 

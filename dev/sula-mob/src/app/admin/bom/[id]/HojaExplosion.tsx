@@ -14,10 +14,25 @@
  *   · "Descargar Excel" baja la revisión en el mismo formato, nombrada por pedido o por sucursal.
  *   · Compras: arrastrar los PDF de ORDEN DE COMPRA escribe su folio (NÚMERO) en la columna OC de
  *     cada material cuya Clave viene en la orden; se valida que la REFERENCIA sea este pedido.
- *     OC también se escribe a mano; Compra y Almacén se palomean y llevan su fecha (a mano; al
- *     palomear se propone la de hoy). Nada de esto abre revisión.
+ *     Cada OC muestra su total (leído del PDF), lo pagado y lo que falta por pagar; arriba van los
+ *     totales: Pagado · Por pagar · Falta por comprar (costo estimado de lo que no tiene OC).
+ *     OC también se escribe a mano; Compra se palomea y lleva su fecha (al palomear se propone la de hoy).
+ *   · FINANZAS y ALMACÉN por partida (como la plantilla de SULA): estado de pago (pendiente /
+ *     parcialmente pagado / pagado) y estado de almacén (por recibir / parcialmente recibido + cantidad /
+ *     recibido); la fecha se pone sola al cambiar el estado (editable). Almacén siempre es a mano.
+ *     En cada OC, "Marcar sus N partidas como…" cambia el pago de todas a la vez. Nada de esto abre revisión.
  *   · Menú "Excel" por si se subió el archivo equivocado: subir como nueva revisión, reemplazar la
  *     última revisión con otro Excel (conserva su número), eliminar la última revisión o vaciar la hoja.
+ *
+ * Modo compras (soloCompras, panel del área de madera /madera): solo se editan OC, Compra, Almacén,
+ * fechas y PDF de órdenes de compra; no se importa Excel ni se tocan materiales ni revisiones.
+ *
+ * Perfiles ERP (perfil = 'compras' | 'finanzas' | 'almacen', panel /erp): cada uno edita solo su parte
+ * (misma tabla que src/lib/admin-api.ts → puede; aquí solo muestra u oculta, las API validan):
+ *   compras  → subir/reemplazar Excel, OC (a mano y PDF), Compra + fecha
+ *   finanzas → panel de pagos de las OC
+ *   almacen  → Almacén + fecha; no se dibujan costos, totales en $ ni el panel de pagos
+ * Materiales, revisiones, cronómetro y estatus son solo del administrador.
  *
  * Responsive: en escritorio es una tabla tipo hoja (con scroll horizontal si no cabe);
  * en celular cada material es una tarjeta.
@@ -38,8 +53,129 @@ import { useRecargaAgrupada } from '@/hooks/useRecargaAgrupada';
 import {
   agruparPorUnidad, CLASIFICACIONES, colorClasificacion, colorMarca, compararRevision, costoEstimado, etiquetaRev, LEYENDA,
   hoyMexico, lineaConContenido, MONEDAS, normalizar, UNIDADES,
+  estadoPedido, resumenPedidos, type EstadoPedido,
+  COLOR_ESTADO, ESTADO_CORTO, ESTADOS_ALMACEN, ESTADOS_PAGO, estadoAlmacenDe, estadoAlmacenPorCantidad, estadoPagoDe, faltanDe, fechaMx,
+  pagadoIncompleto, resumenEstados, tieneFolio,
+  type EstadoAlmacen, type EstadoPago,
   type CambiosLinea, type CampoEditable, type EncabezadoRev, type LineaRev, type Marca, type NombrarPor, type Revision,
 } from '@/lib/explosion-revisiones';
+
+/* ═══ Estado de compra ("YA PEDIDO") ═══ */
+
+const ESTILO_PEDIDO: Record<EstadoPedido, { txt: string; css: string }> = {
+  falta: { txt: 'Falta pedir', css: 'bg-amber-100 text-amber-800 border-amber-300' },
+  pedido: { txt: 'Pedido', css: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
+  comprado: { txt: 'Comprado', css: 'bg-emerald-600 text-white border-emerald-700' },
+  almacen: { txt: 'En almacén', css: 'bg-sky-600 text-white border-sky-700' },
+  no_se_compra: { txt: 'No se compra', css: 'bg-slate-100 text-slate-400 border-slate-200' },
+};
+
+/** Pastilla con la etapa más avanzada del material y sus folios de OC */
+function PastillaPedido({ l }: { l: LineaRev }) {
+  const e = estadoPedido(l);
+  const folios = String(l.oc ?? '').split(/[,;/]+/).map(f => f.trim()).filter(Boolean);
+  const conOc = folios.length > 0 && e !== 'falta' && e !== 'no_se_compra';
+  return (
+    <span title={folios.length ? `OC ${folios.join(', ')}` : undefined}
+      className={`inline-flex items-center gap-1 max-w-full px-1.5 py-0.5 rounded-md border text-[10.5px] font-bold whitespace-nowrap overflow-hidden ${ESTILO_PEDIDO[e].css}`}>
+      <span className="truncate">{ESTILO_PEDIDO[e].txt}{conOc ? ` · OC ${folios.join(', ')}` : ''}</span>
+    </span>
+  );
+}
+
+/** Estado de FINANZAS o ALMACÉN: selector con el color de la leyenda; sin permiso, solo la pastilla */
+function SelectorEstado<E extends EstadoPago | EstadoAlmacen>({ valor, estados, disabled, onCambio, etiqueta, corto = false }: {
+  valor: E; estados: readonly E[]; disabled: boolean; onCambio: (v: E) => void; etiqueta: string; corto?: boolean;
+}) {
+  const color = COLOR_ESTADO[valor];
+  const estilo = { backgroundColor: color.fondo, color: color.texto, borderColor: `${color.texto}55` };
+  if (disabled) {
+    return (
+      <span title={valor} style={estilo} className="inline-flex max-w-full px-1.5 py-1 rounded-md border text-[10.5px] font-bold whitespace-nowrap overflow-hidden">
+        <span className="truncate">{corto ? ESTADO_CORTO[valor] : valor}</span>
+      </span>
+    );
+  }
+  return (
+    <select aria-label={etiqueta} title={valor} value={valor} onChange={e => onCambio(e.target.value as E)} style={estilo}
+      className="w-full min-w-0 px-1 py-1 rounded-md border text-[10.5px] font-bold cursor-pointer focus:outline-none focus:ring-2 focus:ring-sky-500">
+      {estados.map(e => <option key={e} value={e} style={{ backgroundColor: '#fff', color: '#0f172a' }}>{e}</option>)}
+    </select>
+  );
+}
+
+/** Fecha en dd/mm/aaaa; el <input type="date"> (cuyo formato depende del navegador) solo al dar clic */
+function FechaCelda({ valor, disabled, onCambio, etiqueta, className = '' }: {
+  valor: string | null | undefined; disabled: boolean; onCambio: (v: string | null) => void; etiqueta: string; className?: string;
+}) {
+  const [editando, setEditando] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!editando) return;
+    ref.current?.focus();
+    // Abre el calendario de una vez (el clic todavía cuenta como gesto del usuario)
+    try { ref.current?.showPicker(); } catch { /* el navegador no lo permite: queda el campo enfocado */ }
+  }, [editando]);
+  const texto = fechaMx(valor);
+  if (editando && !disabled) {
+    return (
+      <input ref={ref} type="date" aria-label={etiqueta} value={valor ?? ''} onChange={e => onCambio(e.target.value || null)} onBlur={() => setEditando(false)}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') setEditando(false); }} className={`${CAMPO_FECHA} ${className}`} />
+    );
+  }
+  if (disabled) return <span aria-label={etiqueta} className={`block px-1 py-1 text-center text-[11.5px] tabular-nums text-slate-700 ${className}`}>{texto || '—'}</span>;
+  return (
+    <button type="button" aria-label={`${etiqueta}: ${texto || 'sin fecha'}`} onClick={() => setEditando(true)}
+      className={`${CAMPO_FECHA} text-center hover:border-sky-500 ${texto ? '' : 'text-slate-400'} ${className}`}>
+      {texto || 'dd/mm/aaaa'}
+    </button>
+  );
+}
+
+/** Pastilla roja: se pagó completo pero no ha llegado todo */
+function PastillaIncompleto({ l }: { l: LineaRev }) {
+  const faltan = faltanDe(l);
+  return (
+    <span title="Finanzas = PAGADO, pero el material no ha llegado completo" className="inline-flex max-w-full items-center px-1.5 py-0.5 rounded-md border border-red-300 bg-red-100 text-red-700 text-[10px] font-extrabold whitespace-nowrap overflow-hidden">
+      <span className="truncate">⚠ Pagado · faltan {cantidadTxt(faltan)}{l.unidad ? ` ${l.unidad}` : ''}</span>
+    </span>
+  );
+}
+
+/** Cantidad recibida: "4 de 5" (de la cantidad necesaria); al enfocar se escribe el total. Se guarda al salir o con Enter */
+function CampoRecibida({ valor, necesaria, disabled, resaltar, onGuardar, className = '' }: {
+  valor: number | null | undefined; necesaria: number; disabled: boolean; resaltar: boolean; onGuardar: (n: number | null) => void; className?: string;
+}) {
+  const [texto, setTexto] = useState<string | null>(null);
+  const mostrado = texto ?? (valor != null ? `${cantidadTxt(Number(valor))} de ${cantidadTxt(necesaria)}` : '');
+  const guardar = () => {
+    if (texto === null) return;
+    const limpio = texto.replace(/[^\d.]/g, '');
+    setTexto(null);
+    const n = limpio === '' ? null : Number(limpio);
+    if (n !== (valor ?? null)) onGuardar(n !== null && Number.isFinite(n) ? n : null);
+  };
+  return (
+    <input type="text" inputMode="decimal" aria-label="Cantidad recibida" value={mostrado} disabled={disabled} autoFocus={resaltar}
+      placeholder={resaltar ? '¿Cuánto?' : '—'}
+      onFocus={() => setTexto(valor != null ? String(valor) : '')}
+      onChange={e => setTexto(e.target.value)} onBlur={guardar} onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+      className={`w-full min-w-0 px-1.5 py-1 rounded-md border text-right tabular-nums text-[11.5px] focus:border-sky-600 focus:bg-white focus:outline-none disabled:bg-transparent disabled:border-transparent ${resaltar ? 'border-amber-500 bg-amber-50 ring-2 ring-amber-300' : 'border-slate-300 bg-white/70'} ${className}`} />
+  );
+}
+
+/** Selector SI / NO / — de "Se compra o no" */
+function CampoSeCompra({ valor, disabled, onCambio }: { valor: boolean | null | undefined; disabled: boolean; onCambio: (v: boolean | null) => void }) {
+  return (
+    <select aria-label="Se compra" value={valor === true ? 'si' : valor === false ? 'no' : ''} disabled={disabled}
+      onChange={e => onCambio(e.target.value === 'si' ? true : e.target.value === 'no' ? false : null)}
+      className="w-full bg-transparent px-1 py-0.5 rounded text-center text-[11.5px] font-semibold disabled:opacity-100 disabled:appearance-none focus:outline-none focus:ring-1 focus:ring-sky-500">
+      <option value="">—</option>
+      <option value="si">SI</option>
+      <option value="no">NO</option>
+    </select>
+  );
+}
 
 /* ═══ Tipos ═══ */
 
@@ -56,10 +192,23 @@ interface Partida { id: string; clave: string; descripcion: string; cantidad: nu
 interface OrdenCompra {
   id: string; folio: string; referencia: string; proveedor: string; fecha: string;
   archivo_nombre: string | null; subido_por: string | null; created_at: string;
+  /** Importes leídos del PDF (null si el PDF no los traía o falta sql/bom_pagos_oc.sql) */
+  subtotal?: number | null; iva?: number | null; total?: number | null;
+  monto_pagado?: number | null; fecha_pago?: string | null;
   partidas: { clave: string; descripcion: string; cantidad: number; unidad: string; encontrada?: boolean }[];
 }
 
-type CambiosCompra = Partial<Pick<LineaRev, 'oc' | 'comprado' | 'fecha_compra' | 'almacen' | 'fecha_almacen'>>;
+type CambiosCompra = Partial<Pick<LineaRev, 'oc' | 'comprado' | 'fecha_compra' | 'almacen' | 'fecha_almacen' | 'estado_pago' | 'fecha_estado_pago' | 'estado_almacen' | 'cantidad_recibida'>>;
+
+export type PerfilHoja = 'admin' | 'madera' | 'compras' | 'finanzas' | 'almacen';
+
+/** Qué edita cada perfil (copia de PERMISOS en src/lib/admin-api.ts; ahí se valida de verdad) */
+const PERMISOS_HOJA: Record<'excel' | 'oc' | 'pagos' | 'almacen', PerfilHoja[]> = {
+  excel: ['admin', 'madera', 'compras'],
+  oc: ['admin', 'madera', 'compras'],
+  pagos: ['admin', 'madera', 'finanzas'],
+  almacen: ['admin', 'madera', 'almacen'],
+};
 
 interface Props {
   explosionId: string;
@@ -73,14 +222,30 @@ interface Props {
   onResumen: (resumen: ResumenHoja | null) => void;
   /** La página llama a esta función antes de "Terminar" para guardar lo pendiente */
   guardarRef: MutableRefObject<(() => Promise<void>) | null>;
+  /** Panel de madera: solo compras (OC, Compra, Almacén, fechas, PDF de OC) */
+  soloCompras?: boolean;
+  /** Clasificación con la que abre el filtro (ej. 'Madera'); si no hay de esa, se ven todas */
+  filtroInicial?: string;
+  /** Perfil que ve la hoja (default admin). Los perfiles ERP solo editan su parte */
+  perfil?: PerfilHoja;
+  /** Madera en "Subir archivos": todos los materiales (no solo los de madera) en la hoja y las descargas */
+  completa?: boolean;
+  /** Avisa qué revisión se está viendo (la página de madera la usa para sus botones de descarga) */
+  onVista?: (vista: { id: string; numero: number; estado: Revision['estado'] } | null) => void;
 }
 
 /* ═══ Constantes y helpers ═══ */
 
 const TARJETA = 'rounded-[20px] sm:rounded-[26px] border border-white/20 bg-white/[0.05] shadow-[0_32px_90px_-28px_rgba(0,0,0,0.85)] ring-1 ring-inset ring-white/10 backdrop-blur-2xl backdrop-saturate-[1.7]';
 
-/** Columnas de la tabla (escritorio): Clave · Descripción · Unidad · Clasificación · Moneda · Costo · Cantidad · Costo est. · OC · Compra · borrar */
-const COLUMNAS = 'grid grid-cols-[104px_minmax(190px,1fr)_88px_112px_104px_88px_92px_104px_92px_54px_124px_62px_124px_28px]';
+/**
+ * Columnas de la tabla (escritorio): Clave · Descripción · Unidad · Clasificación · Moneda · Costo · Cantidad · Costo est. ·
+ * Estado · Se compra · COMPRAS (OC · Fecha · Check) · FINANZAS (estado · fecha) · ALMACÉN (estado · recibido · faltan · fecha) · borrar.
+ * Clave y Descripción se quedan fijas a la izquierda al desplazar la tabla hacia las columnas de la derecha.
+ */
+const COLUMNAS = 'grid grid-cols-[104px_minmax(260px,1fr)_88px_112px_104px_88px_92px_104px_128px_64px_92px_124px_54px_150px_124px_168px_150px_76px_124px_28px]';
+/** Las mismas sin Costo ni Costo estimado (perfil almacén) */
+const COLUMNAS_SIN_COSTO = 'grid grid-cols-[104px_minmax(260px,1fr)_88px_112px_104px_92px_128px_64px_92px_124px_54px_150px_124px_168px_150px_76px_124px_28px]';
 
 const ETIQUETA_CAMPO: Record<CampoEditable, string> = {
   clave: 'clave', descripcion: 'descripción', unidad: 'unidad', clasificacion: 'clasificación',
@@ -169,13 +334,27 @@ function CampoClasificacion({ valor, disabled, onCambio }: { valor: string; disa
 /** Fondo de la hoja (las filas sin color lo usan para que la clave fija tape lo que pasa debajo) */
 const FONDO_HOJA = '#f8f7f3';
 
+/** Clave y Descripción fijas a la izquierda (necesitan fondo para tapar lo que pasa debajo) */
+const STICKY_CLAVE = 'sticky left-0 z-[2]';
+const STICKY_DESC = 'sticky left-[104px] z-[2] shadow-[6px_0_8px_-6px_rgba(0,0,0,0.25)]';
+
 const CAMPO_FECHA = 'w-full min-w-0 bg-white/70 px-1 py-1 rounded-md border border-slate-300 text-[11.5px] tabular-nums text-slate-800 focus:border-sky-600 focus:bg-white focus:outline-none disabled:bg-transparent disabled:border-transparent';
 
 const CAMPO_OC = 'w-full min-w-0 bg-white/70 px-1.5 py-1 rounded-md border border-slate-300 text-center font-mono font-semibold focus:border-sky-600 focus:bg-white focus:outline-none disabled:bg-transparent disabled:border-transparent placeholder:text-slate-300';
 
 /* ═══ Componente principal ═══ */
 
-export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegurarIniciada, onAviso, onResumen, guardarRef }: Props) {
+export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegurarIniciada, onAviso, onResumen, guardarRef, soloCompras = false, filtroInicial = 'todas', perfil = 'admin', completa = false, onVista }: Props) {
+  const extraCompleta = completa ? '&completa=1' : '';
+  // Permisos del perfil (solo para mostrar u ocultar; las API responden 403 si no le toca)
+  const permExcel = PERMISOS_HOJA.excel.includes(perfil);
+  const permOc = PERMISOS_HOJA.oc.includes(perfil);
+  const permPagos = PERMISOS_HOJA.pagos.includes(perfil);
+  const permAlmacen = PERMISOS_HOJA.almacen.includes(perfil);
+  const totalColsAntesCompras = perfil !== 'almacen' ? 10 : 8;
+  const verCostos = perfil !== 'almacen';
+  const esAdminHoja = perfil === 'admin';
+  const COLS = verCostos ? COLUMNAS : COLUMNAS_SIN_COSTO;
   const [revisiones, setRevisiones] = useState<Revision[]>([]);
   const [cargando, setCargando] = useState(true);
   const [vistaId, setVistaId] = useState<string | null>(null);
@@ -184,7 +363,11 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   const [trabajando, setTrabajando] = useState(false);
   const [mensaje, setMensaje] = useState<{ texto: string; avisos: string[] } | null>(null);
   const [busqueda, setBusqueda] = useState('');
-  const [filtroClasif, setFiltroClasif] = useState<string>('todas');
+  const [filtroClasif, setFiltroClasif] = useState<string>(filtroInicial);
+  // Filtro rápido: todos · falta pedir · pedidos · pendiente de pago · por recibir · parciales (pago o almacén)
+  const [filtroPedido, setFiltroPedido] = useState<'todos' | 'falta' | 'pedidos' | 'pend_pago' | 'por_recibir' | 'parciales' | 'pagado_incompleto'>('todos');
+  // Partidas donde se eligió PARCIALMENTE RECIBIDO y falta escribir cuánto llegó (todavía no se guardan)
+  const [esperandoCantidad, setEsperandoCantidad] = useState<Set<string>>(new Set());
   const [cerradas, setCerradas] = useState<Set<string>>(new Set());
   const [verPartidas, setVerPartidas] = useState(false);
   const [menuExcel, setMenuExcel] = useState(false);
@@ -224,7 +407,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   const cargar = useCallback(async () => {
     try {
       const [res, resOc] = await Promise.all([
-        fetch(`/api/bom/revisiones?explosion_id=${encodeURIComponent(explosionId)}`, { cache: 'no-store' }),
+        fetch(`/api/bom/revisiones?explosion_id=${encodeURIComponent(explosionId)}${extraCompleta}`, { cache: 'no-store' }),
         fetch(`/api/bom/revisiones/compras?explosion_id=${encodeURIComponent(explosionId)}`, { cache: 'no-store' }),
       ]);
       if (!res.ok) throw new Error();
@@ -247,7 +430,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
     } finally {
       setCargando(false);
     }
-  }, [explosionId, onAviso]);
+  }, [explosionId, onAviso, extraCompleta]);
 
   const recargar = useRecargaAgrupada(cargar, 400);
   useEffect(() => {
@@ -267,9 +450,13 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   const idxVista = vistaId ? Math.max(0, ordenadas.findIndex(r => r.id === vistaId)) : ordenadas.length - 1;
   const vista = ordenadas[idxVista] ?? null;
   const esUltima = !!vista && vista.id === ultima?.id;
-  const puedeEscribir = esUltima && !bloqueado && estado !== 'completado';
+  const puedeEscribir = !soloCompras && esAdminHoja && esUltima && !bloqueado && estado !== 'completado';
   const comparacion = useMemo(() => compararRevision(ordenadas, idxVista), [ordenadas, idxVista]);
   const previasPorId = useMemo(() => new Map((ordenadas[idxVista - 1]?.lineas ?? []).map(l => [l.id, l])), [ordenadas, idxVista]);
+
+  useEffect(() => {
+    onVista?.(vista ? { id: vista.id, numero: vista.numero, estado: vista.estado } : null);
+  }, [vista, onVista]);
 
   // Resumen para la página (botón Terminar, modal final)
   useEffect(() => {
@@ -277,19 +464,41 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   }, [ultima, onResumen]);
 
   const lineasVista = useMemo(() => vista?.lineas ?? [], [vista]);
+  // Si la clasificación elegida no existe en esta hoja (ej. filtro inicial "Madera" en un pedido sin madera), se ven todas
+  const filtroEfectivo = filtroClasif === 'todas' || lineasVista.some(l => normalizar(l.clasificacion) === normalizar(filtroClasif)) ? filtroClasif : 'todas';
   const filtradas = useMemo(() => {
     const t = normalizar(busqueda);
-    return lineasVista.filter(l =>
-      (filtroClasif === 'todas' || normalizar(l.clasificacion) === normalizar(filtroClasif)) &&
-      (!t || normalizar(`${l.clave} ${l.descripcion}`).includes(t)),
-    );
-  }, [lineasVista, busqueda, filtroClasif]);
+    return lineasVista.filter(l => {
+      const e = estadoPedido(l);
+      const pago = estadoPagoDe(l);
+      const alm = estadoAlmacenDe(l);
+      const pasaPedido =
+        filtroPedido === 'todos' ? true
+        : filtroPedido === 'falta' ? e === 'falta'
+        : filtroPedido === 'pedidos' ? e !== 'falta' && e !== 'no_se_compra'
+        : filtroPedido === 'pend_pago' ? pago === 'PENDIENTE DE PAGO'
+        : filtroPedido === 'por_recibir' ? alm !== 'RECIBIDO'
+        : filtroPedido === 'pagado_incompleto' ? pagadoIncompleto(l)
+        : pago === 'PARCIALMENTE PAGADO' || alm === 'PARCIALMENTE RECIBIDO';
+      // El renglón vacío (material recién agregado sin clave ni descripción) solo lo ve quien puede editar materiales
+      if (!puedeEscribir && !lineaConContenido(l)) return false;
+      return (filtroEfectivo === 'todas' || normalizar(l.clasificacion) === normalizar(filtroEfectivo)) && pasaPedido &&
+        (!t || normalizar(`${l.clave} ${l.descripcion}`).includes(t));
+    });
+  }, [lineasVista, busqueda, filtroEfectivo, filtroPedido, puedeEscribir]);
+  const pedidosResumen = useMemo(() => resumenPedidos(lineasVista), [lineasVista]);
+  const estadosResumen = useMemo(() => resumenEstados(lineasVista), [lineasVista]);
   const grupos = useMemo(() => agruparPorUnidad(filtradas), [filtradas]);
   const totalCosto = useMemo(() => lineasVista.reduce((s, l) => s + costoEstimado(l), 0), [lineasVista]);
   const conContenido = useMemo(() => lineasVista.filter(lineaConContenido), [lineasVista]);
   const compradas = conContenido.filter(l => l.comprado).length;
   const enAlmacen = conContenido.filter(l => l.almacen).length;
   const conOc = conContenido.filter(l => l.oc.trim()).length;
+  // Dinero de compras: lo de las OC subidas y lo estimado de lo que todavía no tiene OC
+  const totalOcs = ordenes.reduce((s, o) => s + (Number(o.total) || 0), 0);
+  const pagadoOcs = ordenes.reduce((s, o) => s + Math.min(Number(o.monto_pagado) || 0, Number(o.total) || Infinity), 0);
+  const porPagar = Math.max(0, totalOcs - pagadoOcs);
+  const faltaComprar = conContenido.filter(l => !l.oc.trim()).reduce((s, l) => s + costoEstimado(l), 0);
   const clasificacionesUsadas = useMemo(() => [...new Set(lineasVista.map(l => l.clasificacion).filter(Boolean))], [lineasVista]);
   const eliminadasPorUnidad = useMemo(() => {
     const m = new Map<string, LineaRev[]>();
@@ -410,6 +619,10 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
 
   /* ── Compras: OC a mano y casilla Compra (no abren revisión) ── */
   const puedeComprar = esUltima && !!ultima;
+  // OC y Compra (compras) · Almacén (almacén)
+  const editaOc = puedeComprar && permOc;
+  const editaAlmacen = puedeComprar && permAlmacen;
+  const editaPago = puedeComprar && permPagos;
 
   const enviarCompra = useCallback(async (lineaId: string) => {
     clearTimeout(timersCompra.current[lineaId]);
@@ -422,22 +635,92 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
     }, 'No se pudo guardar la OC.');
     // Solo se suelta si no se escribió algo más mientras se guardaba
     if (pendCompra.current[lineaId] === campos) delete pendCompra.current[lineaId];
+    // El cambio quedó guardado pero el aviso a otro perfil falló: se dice, no se oculta
+    if (r.ok && r.datos.aviso) onAviso(r.datos.aviso);
     if (!r.ok || r.datos.linea?.id !== lineaId) recargar();
-  }, [explosionId, pedir, recargar]);
+  }, [explosionId, pedir, recargar, onAviso]);
 
-  const cambiarCompra = useCallback((linea: LineaRev, campos: CambiosCompra, inmediato = false) => {
+  /** soloLocal: lo que el servidor calcula solo (fechas, casilla almacen) y aquí solo se muestra mientras responde */
+  const cambiarCompra = useCallback((linea: LineaRev, campos: CambiosCompra, inmediato = false, soloLocal: CambiosCompra = {}) => {
     if (!puedeComprar) return;
-    setRevisiones(prev => prev.map(r => (r.id !== linea.revision_id ? r : { ...r, lineas: r.lineas.map(l => (l.id === linea.id ? { ...l, ...campos } : l)) })));
+    setRevisiones(prev => prev.map(r => (r.id !== linea.revision_id ? r : { ...r, lineas: r.lineas.map(l => (l.id === linea.id ? { ...l, ...soloLocal, ...campos } : l)) })));
     pendCompra.current[linea.id] = { ...pendCompra.current[linea.id], ...campos };
     clearTimeout(timersCompra.current[linea.id]);
     if (inmediato) void enviarCompra(linea.id);
     else timersCompra.current[linea.id] = setTimeout(() => void enviarCompra(linea.id), 700);
   }, [puedeComprar, enviarCompra]);
 
-  /** Palomear Compra / Almacén: si no tiene fecha, propone la de hoy (se puede cambiar o borrar) */
-  const palomear = (linea: LineaRev, campo: 'comprado' | 'almacen', valor: boolean) => {
-    const campoFecha = campo === 'comprado' ? 'fecha_compra' : 'fecha_almacen';
-    cambiarCompra(linea, { [campo]: valor, ...(valor && !linea[campoFecha] ? { [campoFecha]: hoyMexico() } : {}) }, true);
+  /** Palomear Compra: si no tiene fecha, propone la de hoy (se puede cambiar o borrar) */
+  const palomear = (linea: LineaRev, valor: boolean) => {
+    cambiarCompra(linea, { comprado: valor, ...(valor && !linea.fecha_compra ? { fecha_compra: hoyMexico() } : {}) }, true);
+  };
+
+  /** FINANZAS: el servidor pone la fecha de hoy al cambiar (y la borra al regresar a pendiente) */
+  const cambiarPago = (linea: LineaRev, estado: EstadoPago) => {
+    if (estado === estadoPagoDe(linea)) return;
+    cambiarCompra(linea, { estado_pago: estado }, true, { fecha_estado_pago: estado === 'PENDIENTE DE PAGO' ? null : hoyMexico() });
+  };
+
+  const quitarEspera = (id: string) => setEsperandoCantidad(prev => { if (!prev.has(id)) return prev; const n = new Set(prev); n.delete(id); return n; });
+
+  /** ALMACÉN: siempre a mano. PARCIALMENTE RECIBIDO espera la cantidad antes de guardar */
+  const cambiarAlmacen = (linea: LineaRev, estado: EstadoAlmacen) => {
+    const antes = estadoAlmacenDe(linea);
+    if (estado === 'PARCIALMENTE RECIBIDO') {
+      const r = Number(linea.cantidad_recibida) || 0;
+      if (antes !== 'PARCIALMENTE RECIBIDO' && !(r > 0 && r < Number(linea.cantidad))) {
+        setEsperandoCantidad(prev => new Set(prev).add(linea.id));
+        return;
+      }
+    }
+    quitarEspera(linea.id);
+    if (estado === antes) return;
+    const fecha = estado === 'PENDIENTE DE RECIBIR' ? null : hoyMexico();
+    const r = Number(linea.cantidad_recibida) || 0;
+    if (estado === 'RECIBIDO') cambiarCompra(linea, { estado_almacen: estado }, true, { almacen: true, fecha_almacen: fecha, cantidad_recibida: r >= Number(linea.cantidad) ? r : linea.cantidad });
+    else if (estado === 'PENDIENTE DE RECIBIR') cambiarCompra(linea, { estado_almacen: estado }, true, { almacen: false, fecha_almacen: null, cantidad_recibida: null });
+    else cambiarCompra(linea, { estado_almacen: estado }, true, { almacen: false, fecha_almacen: fecha });
+  };
+
+  /** Lo que se ve mientras responde el servidor al cambiar la cantidad: el estado sale de la cantidad */
+  const localPorCantidad = (linea: LineaRev, n: number | null): CambiosCompra => {
+    const estado = estadoAlmacenPorCantidad(n, Number(linea.cantidad) || 0);
+    return { estado_almacen: estado, almacen: estado === 'RECIBIDO', ...(estado !== estadoAlmacenDe(linea) ? { fecha_almacen: estado === 'PENDIENTE DE RECIBIR' ? null : hoyMexico() } : {}) };
+  };
+
+  /**
+   * Total recibido escrito a mano: el estado se ajusta solo (0 → por recibir, menos → parcial, todo → recibido).
+   * Si se acaba de elegir PARCIALMENTE RECIBIDO, tiene que ser más de 0 y menos de lo necesario.
+   */
+  const guardarRecibida = (linea: LineaRev, n: number | null) => {
+    const necesaria = Number(linea.cantidad) || 0;
+    if (n !== null && Math.abs(n * 1000 - Math.round(n * 1000)) > 1e-6) { onAviso('La cantidad recibida admite hasta 3 decimales.'); return; }
+    if (esperandoCantidad.has(linea.id) && (!n || n <= 0 || (necesaria > 0 && n >= necesaria))) {
+      onAviso(`Escribe cuánto llegó (más de 0 y menos de lo necesario${necesaria ? `: ${cantidadTxt(necesaria)}` : ''}). Si llegó todo, elige RECIBIDO.`);
+      return;
+    }
+    quitarEspera(linea.id);
+    const total = n && n > 0 ? n : null;
+    cambiarCompra(linea, { cantidad_recibida: total }, true, localPorCantidad(linea, total));
+  };
+
+  /** "+ llegada": otra entrega del mismo material, se suma al total */
+  const sumarLlegada = async (linea: LineaRev) => {
+    const texto = prompt(`¿Cuánto llegó ahora de ${linea.clave || linea.descripcion}? (ya van ${cantidadTxt(Number(linea.cantidad_recibida) || 0)} de ${cantidadTxt(Number(linea.cantidad) || 0)}${linea.unidad ? ` ${linea.unidad}` : ''})`);
+    if (texto === null) return;
+    const n = Number(texto.replace(/[^\d.]/g, ''));
+    if (!Number.isFinite(n) || n <= 0) { onAviso('Escribe cuánto llegó en esta entrega (más de 0).'); return; }
+    if (Math.abs(n * 1000 - Math.round(n * 1000)) > 1e-6) { onAviso('La cantidad admite hasta 3 decimales.'); return; }
+    await Promise.all(Object.keys(pendCompra.current).map(enviarCompra));
+    const total = Math.round(((Number(linea.cantidad_recibida) || 0) + n) * 1000) / 1000;
+    setRevisiones(prev => prev.map(r => (r.id !== linea.revision_id ? r : { ...r, lineas: r.lineas.map(l => (l.id === linea.id ? { ...l, cantidad_recibida: total, ...localPorCantidad(linea, total) } : l)) })));
+    const r = await pedir('/api/bom/revisiones/compras', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ explosion_id: explosionId, linea_id: linea.id, sumar_llegada: n }),
+    }, 'No se pudo sumar la llegada.');
+    if (r.ok && r.datos.aviso) onAviso(r.datos.aviso);
+    recargar();
   };
 
   /** Sube uno o varios PDF de órdenes de compra y escribe sus folios en la columna OC */
@@ -471,10 +754,52 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
         }
         if (!res?.ok) { avisos.push(datos.error || `${archivo.name}: no se pudo leer.`); continue; }
         const o = datos.orden as OrdenCompra;
-        lineasMsg.push(`OC ${o.folio}${o.proveedor ? ` (${o.proveedor})` : ''}: ${o.partidas.length - (datos.no_encontradas?.length ?? 0)} de ${o.partidas.length} partida(s) en la hoja.`);
-        for (const p of (datos.no_encontradas ?? []) as OrdenCompra['partidas']) avisos.push(`OC ${o.folio}: ${p.clave} ${p.descripcion.slice(0, 50)} no está en la explosión.`);
+        const totalOc = Number(o.total) || 0;
+        const porPagarOc = Math.max(0, totalOc - (Number(o.monto_pagado) || 0));
+        const fuera = datos.no_encontradas?.length ?? 0;
+        const pedidosOc = o.partidas.length - fuera;
+        lineasMsg.push(`OC ${o.folio}${o.proveedor ? ` (${o.proveedor})` : ''}: ${pedidosOc} material${pedidosOc === 1 ? ' quedó' : 'es quedaron'} como PEDIDO${fuera ? `; ${fuera} clave${fuera === 1 ? ' no está' : 's no están'} en la explosión` : ''}${totalOc ? ` · total $${dinero(totalOc)} · ${porPagarOc ? `por pagar $${dinero(porPagarOc)}` : 'pagada'}` : ''}.`);
+        for (const p of (datos.no_encontradas ?? []) as OrdenCompra['partidas']) avisos.push(`La OC ${o.folio} trae ${p.clave} (${p.descripcion.slice(0, 50)}), que no está en la explosión.`);
       }
       if (lineasMsg.length || avisos.length) setMensaje({ texto: lineasMsg.join(' · ') || 'No se aplicó ninguna orden de compra.', avisos });
+      await cargar();
+    } finally {
+      setSubiendoOc(false);
+    }
+  };
+
+  /* ── Pagos de las OC (se guardan al momento; el monto escrito, al salir del campo) ── */
+  const pagarOrden = async (o: OrdenCompra, cambios: { pagada?: boolean; monto_pagado?: number; fecha_pago?: string | null }) => {
+    const extra = cambios.pagada && !o.fecha_pago ? { fecha_pago: hoyMexico() } : {};
+    setOrdenes(prev => prev.map(x => (x.id !== o.id ? x : {
+      ...x, ...extra,
+      ...(cambios.fecha_pago !== undefined ? { fecha_pago: cambios.fecha_pago } : {}),
+      ...(cambios.monto_pagado !== undefined ? { monto_pagado: cambios.monto_pagado } : {}),
+      ...(cambios.pagada !== undefined ? { monto_pagado: cambios.pagada ? Number(x.total) || 0 : 0 } : {}),
+    })));
+    const r = await pedir('/api/bom/revisiones/compras', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ explosion_id: explosionId, folio: o.folio, ...extra, ...cambios }),
+    }, 'No se pudo guardar el pago.');
+    if (!r.ok) recargar();
+  };
+
+  /** Masivo: el pago de todas las partidas de una OC (un solo aviso a almacén) */
+  const marcarPartidasOc = async (o: OrdenCompra, estado: EstadoPago, cuantas: number) => {
+    if (!confirm(`¿Marcar las ${cuantas} partida(s) de la OC ${o.folio} como ${estado}? Se pone la fecha de hoy y se avisa a almacén.`)) return;
+    setSubiendoOc(true);
+    try {
+      await Promise.all(Object.keys(pendCompra.current).map(enviarCompra));
+      const r = await pedir('/api/bom/revisiones/compras', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ explosion_id: explosionId, oc: o.folio, estado_pago: estado }),
+      }, 'No se pudo cambiar el pago de las partidas.');
+      if (r.ok) setMensaje({
+        texto: r.datos.cambiadas ? `OC ${o.folio}: ${r.datos.cambiadas} partida(s) quedaron como ${estado}.` : `Las partidas de la OC ${o.folio} ya estaban como ${estado}.`,
+        avisos: r.datos.aviso ? [r.datos.aviso] : [],
+      });
       await cargar();
     } finally {
       setSubiendoOc(false);
@@ -646,12 +971,13 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
     return () => { document.removeEventListener('mousedown', fuera); document.removeEventListener('keydown', esc); };
   }, [menuExcel]);
 
-  const descargar = async () => {
+  /** Descarga la revisión que se está viendo, en Excel o en PDF */
+  const descargar = async (formato: 'xlsx' | 'pdf' = 'xlsx') => {
     if (!vista) return;
     await guardarTodo();
     // Descarga con un enlace temporal (es un archivo de la API, no una página)
     const a = document.createElement('a');
-    a.href = `/api/bom/revisiones/excel?explosion_id=${encodeURIComponent(explosionId)}&revision_id=${encodeURIComponent(vista.id)}&nombre=${nombrarPor}`;
+    a.href = `/api/bom/revisiones/excel?explosion_id=${encodeURIComponent(explosionId)}&revision_id=${encodeURIComponent(vista.id)}&nombre=${nombrarPor}${extraCompleta}${formato === 'pdf' ? '&formato=pdf' : ''}`;
     a.rel = 'noopener';
     document.body.appendChild(a);
     a.click();
@@ -659,9 +985,9 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   };
 
   /* ── Arrastrar y soltar ── */
-  const puedeImportar = !bloqueado && estado !== 'completado';
+  const puedeImportar = !soloCompras && permExcel && !bloqueado && estado !== 'completado';
   // Los PDF de OC se pueden soltar siempre que ya haya hoja (también con la explosión terminada)
-  const aceptaArrastre = puedeImportar || !!ultima;
+  const aceptaArrastre = puedeImportar || (!!ultima && permOc);
   const eventosArrastre = aceptaArrastre ? {
     onDragEnter: (e: React.DragEvent) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); contadorArrastre.current++; setArrastrando(true); } },
     onDragOver: (e: React.DragEvent) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); },
@@ -675,8 +1001,11 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
       const excel = archivos.find(f => /\.xlsx$/i.test(f.name));
       if (excel) {
         if (puedeImportar) void importar(excel);
-        else onAviso(estado === 'completado' ? 'La explosión está terminada: da clic en "Editar" para subir otro Excel.' : 'Resuelve el estatus del pedido antes de subir el Excel.');
-      } else if (pdfs.length) void subirOrdenes(pdfs);
+        else onAviso(soloCompras ? 'Aquí solo se suben órdenes de compra (PDF). El Excel de la explosión se sube en "Subir archivos".' : !permExcel ? 'Tu perfil no sube el Excel de la explosión.' : estado === 'completado' ? 'La explosión está terminada: da clic en "Editar" para subir otro Excel.' : 'Resuelve el estatus del pedido antes de subir el Excel.');
+      } else if (pdfs.length) {
+        if (permOc) void subirOrdenes(pdfs);
+        else onAviso('Tu perfil no sube órdenes de compra.');
+      }
       else onAviso('Suelta un Excel (.xlsx) de explosión o PDF de órdenes de compra.');
     },
   } : {};
@@ -716,7 +1045,13 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
           <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
           <h2 className="text-sm font-bold text-white">Hoja de explosión</h2>
         </div>
-        {bloqueado ? (
+        {soloCompras || !permExcel ? (
+          <div className="flex flex-col items-center text-center gap-2 py-10 px-4 rounded-2xl border border-white/10 bg-white/[0.03]">
+            <Info className="w-8 h-8 text-white/40" />
+            <p className="text-sm text-white/70">Este pedido todavía no tiene explosión de materiales.</p>
+            <p className="text-xs text-white/40">{soloCompras ? 'Cuando el administrador suba el Excel, aquí podrás capturar las órdenes de compra.' : 'Cuando se suba el Excel de la explosión, aquí aparecerán sus materiales.'}</p>
+          </div>
+        ) : bloqueado ? (
           <div className="flex flex-col items-center text-center gap-3 py-10 px-4 rounded-2xl border-2 border-dashed border-red-400/25 bg-red-500/[0.04]">
             <Lock className="w-9 h-9 text-red-300/80" />
             <p className="text-sm text-red-200/90 font-semibold">Resuelve el estatus del pedido para empezar la explosión.</p>
@@ -726,7 +1061,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
           <div className="flex flex-col items-center text-center gap-2 py-10 px-4 rounded-2xl border border-white/10 bg-white/[0.03]">
             <Info className="w-8 h-8 text-white/40" />
             <p className="text-sm text-white/70">Esta explosión se terminó antes de la hoja con revisiones.</p>
-            <p className="text-xs text-white/40">Da clic en &quot;Editar&quot; arriba para abrirla e importar su Excel.</p>
+            <p className="text-xs text-white/40">{esAdminHoja ? 'Da clic en "Editar" arriba para abrirla e importar su Excel.' : 'Pide al administrador que la abra para subir su Excel.'}</p>
           </div>
         ) : (
           <div className={`flex flex-col items-center text-center gap-4 py-12 sm:py-16 px-4 rounded-2xl border-2 border-dashed transition-all ${arrastrando ? 'border-emerald-400 bg-emerald-500/10 scale-[1.01]' : 'border-white/15 bg-white/[0.02]'}`}>
@@ -739,11 +1074,11 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
               <button type="button" disabled={importando} onClick={() => elegirArchivo('siguiente')} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50">
                 <FileSpreadsheet className="w-4 h-4" /> Elegir archivo
               </button>
-              <button type="button" disabled={importando || trabajando} onClick={() => void empezarEnBlanco()} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-white/75 text-sm font-semibold border border-white/10 disabled:opacity-50">
+              {esAdminHoja && <button type="button" disabled={importando || trabajando} onClick={() => void empezarEnBlanco()} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-white/75 text-sm font-semibold border border-white/10 disabled:opacity-50">
                 {trabajando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Empezar en blanco
-              </button>
+              </button>}
             </div>
-            {estado === 'pendiente' && <p className="text-[11px] text-white/35">Al importar o capturar, el cronómetro arranca solo.</p>}
+            {estado === 'pendiente' && esAdminHoja && <p className="text-[11px] text-white/35">Al importar o capturar, el cronómetro arranca solo.</p>}
           </div>
         )}
       </section>
@@ -754,6 +1089,24 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
   const resumen = comparacion.resumen;
   const hayCambios = resumen.nuevas + resumen.modificadas + resumen.disminuciones + resumen.eliminadas > 0;
 
+  /** RECIBIDO: "4 de 5" (editable), botón "+ llegada" y aviso si llegó de más */
+  const celdaRecibido = (l: LineaRev, className = '') => {
+    const necesaria = Number(l.cantidad) || 0;
+    const recibida = Number(l.cantidad_recibida) || 0;
+    const deMas = Math.round((recibida - necesaria) * 1000) / 1000;
+    return (
+      <span className="min-w-0 flex flex-col gap-0.5">
+        <span className="flex items-center gap-1 min-w-0">
+          <CampoRecibida valor={l.cantidad_recibida} necesaria={necesaria} resaltar={esperandoCantidad.has(l.id)} disabled={!editaAlmacen} onGuardar={n => guardarRecibida(l, n)} className={className} />
+          {editaAlmacen && estadoAlmacenDe(l) !== 'PENDIENTE DE RECIBIR' && !esperandoCantidad.has(l.id) && (
+            <button type="button" onClick={() => void sumarLlegada(l)} title="Llegó otra entrega: se suma al total" className="shrink-0 px-1.5 py-1 rounded-md border border-sky-300 bg-sky-50 text-sky-800 text-[10px] font-bold whitespace-nowrap hover:bg-sky-100">+ llegada</button>
+          )}
+        </span>
+        {deMas > 0 && <span className="text-[10px] font-bold text-amber-700">+{cantidadTxt(deMas)} de más</span>}
+      </span>
+    );
+  };
+
   /* ── Una línea (escritorio) ── */
   const filaEscritorio = (l: LineaRev) => {
     const marca = comparacion.marcas[l.id];
@@ -761,21 +1114,39 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
     const tip = detalleCambios(comparacion.cambios[l.id], l.origen_id ? previasPorId.get(l.origen_id) : undefined, l);
     const off = !puedeEscribir;
     return (
-      <div key={l.id} title={tip || undefined} className={`${COLUMNAS} items-center gap-1 px-2 py-1 border-b border-slate-300/70 text-[12.5px] ${est.texto}`} style={{ backgroundColor: est.fondo ?? FONDO_HOJA }}>
-        {/* La clave se queda fija a la izquierda al desplazar la tabla hacia las fechas */}
-        <input aria-label="Clave" autoFocus={enfocar === l.id} value={l.clave} disabled={off} placeholder="Clave" onChange={e => cambiarLinea(l, { clave: e.target.value })} className={`${CAMPO_HOJA} font-mono font-semibold sticky left-0 z-[1] shadow-[6px_0_8px_-6px_rgba(0,0,0,0.25)]`} style={{ backgroundColor: est.fondo ?? FONDO_HOJA }} />
-        <input aria-label="Descripción" title={l.descripcion} value={l.descripcion} disabled={off} placeholder="Descripción del material" onChange={e => cambiarLinea(l, { descripcion: e.target.value })} className={CAMPO_HOJA} />
+      <div key={l.id} title={tip || undefined} className={`${COLS} items-center gap-1 px-2 py-1 border-b border-slate-300/70 text-[12.5px] ${est.texto}`} style={{ backgroundColor: est.fondo ?? FONDO_HOJA }}>
+        {/* Clave y descripción se quedan fijas a la izquierda al desplazar la tabla hacia COMPRAS / FINANZAS / ALMACÉN */}
+        <input aria-label="Clave" autoFocus={enfocar === l.id} value={l.clave} disabled={off} placeholder="Clave" onChange={e => cambiarLinea(l, { clave: e.target.value })} className={`${CAMPO_HOJA} font-mono font-semibold ${STICKY_CLAVE}`} style={{ backgroundColor: est.fondo ?? FONDO_HOJA }} />
+        {off ? (
+          <span title={l.descripcion} className={`px-1.5 self-stretch flex items-center ${STICKY_DESC}`} style={{ backgroundColor: est.fondo ?? FONDO_HOJA }}>
+            <span className="leading-snug line-clamp-2 break-words">{l.descripcion}</span>
+          </span>
+        ) : (
+          <input aria-label="Descripción" title={l.descripcion} value={l.descripcion} placeholder="Descripción del material" onChange={e => cambiarLinea(l, { descripcion: e.target.value })} className={`${CAMPO_HOJA} ${STICKY_DESC}`} style={{ backgroundColor: est.fondo ?? FONDO_HOJA }} />
+        )}
         <CampoLista etiqueta="Unidad" valor={l.unidad} opciones={UNIDADES} disabled={off} onCambio={v => cambiarLinea(l, { unidad: v })} />
         <CampoClasificacion valor={l.clasificacion} disabled={off} onCambio={v => cambiarLinea(l, { clasificacion: v })} />
         <CampoLista etiqueta="Moneda" valor={l.moneda} opciones={MONEDAS} disabled={off} onCambio={v => cambiarLinea(l, { moneda: v })} />
-        <CampoNumero etiqueta="Costo" valor={l.costo} disabled={off} onCambio={n => cambiarLinea(l, { costo: n })} />
+        {verCostos && <CampoNumero etiqueta="Costo" valor={l.costo} disabled={off} onCambio={n => cambiarLinea(l, { costo: n })} />}
         <CampoNumero etiqueta="Cantidad necesaria" valor={l.cantidad} disabled={off} onCambio={n => cambiarLinea(l, { cantidad: n })} className="font-bold" />
-        <span className="text-right tabular-nums px-1.5 font-semibold">{dinero(costoEstimado(l))}</span>
-        <input aria-label="Orden de compra" title={l.oc ? `OC ${l.oc}` : 'Folio de la orden de compra'} value={l.oc} disabled={!puedeComprar} placeholder="—" onChange={e => cambiarCompra(l, { oc: e.target.value })} className={`${CAMPO_OC} text-[11.5px]`} />
-        <span className="flex justify-center"><input type="checkbox" checked={l.comprado} disabled={!puedeComprar} onChange={e => palomear(l, 'comprado', e.target.checked)} aria-label="Compra" title="Comprado" className="w-4 h-4 accent-emerald-600 cursor-pointer disabled:cursor-default" /></span>
-        <input type="date" aria-label="Fecha de compra" value={l.fecha_compra ?? ''} disabled={!puedeComprar} onChange={e => cambiarCompra(l, { fecha_compra: e.target.value || null }, true)} className={CAMPO_FECHA} />
-        <span className="flex justify-center"><input type="checkbox" checked={l.almacen} disabled={!puedeComprar} onChange={e => palomear(l, 'almacen', e.target.checked)} aria-label="Almacén" title="Recibido en almacén" className="w-4 h-4 accent-sky-600 cursor-pointer disabled:cursor-default" /></span>
-        <input type="date" aria-label="Fecha de almacén" value={l.fecha_almacen ?? ''} disabled={!puedeComprar} onChange={e => cambiarCompra(l, { fecha_almacen: e.target.value || null }, true)} className={CAMPO_FECHA} />
+        {verCostos && <span className="text-right tabular-nums px-1.5 font-semibold">{dinero(costoEstimado(l))}</span>}
+        <span className="px-0.5 min-w-0"><PastillaPedido l={l} /></span>
+        <CampoSeCompra valor={l.se_compra} disabled={off} onCambio={v => cambiarLinea(l, { se_compra: v })} />
+        {/* COMPRAS: orden de compra · fecha · check */}
+        <input aria-label="Orden de compra" title={l.oc ? `OC ${l.oc}` : 'Folio de la orden de compra'} value={l.oc} disabled={!editaOc} placeholder="—" onChange={e => cambiarCompra(l, { oc: e.target.value })} className={`${CAMPO_OC} text-[11.5px]`} />
+        <FechaCelda etiqueta="Fecha de compra" valor={l.fecha_compra} disabled={!editaOc} onCambio={v => cambiarCompra(l, { fecha_compra: v }, true)} />
+        <span className="flex justify-center"><input type="checkbox" checked={l.comprado} disabled={!editaOc} onChange={e => palomear(l, e.target.checked)} aria-label="Compra" title="Comprado" className="w-4 h-4 accent-emerald-600 cursor-pointer disabled:cursor-default" /></span>
+        {/* FINANZAS: estado · fecha */}
+        <span className="min-w-0"><SelectorEstado etiqueta="Estado de pago" valor={estadoPagoDe(l)} estados={ESTADOS_PAGO} disabled={!editaPago} onCambio={v => cambiarPago(l, v)} /></span>
+        <FechaCelda etiqueta="Fecha del estado de pago" valor={l.fecha_estado_pago} disabled={!editaPago} onCambio={v => cambiarCompra(l, { fecha_estado_pago: v }, true)} />
+        {/* ALMACÉN: estado · recibido · faltan · fecha */}
+        <span className="min-w-0 flex flex-col gap-0.5">
+          <SelectorEstado etiqueta="Estado de almacén" valor={esperandoCantidad.has(l.id) ? 'PARCIALMENTE RECIBIDO' : estadoAlmacenDe(l)} estados={ESTADOS_ALMACEN} disabled={!editaAlmacen} onCambio={v => cambiarAlmacen(l, v)} />
+          {pagadoIncompleto(l) && <PastillaIncompleto l={l} />}
+        </span>
+        {celdaRecibido(l)}
+        <span className={`text-right tabular-nums px-1.5 ${faltanDe(l) > 0 ? 'font-bold text-red-700' : 'text-slate-400'}`} title="Cantidad necesaria − recibido">{cantidadTxt(faltanDe(l))}</span>
+        <FechaCelda etiqueta="Fecha de almacén" valor={l.fecha_almacen} disabled={!editaAlmacen} onCambio={v => cambiarCompra(l, { fecha_almacen: v }, true)} />
         {puedeEscribir ? (
           <button type="button" onClick={() => void eliminarLinea(l)} aria-label="Quitar material" className="flex justify-center opacity-40 hover:opacity-100 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
         ) : <span />}
@@ -800,19 +1171,49 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
         <div className="grid grid-cols-2 gap-2">
           <label className={campoChico}>Cantidad<span className="normal-case text-sm font-bold opacity-100"><CampoNumero etiqueta="Cantidad necesaria" valor={l.cantidad} disabled={off} onCambio={n => cambiarLinea(l, { cantidad: n })} className="text-left!" /></span></label>
           <label className={campoChico}>Unidad<span className="normal-case text-sm font-normal"><CampoLista etiqueta="Unidad" valor={l.unidad} opciones={UNIDADES} disabled={off} onCambio={v => cambiarLinea(l, { unidad: v })} /></span></label>
-          <label className={campoChico}>Costo<span className="normal-case text-sm font-normal"><CampoNumero etiqueta="Costo" valor={l.costo} disabled={off} onCambio={n => cambiarLinea(l, { costo: n })} className="text-left!" /></span></label>
+          {verCostos && <label className={campoChico}>Costo<span className="normal-case text-sm font-normal"><CampoNumero etiqueta="Costo" valor={l.costo} disabled={off} onCambio={n => cambiarLinea(l, { costo: n })} className="text-left!" /></span></label>}
           <label className={campoChico}>Moneda<span className="normal-case text-sm font-normal"><CampoLista etiqueta="Moneda" valor={l.moneda} opciones={MONEDAS} disabled={off} onCambio={v => cambiarLinea(l, { moneda: v })} /></span></label>
         </div>
         {tip && <p className="text-[11px] font-semibold opacity-80">{tip}</p>}
+        <div className="flex items-center justify-between gap-2">
+          <PastillaPedido l={l} />
+          <label className="flex items-center gap-1.5 text-[11px] font-bold">Se compra<span className="w-16"><CampoSeCompra valor={l.se_compra} disabled={off} onCambio={v => cambiarLinea(l, { se_compra: v })} /></span></label>
+        </div>
         <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-black/10 text-[12px]">
-          <span>Costo est. <b className="tabular-nums">${dinero(costoEstimado(l))}</b></span>
-          <span className="order-last w-full grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 pt-1">
-            <span className="font-bold">OC</span>
-            <input aria-label="Orden de compra" value={l.oc} disabled={!puedeComprar} placeholder="—" onChange={e => cambiarCompra(l, { oc: e.target.value })} className={`${CAMPO_OC} text-[13px]`} />
-            <label className="flex items-center gap-1.5 font-bold"><input type="checkbox" checked={l.comprado} disabled={!puedeComprar} onChange={e => palomear(l, 'comprado', e.target.checked)} aria-label="Compra" className="w-5 h-5 accent-emerald-600" />Compra</label>
-            <input type="date" aria-label="Fecha de compra" value={l.fecha_compra ?? ''} disabled={!puedeComprar} onChange={e => cambiarCompra(l, { fecha_compra: e.target.value || null }, true)} className={`${CAMPO_FECHA} text-[13px] py-1.5`} />
-            <label className="flex items-center gap-1.5 font-bold"><input type="checkbox" checked={l.almacen} disabled={!puedeComprar} onChange={e => palomear(l, 'almacen', e.target.checked)} aria-label="Almacén" className="w-5 h-5 accent-sky-600" />Almacén</label>
-            <input type="date" aria-label="Fecha de almacén" value={l.fecha_almacen ?? ''} disabled={!puedeComprar} onChange={e => cambiarCompra(l, { fecha_almacen: e.target.value || null }, true)} className={`${CAMPO_FECHA} text-[13px] py-1.5`} />
+          {verCostos && <span>Costo est. <b className="tabular-nums">${dinero(costoEstimado(l))}</b></span>}
+          <span className="order-last w-full space-y-2 pt-1">
+            {/* COMPRAS */}
+            <span className="block rounded-lg border-l-4 border-emerald-600 bg-white/60 p-2 space-y-1.5">
+              <span className="block text-[10px] font-extrabold uppercase tracking-wide text-emerald-800">Compras</span>
+              <span className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5">
+                <span className="font-bold">OC</span>
+                <input aria-label="Orden de compra" value={l.oc} disabled={!editaOc} placeholder="—" onChange={e => cambiarCompra(l, { oc: e.target.value })} className={`${CAMPO_OC} text-[13px]`} />
+                <label className="flex items-center gap-1.5 font-bold"><input type="checkbox" checked={l.comprado} disabled={!editaOc} onChange={e => palomear(l, e.target.checked)} aria-label="Compra" className="w-5 h-5 accent-emerald-600" />Check</label>
+                <FechaCelda etiqueta="Fecha de compra" valor={l.fecha_compra} disabled={!editaOc} onCambio={v => cambiarCompra(l, { fecha_compra: v }, true)} className="text-[13px] py-1.5 w-[140px]" />
+              </span>
+            </span>
+            {/* FINANZAS */}
+            <span className="block rounded-lg border-l-4 border-blue-700 bg-white/60 p-2 space-y-1.5">
+              <span className="block text-[10px] font-extrabold uppercase tracking-wide text-blue-800">Finanzas</span>
+              <span className="grid grid-cols-[1fr_auto] items-center gap-2">
+                <SelectorEstado etiqueta="Estado de pago" valor={estadoPagoDe(l)} estados={ESTADOS_PAGO} disabled={!editaPago} onCambio={v => cambiarPago(l, v)} />
+                <FechaCelda etiqueta="Fecha del estado de pago" valor={l.fecha_estado_pago} disabled={!editaPago} onCambio={v => cambiarCompra(l, { fecha_estado_pago: v }, true)} className="text-[13px] py-1.5 w-[140px]" />
+              </span>
+            </span>
+            {/* ALMACÉN */}
+            <span className="block rounded-lg border-l-4 border-amber-600 bg-white/60 p-2 space-y-1.5">
+              <span className="block text-[10px] font-extrabold uppercase tracking-wide text-amber-800">Almacén</span>
+              <SelectorEstado etiqueta="Estado de almacén" valor={esperandoCantidad.has(l.id) ? 'PARCIALMENTE RECIBIDO' : estadoAlmacenDe(l)} estados={ESTADOS_ALMACEN} disabled={!editaAlmacen} onCambio={v => cambiarAlmacen(l, v)} />
+              {pagadoIncompleto(l) && <PastillaIncompleto l={l} />}
+              <span className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5">
+                <span className="font-bold text-[11px]">Recibido</span>
+                {celdaRecibido(l, 'text-[13px] py-1.5')}
+                <span className="font-bold text-[11px]">Faltan</span>
+                <span className={`tabular-nums text-[13px] ${faltanDe(l) > 0 ? 'font-bold text-red-700' : 'text-slate-500'}`}>{cantidadTxt(faltanDe(l))}{l.unidad ? ` ${l.unidad}` : ''}</span>
+                <span className="font-bold text-[11px]">Fecha</span>
+                <FechaCelda etiqueta="Fecha de almacén" valor={l.fecha_almacen} disabled={!editaAlmacen} onCambio={v => cambiarCompra(l, { fecha_almacen: v }, true)} className="text-[13px] py-1.5 w-[140px]" />
+              </span>
+            </span>
           </span>
           {puedeEscribir && (
             <button type="button" onClick={() => void eliminarLinea(l)} aria-label="Quitar material" className="p-1.5 -m-1 opacity-50 hover:opacity-100 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
@@ -829,15 +1230,15 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
       <p className="text-[10px] font-bold uppercase mt-1">Quitado en {etiquetaRev(vista.numero)} · antes {cantidadTxt(l.cantidad)} {l.unidad}</p>
     </div>
   ) : (
-    <div key={`q-${l.id}`} title={`Quitado en ${etiquetaRev(vista.numero)}`} className={`${COLUMNAS} items-center gap-1 px-2 py-1.5 border-b border-red-200 bg-red-50 text-[12.5px] text-red-700`}>
-      <span className="px-1.5 font-mono line-through sticky left-0 z-[1] bg-red-50">{l.clave}</span>
-      <span className="px-1.5 line-through truncate">{l.descripcion}</span>
+    <div key={`q-${l.id}`} title={`Quitado en ${etiquetaRev(vista.numero)}`} className={`${COLS} items-center gap-1 px-2 py-1.5 border-b border-red-200 bg-red-50 text-[12.5px] text-red-700`}>
+      <span className={`px-1.5 font-mono line-through bg-red-50 ${STICKY_CLAVE}`}>{l.clave}</span>
+      <span className={`px-1.5 line-through line-clamp-2 bg-red-50 ${STICKY_DESC}`}>{l.descripcion}</span>
       <span className="px-1.5">{l.unidad}</span>
       <span className="px-1.5">{l.clasificacion}</span>
       <span className="px-1.5">{l.moneda}</span>
-      <span className="px-1.5 text-right tabular-nums">{dinero(l.costo)}</span>
+      {verCostos && <span className="px-1.5 text-right tabular-nums">{dinero(l.costo)}</span>}
       <span className="px-1.5 text-right tabular-nums line-through">{cantidadTxt(l.cantidad)}</span>
-      <span className="px-1.5 text-right text-[10px] font-bold uppercase col-span-7">Quitado</span>
+      <span className={`px-1.5 text-right text-[10px] font-bold uppercase ${verCostos ? 'col-span-13' : 'col-span-12'}`}>Quitado</span>
     </div>
   );
 
@@ -852,7 +1253,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
           <Upload className="w-12 h-12 text-emerald-300" />
           <p className="text-lg font-bold text-white text-center px-4">Suelta aquí</p>
           <p className="text-xs text-emerald-100/80 text-center px-4 max-w-md">
-            {puedeImportar ? `Excel → se importa como ${ultima?.estado === 'borrador' ? etiquetaRev(ultima.numero) : etiquetaRev((ultima?.numero ?? -1) + 1)}` : 'Excel: la explosión no admite otro archivo ahora'} · PDF de órdenes de compra → su folio va a la columna OC
+            {soloCompras || !puedeImportar && !esAdminHoja ? 'PDF de órdenes de compra → su folio va a la columna OC' : <>{puedeImportar ? `Excel → se importa como ${ultima?.estado === 'borrador' ? etiquetaRev(ultima.numero) : etiquetaRev((ultima?.numero ?? -1) + 1)}` : 'Excel: la explosión no admite otro archivo ahora'} · PDF de órdenes de compra → su folio va a la columna OC</>}
           </p>
         </div>
       )}
@@ -877,10 +1278,16 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
               </button>
             ))}
           </div>
-          <button type="button" onClick={() => void descargar()} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">
-            <Download className="w-4 h-4" /> Descargar {etiquetaRev(vista.numero)}
-          </button>
-          {estado !== 'completado' && ultima && (
+          {/* Descargar la revisión que se ve: Excel (formato SULA) o PDF */}
+          <div className="inline-flex rounded-xl overflow-hidden shadow-sm" role="group" aria-label={`Descargar ${etiquetaRev(vista.numero)}`}>
+            <button type="button" onClick={() => void descargar('xlsx')} title="Descargar en Excel (formato SULA)" className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">
+              <Download className="w-4 h-4" /> Excel {etiquetaRev(vista.numero)}
+            </button>
+            <button type="button" onClick={() => void descargar('pdf')} title="Descargar en PDF" className="inline-flex items-center gap-1.5 px-3 py-2 bg-red-600/90 hover:bg-red-500 text-white text-xs font-semibold border-l border-white/20">
+              <FileText className="w-4 h-4" /> PDF
+            </button>
+          </div>
+          {!soloCompras && permExcel && estado !== 'completado' && ultima && (esAdminHoja || !bloqueado) && (
             <div ref={menuRef}>
               <button type="button" disabled={importando || trabajando} onClick={() => setMenuExcel(v => !v)} aria-haspopup="menu" aria-expanded={menuExcel} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-white/75 text-xs font-semibold border border-white/10 disabled:opacity-50">
                 {importando || trabajando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} Excel <ChevronDown className="w-3.5 h-3.5" />
@@ -900,6 +1307,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
                     </button>
                     <div className="my-1 h-px bg-white/10" />
                   </>)}
+                  {esAdminHoja && (<>
                   <button type="button" role="menuitem" onClick={() => { setMenuExcel(false); void quitarRevisiones('eliminar_ultima'); }} className="w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-xl hover:bg-red-500/10">
                     <Trash2 className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
                     <span className="min-w-0 flex-1"><span className="block text-xs font-semibold text-red-200">Eliminar {etiquetaRev(ultima.numero)}</span>
@@ -912,6 +1320,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
                         <span className="block text-[11px] text-white/45">Borra todas las revisiones y empiezas de cero</span></span>
                     </button>
                   )}
+                  </>)}
                 </div>
               )}
             </div>
@@ -1019,7 +1428,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
             <div className="text-[11px] sm:text-right text-slate-600 col-start-2 sm:col-start-auto">
               <p><b className="text-slate-800">PÁGINA:</b> 1/1</p>
               <label className="inline-flex items-center gap-1"><b className="text-slate-800">FECHA:</b>
-                <input type="date" value={enc.fecha || ''} disabled={!puedeEscribir} onChange={e => cambiarEncabezado('fecha', e.target.value)} className={`${CAMPO_HOJA} w-auto py-0.5 text-[11px]`} aria-label="Fecha" />
+                <FechaCelda etiqueta="Fecha" valor={enc.fecha || null} disabled={!puedeEscribir} onCambio={v => cambiarEncabezado('fecha', v ?? '')} className="w-auto text-[11px]" />
               </label>
             </div>
           </div>
@@ -1054,8 +1463,22 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
             <span title="Materiales con folio de orden de compra">Con OC <b className="text-slate-900">{conOc}</b></span>
             <span title="Casilla Compra palomeada">Comprados <b className="text-emerald-700">{compradas}/{conContenido.length}</b></span>
             <span title="Casilla Almacén palomeada">En almacén <b className="text-sky-700">{enAlmacen}/{conContenido.length}</b></span>
-            <span>Costo estimado <b className="text-slate-900 tabular-nums">${dinero(totalCosto)}</b></span>
+            {verCostos && <span>Costo estimado <b className="text-slate-900 tabular-nums">${dinero(totalCosto)}</b></span>}
           </div>
+          {conContenido.length > 0 && (
+            <div className="w-full flex items-center gap-x-4 gap-y-1 flex-wrap text-[11.5px] text-slate-700">
+              <span><b className="text-blue-800">Finanzas:</b> Pagadas <b className="text-emerald-700">{estadosResumen.pagadas}</b> · Parciales <b className="text-amber-700">{estadosResumen.pagoParcial}</b> · Pendientes <b className="text-red-700">{estadosResumen.pagoPendiente}</b></span>
+              <span><b className="text-amber-800">Almacén:</b> Recibidas <b className="text-emerald-700">{estadosResumen.recibidas}</b> · Parciales <b className="text-amber-700">{estadosResumen.recibidoParcial}</b> · Por recibir <b className="text-red-700">{estadosResumen.porRecibir}</b>{estadosResumen.pagadoIncompleto > 0 && <> · <b className="text-red-700">⚠ Pagado incompleto {estadosResumen.pagadoIncompleto}</b></>}</span>
+            </div>
+          )}
+          {pedidosResumen.seCompran + pedidosResumen.noSeCompran > 0 && (
+            <div className="flex items-center gap-3 flex-wrap text-[12px] text-slate-700">
+              <span><b className="text-emerald-700">Pedidos {pedidosResumen.pedidos} de {pedidosResumen.seCompran}</b> · Faltan <b className="text-amber-700">{pedidosResumen.faltan}</b>{pedidosResumen.noSeCompran > 0 && <> · No se compran <b className="text-slate-500">{pedidosResumen.noSeCompran}</b></>}</span>
+              <span className="flex-1 min-w-[120px] max-w-xs h-2 rounded-full bg-slate-200 overflow-hidden" role="progressbar" aria-label="Materiales pedidos" aria-valuemin={0} aria-valuemax={pedidosResumen.seCompran} aria-valuenow={pedidosResumen.pedidos}>
+                <span className="block h-full bg-emerald-500 transition-all" style={{ width: `${pedidosResumen.seCompran ? Math.round((pedidosResumen.pedidos / pedidosResumen.seCompran) * 100) : 0}%` }} />
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Herramientas: buscar, filtrar por clasificación, partidas */}
@@ -1066,10 +1489,25 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
           </label>
           <div className="flex items-center gap-1 overflow-x-auto max-w-full">
             {['todas', ...clasificacionesUsadas].map(c => (
-              <button key={c} type="button" onClick={() => setFiltroClasif(c)} aria-pressed={filtroClasif === c}
-                className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold transition-all ${filtroClasif === c ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 bg-white text-slate-600 hover:border-slate-500'}`}>
+              <button key={c} type="button" onClick={() => setFiltroClasif(c)} aria-pressed={normalizar(filtroEfectivo) === normalizar(c)}
+                className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold transition-all ${normalizar(filtroEfectivo) === normalizar(c) ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 bg-white text-slate-600 hover:border-slate-500'}`}>
                 {c !== 'todas' && <span className="w-2.5 h-2.5 rounded-full border border-black/15" style={{ backgroundColor: colorClasificacion(c) }} />}
                 {c === 'todas' ? 'Todas' : c}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1 overflow-x-auto max-w-full" role="group" aria-label="Filtrar por estado de compra, pago o almacén">
+            {([
+              ['falta', 'Falta pedir', 'border-amber-500 bg-amber-100 text-amber-900', pedidosResumen.faltan],
+              ['pedidos', 'Pedidos', 'border-emerald-600 bg-emerald-100 text-emerald-900', pedidosResumen.pedidos],
+              ['pend_pago', 'Pendiente de pago', 'border-red-500 bg-red-100 text-red-900', estadosResumen.pagoPendiente],
+              ['por_recibir', 'Por recibir', 'border-red-500 bg-red-100 text-red-900', estadosResumen.porRecibir + estadosResumen.recibidoParcial],
+              ['parciales', 'Parciales', 'border-amber-500 bg-amber-100 text-amber-900', conContenido.filter(l => estadoPagoDe(l) === 'PARCIALMENTE PAGADO' || estadoAlmacenDe(l) === 'PARCIALMENTE RECIBIDO').length],
+              ['pagado_incompleto', '⚠ Pagado incompleto', 'border-red-600 bg-red-100 text-red-900', estadosResumen.pagadoIncompleto],
+            ] as const).map(([v, txt, activo, n]) => (
+              <button key={v} type="button" onClick={() => setFiltroPedido(f => (f === v ? 'todos' : v))} aria-pressed={filtroPedido === v}
+                className={`shrink-0 px-2.5 py-1 rounded-full border text-[11px] font-semibold transition-all ${filtroPedido === v ? activo : 'border-slate-300 bg-white text-slate-600 hover:border-slate-500'}`}>
+                {txt} <span className="opacity-60">{n}</span>
               </button>
             ))}
           </div>
@@ -1081,27 +1519,80 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
           )}
         </div>
 
-        {/* Órdenes de compra subidas (PDF) */}
-        {esUltima && (
-          <div className="px-3 sm:px-6 py-2.5 flex items-center gap-2 flex-wrap border-b border-slate-300 bg-emerald-50/50">
-            <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wide text-slate-600"><ShoppingCart className="w-3.5 h-3.5" /> Órdenes de compra</span>
-            {ordenes.length === 0 && <span className="text-[11px] text-slate-500">Arrastra aquí los PDF o súbelos con el botón.</span>}
-            {ordenes.map(o => {
-              const enHoja = o.partidas.filter(p => p.encontrada).length;
-              return (
-                <span key={o.id} title={`${o.archivo_nombre ?? ''}${o.fecha ? ` · ${o.fecha}` : ''}${o.referencia ? ` · Ref. ${o.referencia}` : ''}${o.subido_por ? ` · subió ${o.subido_por}` : ''}`}
-                  className="inline-flex items-center gap-1.5 pl-2.5 pr-1 py-1 rounded-full border border-emerald-300 bg-white text-[11px] text-slate-700 max-w-full">
-                  <FileText className="w-3 h-3 text-emerald-700 shrink-0" />
-                  <b className="font-mono">OC {o.folio}</b>
-                  {o.proveedor && <span className="truncate max-w-[140px] text-slate-500">{o.proveedor}</span>}
-                  <span className={`font-semibold ${enHoja === o.partidas.length ? 'text-emerald-700' : 'text-amber-700'}`}>{enHoja}/{o.partidas.length}</span>
-                  <button type="button" disabled={subiendoOc} onClick={() => void quitarOrden(o)} aria-label={`Quitar OC ${o.folio}`} className="p-0.5 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"><X className="w-3 h-3" /></button>
-                </span>
-              );
-            })}
-            <button type="button" disabled={subiendoOc} onClick={() => inputPdf.current?.click()} className="ml-auto shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-emerald-600 bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-500 disabled:opacity-50">
-              {subiendoOc ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Subir OC (PDF)
-            </button>
+        {/* ═══ Órdenes de compra: pagado / por pagar ═══ */}
+        {esUltima && verCostos && (
+          <div className="px-3 sm:px-6 py-3 border-b border-slate-300 bg-emerald-50/50 space-y-2.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wide text-slate-600"><ShoppingCart className="w-3.5 h-3.5" /> Órdenes de compra</span>
+              {ordenes.length === 0 && <span className="text-[11px] text-slate-500">{permOc ? 'Arrastra aquí los PDF o súbelos con el botón.' : 'Todavía no hay órdenes de compra.'}</span>}
+              {permOc && <button type="button" disabled={subiendoOc} onClick={() => inputPdf.current?.click()} className="ml-auto shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-emerald-600 bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-500 disabled:opacity-50">
+                {subiendoOc ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Subir OC (PDF)
+              </button>}
+            </div>
+
+            {/* Totales */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { t: 'Total en OC', v: totalOcs, c: 'text-slate-900', d: `${ordenes.length} orden(es)` },
+                { t: 'Pagado', v: pagadoOcs, c: 'text-emerald-700', d: totalOcs ? `${Math.round((pagadoOcs / totalOcs) * 100)}% del total` : '—' },
+                { t: 'Por pagar', v: porPagar, c: porPagar > 0 ? 'text-red-600' : 'text-slate-500', d: porPagar > 0 ? `${ordenes.filter(o => (Number(o.total) || 0) - (Number(o.monto_pagado) || 0) > 0.009).length} OC con saldo` : 'Todo pagado' },
+                { t: 'Falta por comprar', v: faltaComprar, c: 'text-amber-700', d: `${conContenido.length - conOc} material(es) sin OC · estimado` },
+              ].map(k => (
+                <div key={k.t} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{k.t}</p>
+                  <p className={`text-[15px] sm:text-base font-extrabold tabular-nums ${k.c}`}>${dinero(k.v)}</p>
+                  <p className="text-[10px] text-slate-500">{k.d}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Cada OC: total, pagado, saldo, fecha de pago */}
+            {ordenes.length > 0 && (
+              <div className="rounded-xl border border-slate-200 bg-white divide-y divide-slate-200 overflow-hidden">
+                {ordenes.map(o => {
+                  const total = Number(o.total) || 0;
+                  const pagado = Number(o.monto_pagado) || 0;
+                  const saldo = Math.max(0, total - pagado);
+                  const enHoja = o.partidas.filter(p => p.encontrada).length;
+                  const pagada = total > 0 && saldo < 0.01;
+                  const partidasOc = conContenido.filter(l => tieneFolio(l.oc, o.folio)).length;
+                  return (
+                    <div key={o.id} className="px-3 py-2 grid gap-2 md:grid-cols-[minmax(0,1.4fr)_auto_auto_auto_auto_auto] md:items-center text-[12px]">
+                      {permPagos && partidasOc > 0 && (
+                        <div className="md:col-span-6 md:order-last flex items-center gap-1.5 flex-wrap text-[11px] text-slate-600">
+                          <span>Marcar sus {partidasOc} partida{partidasOc === 1 ? '' : 's'} como →</span>
+                          {(['PARCIALMENTE PAGADO', 'PAGADO'] as const).map(e => (
+                            <button key={e} type="button" disabled={subiendoOc} onClick={() => void marcarPartidasOc(o, e, partidasOc)}
+                              style={{ backgroundColor: COLOR_ESTADO[e].fondo, color: COLOR_ESTADO[e].texto, borderColor: `${COLOR_ESTADO[e].texto}55` }}
+                              className="px-2 py-0.5 rounded-md border font-bold disabled:opacity-50">
+                              {e === 'PAGADO' ? 'Pagado' : 'Parcialmente pagado'}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex items-center gap-2" title={`${o.archivo_nombre ?? ''}${o.referencia ? ` · Ref. ${o.referencia}` : ''}${o.subido_por ? ` · subió ${o.subido_por}` : ''}`}>
+                        <FileText className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                        <b className="font-mono shrink-0">OC {o.folio}</b>
+                        <span className="truncate text-slate-500">{o.proveedor || '—'}{o.fecha ? ` · ${o.fecha}` : ''}</span>
+                        <span className={`shrink-0 font-semibold ${enHoja === o.partidas.length ? 'text-emerald-700' : 'text-amber-700'}`} title="Partidas de la OC encontradas en la hoja">{enHoja}/{o.partidas.length}</span>
+                      </div>
+                      <span className="tabular-nums text-slate-700">Total <b>{total ? `$${dinero(total)}` : '—'}</b></span>
+                      <label className="flex items-center gap-1 text-slate-600">Pagado $
+                        <input key={`${o.id}-${pagado}`} type="text" inputMode="decimal" defaultValue={pagado ? String(pagado) : ''} placeholder="0" aria-label={`Pagado de la OC ${o.folio}`} disabled={!permPagos}
+                          onBlur={e => { const n = Number(e.target.value.replace(/[^\d.]/g, '')) || 0; if (n !== pagado) void pagarOrden(o, { monto_pagado: n }); }}
+                          className="w-24 px-1.5 py-1 rounded-md border border-slate-300 text-right tabular-nums focus:border-sky-600 focus:outline-none disabled:bg-transparent disabled:border-transparent" />
+                      </label>
+                      <span className={`tabular-nums font-bold ${saldo > 0 ? 'text-red-600' : 'text-emerald-700'}`}>{total ? (saldo > 0 ? `Por pagar $${dinero(saldo)}` : 'Pagada') : 'Sin total en PDF'}</span>
+                      <label className="flex items-center gap-1.5 text-slate-600">
+                        <input type="checkbox" checked={pagada} disabled={!total || !permPagos} onChange={e => void pagarOrden(o, { pagada: e.target.checked })} aria-label={`OC ${o.folio} pagada`} className="w-4 h-4 accent-emerald-600" />
+                        <FechaCelda etiqueta={`Fecha de pago de la OC ${o.folio}`} valor={o.fecha_pago ?? null} disabled={!permPagos} onCambio={v => void pagarOrden(o, { fecha_pago: v })} className="w-[110px]" />
+                      </label>
+                      {permOc ? <button type="button" disabled={subiendoOc} onClick={() => void quitarOrden(o)} aria-label={`Quitar OC ${o.folio}`} className="justify-self-end p-1 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"><X className="w-3.5 h-3.5" /></button> : <span />}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -1122,21 +1613,37 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
 
         {/* ── Tabla (tablet y escritorio) ── */}
         <div className="hidden md:block overflow-x-auto">
-          <div className="min-w-[1420px]">
-            <div className={`${COLUMNAS} gap-1 px-2 py-2 text-[10.5px] font-extrabold uppercase tracking-wide text-slate-700 border-b-[3px] border-double border-slate-800 bg-white sticky top-0`}>
-              <span className="px-1.5 sticky left-0 z-[1] bg-white">Clave</span>
-              <span className="px-1.5">Descripción</span>
+          <div className={verCostos ? 'min-w-[2330px]' : 'min-w-[2130px]'}>
+            {/* Grupos como en la plantilla de SULA */}
+            <div className={`${COLS} gap-1 px-2 pt-2 text-[10px] font-extrabold uppercase tracking-[0.15em] bg-white`}>
+              {/* Clave + Descripción fijas (tapan las barras de grupo al desplazar) */}
+              <span className={`col-span-2 self-stretch bg-white ${STICKY_CLAVE}`} />
+              <span className={totalColsAntesCompras === 10 ? 'col-span-8' : 'col-span-6'} />
+              <span className="col-span-3 rounded-t-md bg-emerald-700 text-white text-center py-1">Compras</span>
+              <span className="col-span-2 rounded-t-md bg-blue-700 text-white text-center py-1">Finanzas</span>
+              <span className="col-span-4 rounded-t-md bg-amber-700 text-white text-center py-1">Almacén</span>
+              <span />
+            </div>
+            <div className={`${COLS} gap-1 px-2 py-2 text-[10.5px] font-extrabold uppercase tracking-wide text-slate-700 border-b-[3px] border-double border-slate-800 bg-white sticky top-0`}>
+              <span className={`px-1.5 bg-white ${STICKY_CLAVE}`}>Clave</span>
+              <span className={`px-1.5 bg-white ${STICKY_DESC}`}>Descripción</span>
               <span className="px-1.5">Unidad</span>
               <span className="px-1.5">Clasificación</span>
               <span className="px-1.5">Moneda</span>
-              <span className="px-1.5 text-right">Costo</span>
+              {verCostos && <span className="px-1.5 text-right">Costo</span>}
               <span className="px-1.5 text-right">Cant. necesaria</span>
-              <span className="px-1.5 text-right">Costo estimado</span>
-              <span className="px-1.5 text-center" title="Folio de la orden de compra">OC</span>
-              <span className="px-1.5 text-center">Compra</span>
-              <span className="px-1.5 text-center">Fecha compra</span>
+              {verCostos && <span className="px-1.5 text-right">Costo estimado</span>}
+              <span className="px-1.5" title="Pedido = tiene OC · Comprado · En almacén">Estado</span>
+              <span className="px-1.5 text-center" title="Columna SE COMPRA O NO del Excel">Se compra</span>
+              <span className="px-1.5 text-center" title="Folio de la orden de compra">Orden de compra</span>
+              <span className="px-1.5 text-center">Fecha</span>
+              <span className="px-1.5 text-center" title="Comprado">Check</span>
+              <span className="px-1.5 text-center">Finanzas</span>
+              <span className="px-1.5 text-center">Fecha</span>
               <span className="px-1.5 text-center">Almacén</span>
-              <span className="px-1.5 text-center">Fecha almacén</span>
+              <span className="px-1.5 text-center" title="Cuánto ha llegado (de la cantidad necesaria)">Recibido</span>
+              <span className="px-1.5 text-center" title="Cantidad necesaria − recibido">Faltan</span>
+              <span className="px-1.5 text-center">Fecha</span>
               <span />
             </div>
 
@@ -1145,10 +1652,13 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
               return (
                 <div key={g.unidad}>
                   <button type="button" onClick={() => setCerradas(prev => { const n = new Set(prev); if (n.has(g.unidad)) n.delete(g.unidad); else n.add(g.unidad); return n; })}
-                    aria-expanded={abierta} className="w-full flex items-center gap-2 px-3 py-1.5 bg-slate-200/70 border-b border-slate-300 text-[12px] font-extrabold text-slate-800 hover:bg-slate-200">
-                    {abierta ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                    {g.unidad}
-                    <span className="font-semibold text-slate-500">· {g.lineas.length}</span>
+                    aria-expanded={abierta} className="w-full flex items-center px-3 py-1.5 bg-slate-200/70 border-b border-slate-300 text-[12px] font-extrabold text-slate-800 hover:bg-slate-200">
+                    {/* El nombre de la sección se queda a la vista al desplazar la tabla */}
+                    <span className="sticky left-3 inline-flex items-center gap-2">
+                      {abierta ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                      {g.unidad}
+                      <span className="font-semibold text-slate-500">· {g.lineas.length}</span>
+                    </span>
                   </button>
                   {abierta && (<>
                     {g.lineas.map(filaEscritorio)}
@@ -1159,10 +1669,12 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
                       </button>
                     )}
                   </>)}
-                  <div className={`${COLUMNAS} gap-1 px-2 py-1.5 border-b-2 border-slate-400 text-[12px] font-extrabold bg-white`}>
-                    <span className="col-span-6 text-right px-1.5">Totales {g.unidad}:</span>
+                  <div className={`${COLS} gap-1 px-2 py-1.5 border-b-2 border-slate-400 text-[12px] font-extrabold bg-white`}>
+                    {/* "Totales Kilo: 670.35" en las columnas fijas (Clave + Descripción): se ve siempre */}
+                    <span className={`col-span-2 px-1.5 bg-white ${STICKY_CLAVE}`}>Totales {g.unidad}: <span className="tabular-nums">{cantidadTxt(g.totalCantidad)}</span></span>
+                    <span className={verCostos ? 'col-span-4' : 'col-span-3'} />
                     <span className="text-right tabular-nums px-1.5">{cantidadTxt(g.totalCantidad)}</span>
-                    <span className="text-right tabular-nums px-1.5">{dinero(g.totalCosto)}</span>
+                    {verCostos && <span className="text-right tabular-nums px-1.5">{dinero(g.totalCosto)}</span>}
                   </div>
                 </div>
               );
@@ -1179,7 +1691,7 @@ export function HojaExplosion({ explosionId, estado, bloqueado, partidas, asegur
             <div key={g.unidad} className="space-y-2">
               <div className="flex items-center justify-between px-1 text-[12px] font-extrabold text-slate-800">
                 <span>{g.unidad} <span className="font-semibold text-slate-500">· {g.lineas.length}</span></span>
-                <span className="tabular-nums">${dinero(g.totalCosto)}</span>
+                {verCostos && <span className="tabular-nums">${dinero(g.totalCosto)}</span>}
               </div>
               {g.lineas.map(tarjetaCelular)}
               {(eliminadasPorUnidad.get(g.unidad) ?? []).map(l => filaQuitada(l, true))}

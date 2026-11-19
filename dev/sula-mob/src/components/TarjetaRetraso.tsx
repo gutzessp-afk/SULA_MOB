@@ -2,9 +2,10 @@
  * TarjetaRetraso.tsx
  * ──────────────────
  * Tarjeta de un reporte que manda un operador, para Reportes del administrador.
- * Estilo "liquid glass" sobre la paleta oscura de la app. Muestra solo lo esencial:
- * área, pedido, sucursal, quién reporta, hora, fecha y la razón del reporte
- * (el motivo, lo que escribió el operador, la pieza y la foto si las hay).
+ * Diseño "ticket" (v2): franja lateral con el color del área, arriba el motivo y cuándo pasó,
+ * en grande lo que escribió el operador, abajo una tira con pedido · sucursal · pieza,
+ * la foto a la derecha (abajo en celular) y al pie quién reporta + "Abrir proyecto".
+ * Mismos colores de siempre (vidrio oscuro, rojo del motivo, cian de la sucursal, azul del botón).
  *
  * Solo muestra datos: no consulta nada. La pantalla que la usa (admin/reportes) trae las filas.
  *
@@ -13,8 +14,8 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowRight, Boxes, Calendar, Camera, Clock, User } from 'lucide-react';
-import { AreaBadge } from '@/components/AreaBadge';
+import { ArrowRight, Boxes, Calendar, Camera, Clock, MapPin, Package, Quote, User } from 'lucide-react';
+import { AreaBadge, estiloArea } from '@/components/AreaBadge';
 import { ZONA_HORARIA } from '@/lib/entregas';
 
 export interface ProyectoRetraso {
@@ -77,7 +78,10 @@ export function textosDelOperador(r: Pick<Retraso, 'descripcion' | 'comentario'>
 }
 
 /** Base de las píldoras de vidrio (etiquetas de área, motivo, pedido, horas) */
-const PILDORA = 'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-bold shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]';
+const PILDORA = 'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-bold shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]';
+/** Celda de la tira de datos (pedido / sucursal / pieza) */
+const CELDA = 'min-w-0 flex items-start gap-2.5 px-3.5 py-2.5';
+const ETIQUETA = 'block text-[10px] font-bold uppercase tracking-wider text-white/40';
 
 interface Props {
   retraso: Retraso;
@@ -89,86 +93,104 @@ interface Props {
 export function TarjetaRetraso({ retraso: r, operador, resaltado = false }: Props) {
   const p = r.proyectos;
   const pieza = piezaDelReporte(r.descripcion);
-  const textos = textosDelOperador(r);
+  const [principal, ...extras] = textosDelOperador(r);
   const sucursal = p ? sucursalDelProyecto(p) : '';
+  const area = r.areas?.nombre ?? '';
+  // Franja lateral con el color del área (el mismo de su etiqueta)
+  const colorArea = estiloArea(area).hex;
+
+  const foto = r.evidencia_url && (
+    <a href={r.evidencia_url} target="_blank" rel="noreferrer" aria-label="Ver foto completa de la evidencia" className="group relative block w-full overflow-hidden rounded-2xl border border-white/20 shadow-[0_12px_22px_-12px_rgba(0,0,0,0.8)] md:w-44">
+      {/* Miniatura optimizada y diferida (fotos de Supabase); el enlace abre la foto completa */}
+      {esFotoSupabase(r.evidencia_url) ? (
+        <Image src={r.evidencia_url} alt="Evidencia del reporte" width={176} height={176} sizes="(min-width: 768px) 176px, 100vw" className="h-40 w-full object-cover transition-transform duration-300 group-hover:scale-105 md:h-44" />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={r.evidencia_url} alt="Evidencia del reporte" loading="lazy" decoding="async" className="h-40 w-full object-cover transition-transform duration-300 group-hover:scale-105 md:h-44" />
+      )}
+      <span className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-1.5 bg-gradient-to-t from-black/80 to-transparent pb-2 pt-6 text-[11px] font-semibold text-white/90">
+        <Camera className="h-3.5 w-3.5" /> Ver foto completa
+      </span>
+    </a>
+  );
 
   return (
     <article
-      className={`overflow-hidden rounded-3xl border bg-gradient-to-br from-white/[0.10] to-white/[0.03] backdrop-blur-xl shadow-[0_24px_50px_-18px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.2)] ${
+      className={`relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white/[0.10] to-white/[0.03] backdrop-blur-xl shadow-[0_24px_50px_-18px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.2)] ${
         resaltado ? 'border-amber-400/60 ring-4 ring-amber-400/15' : 'border-white/15'
       }`}
     >
-      {/* ── Área, fecha y hora ── */}
-      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 pt-4 sm:px-6 sm:pt-5">
-        <div className="flex flex-wrap items-center gap-2">
-          {resaltado && <span className={`${PILDORA} border-amber-400/45 bg-amber-400/15 text-amber-300`}>Nuevo</span>}
-          <AreaBadge area={r.areas?.nombre ?? ''} />
-        </div>
-        <div className="flex items-center gap-3 text-xs text-white/60">
-          <span className="inline-flex items-center gap-1.5"><Calendar className="h-3.5 w-3.5 text-white/40" /> {fechaDe(r.created_at)}</span>
-          <span className="inline-flex items-center gap-1.5 font-semibold text-white/85"><Clock className="h-3.5 w-3.5 text-white/40" /> {horaDe(r.created_at)}</span>
-        </div>
-      </header>
+      {/* Franja del área */}
+      <span aria-hidden className="absolute inset-y-0 left-0 w-1.5" style={{ background: `linear-gradient(to bottom, ${colorArea}, ${colorArea}55)` }} />
 
-      {/* ── Pedido y sucursal ── */}
-      <section className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-2xl border border-white/10 bg-black/30 p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] sm:mx-6">
-        {p ? (
-          <>
-            <div className="min-w-0 flex-1">
-              <p className="text-[15px] font-bold leading-snug text-white">
-                {p.nombre || p.codigo || 'Pedido sin nombre'}
-              </p>
+      <div className="grid gap-4 py-4 pl-5 pr-4 sm:py-5 sm:pl-7 sm:pr-6 md:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="min-w-0 space-y-3.5">
+          {/* ── Motivo, área y cuándo ── */}
+          <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {resaltado && <span className={`${PILDORA} border-amber-400/45 bg-amber-400/15 text-amber-300`}>Nuevo</span>}
+              <span className={`${PILDORA} border-red-400/35 bg-gradient-to-br from-red-500/30 to-red-500/10 text-[13px] text-red-300`}>
+                {r.motivo || 'Sin motivo'}
+              </span>
+              <AreaBadge area={area} />
             </div>
-            {sucursal && (
-              <span className={`${PILDORA} border-cyan-400/40 bg-gradient-to-br from-cyan-400/30 to-blue-500/20 text-sm uppercase tracking-wide text-cyan-200 shadow-[0_0_18px_-4px_rgba(34,211,238,0.45),inset_0_1px_0_rgba(255,255,255,0.25)]`}>
-                {sucursal}
-              </span>
-            )}
-          </>
-        ) : (
-          <p className="text-xs text-white/50">Pedido no disponible (pudo darse de baja).</p>
-        )}
-      </section>
+            <div className="flex items-center gap-3 text-xs text-white/60">
+              <span className="inline-flex items-center gap-1.5"><Calendar className="h-3.5 w-3.5 text-white/40" /> {fechaDe(r.created_at)}</span>
+              <span className="inline-flex items-center gap-1.5 font-semibold text-white/85"><Clock className="h-3.5 w-3.5 text-white/40" /> {horaDe(r.created_at)}</span>
+            </div>
+          </header>
 
-      {/* ── Razón del reporte ── */}
-      <section className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-start sm:justify-between sm:px-6">
-        <div className="min-w-0 flex-1 space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-white/40">Razón del reporte</p>
-          <span className={`${PILDORA} border-red-400/35 bg-gradient-to-br from-red-500/30 to-red-500/10 text-sm text-red-300`}>
-            {r.motivo || 'Sin motivo'}
-          </span>
-          {textos.map((t, i) => (
-            <p key={i} className={i === 0 ? 'text-base font-semibold leading-snug text-white' : 'text-xs leading-relaxed text-white/60'}>{t}</p>
-          ))}
-          {pieza && (
-            <p className="inline-flex max-w-full items-start gap-2 rounded-xl border border-white/12 bg-white/[0.07] px-3 py-1.5 text-xs text-white/80">
-              <Boxes className="mt-px h-3.5 w-3.5 flex-shrink-0 text-white/45" />
-              <span className="min-w-0">
-                Pieza{pieza.clave && <> <span className="font-mono font-bold text-blue-300">{pieza.clave}</span></>}
-                {pieza.nombre && <> · {pieza.nombre}</>}
-              </span>
-            </p>
+          {/* ── Lo que escribió el operador ── */}
+          {principal ? (
+            <blockquote className="relative pl-7">
+              <Quote aria-hidden className="absolute left-0 top-0.5 h-5 w-5 text-white/25" />
+              <p className="text-lg font-semibold leading-snug text-white break-words">{principal}</p>
+              {extras.map((t, i) => (
+                <p key={i} className="mt-1 text-xs leading-relaxed text-white/60 break-words">{t}</p>
+              ))}
+            </blockquote>
+          ) : (
+            <p className="text-sm italic text-white/45">El operador no escribió comentario.</p>
           )}
+
+          {/* ── Pedido · sucursal · pieza ── */}
+          <dl className="grid overflow-hidden rounded-2xl border border-white/10 bg-black/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] divide-y divide-white/10 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)] sm:divide-y-0 sm:divide-x">
+            <div className={CELDA}>
+              <Package className="mt-0.5 h-4 w-4 flex-shrink-0 text-white/40" />
+              <div className="min-w-0">
+                <dt className={ETIQUETA}>Pedido</dt>
+                <dd className="truncate text-[15px] font-bold text-white">{p ? p.nombre || p.codigo || 'Pedido sin nombre' : 'No disponible (pudo darse de baja)'}</dd>
+              </div>
+            </div>
+            <div className={CELDA}>
+              <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-cyan-300/70" />
+              <div className="min-w-0">
+                <dt className={ETIQUETA}>Sucursal</dt>
+                <dd className="truncate text-sm font-bold uppercase tracking-wide text-cyan-200">{sucursal || '—'}</dd>
+              </div>
+            </div>
+            {pieza && (
+              <div className={`${CELDA} border-t border-white/10 sm:col-span-2 sm:!border-l-0`}>
+                <Boxes className="mt-0.5 h-4 w-4 flex-shrink-0 text-white/40" />
+                <div className="min-w-0">
+                  <dt className={ETIQUETA}>Pieza</dt>
+                  <dd className="text-xs leading-relaxed text-white/80 break-words">
+                    {pieza.clave && <span className="font-mono font-bold text-blue-300">{pieza.clave}</span>}
+                    {pieza.clave && pieza.nombre && ' · '}
+                    {pieza.nombre}
+                  </dd>
+                </div>
+              </div>
+            )}
+          </dl>
         </div>
 
-        {r.evidencia_url && (
-          <a href={r.evidencia_url} target="_blank" rel="noreferrer" className="group block w-fit flex-shrink-0">
-            {/* Miniatura optimizada y diferida (fotos de Supabase); el enlace abre la foto completa */}
-            {esFotoSupabase(r.evidencia_url) ? (
-              <Image src={r.evidencia_url} alt="Evidencia del reporte" width={160} height={112} sizes="160px" className="h-28 w-40 rounded-2xl border border-white/20 object-cover shadow-[0_12px_22px_-12px_rgba(0,0,0,0.8)]" />
-            ) : (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={r.evidencia_url} alt="Evidencia del reporte" loading="lazy" decoding="async" className="h-28 w-40 rounded-2xl border border-white/20 object-cover shadow-[0_12px_22px_-12px_rgba(0,0,0,0.8)]" />
-            )}
-            <span className="mt-1 flex items-center gap-1 text-[11px] text-blue-400 group-hover:underline">
-              <Camera className="h-3 w-3" /> Ver foto completa
-            </span>
-          </a>
-        )}
-      </section>
+        {/* ── Foto (derecha en escritorio, abajo en celular) ── */}
+        {foto && <div className="md:self-start">{foto}</div>}
+      </div>
 
       {/* ── Quién reporta ── */}
-      <footer className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-white/10 px-4 pb-4 pt-3.5 text-xs sm:px-6 sm:pb-5">
+      <footer className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-white/10 bg-black/15 py-3 pl-5 pr-4 text-xs sm:pl-7 sm:pr-6">
         <span className="inline-flex items-center gap-2 text-white/70">
           <span className="grid h-7 w-7 place-items-center rounded-full border-2 border-white/60 bg-gradient-to-br from-blue-500 to-cyan-400 shadow-[0_0_0_3px_rgba(96,165,250,0.3)]">
             <User className="h-3.5 w-3.5 text-white" />

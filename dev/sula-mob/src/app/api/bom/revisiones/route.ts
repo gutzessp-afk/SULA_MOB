@@ -5,6 +5,7 @@
  * bom_revision_lineas (sql/bom_revisiones.sql).
  *
  *   GET   ?explosion_id=UUID                         → todas las revisiones con sus líneas (por número)
+ *         (sesión de madera: solo materiales Madera; con &completa=1 todos, para verlos en Subir archivos)
  *   POST  { explosion_id }                           → empezar en blanco: crea REV-00 borrador
  *                                                      (o devuelve la revisión editable que ya hay)
  *   PATCH { explosion_id, accion: 'encabezado', encabezado: {...} }
@@ -18,14 +19,14 @@
  *   PATCH { explosion_id, accion: 'vaciar' }         → borra TODAS las revisiones: la hoja queda vacía
  *                                                      para volver a subir el Excel
  *
- * Escribir solo se puede con la explosión 'en_proceso'. Eliminar/vaciar se permite también en
+ * GET también lo pueden usar el área de madera y los perfiles ERP (solo lectura; almacén sin costos). Escribir: solo administradores, y solo con la explosión 'en_proceso'. Eliminar/vaciar se permite también en
  * 'pendiente' (no arranca el cronómetro), pero nunca con la explosión terminada. Solo administradores.
  *
  * RUTA DEL ARCHIVO: src/app/api/bom/revisiones/route.ts
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { esAdmin, supabaseServidor } from '@/lib/admin-api'
+import { esAdmin, esClasifMadera, esSesionMadera, puedeVerBom, supabaseServidor, verCostos } from '@/lib/admin-api'
 import { obtenerUsuarioDeSesion } from '@/lib/registrar-actividad'
 import { bloqueoEdicion, errorJson, leerExplosion, revisionEditable, ultimaRevision } from '@/lib/explosion-servidor'
 import { lineaConContenido, type EncabezadoRev } from '@/lib/explosion-revisiones'
@@ -34,7 +35,7 @@ const SIN_CACHE = { headers: { 'Cache-Control': 'no-store' } }
 const CAMPOS_ENCABEZADO: (keyof EncabezadoRev)[] = ['fecha', 'cliente', 'proyecto', 'pedido', 'orden_produccion', 'usuario']
 
 export async function GET(request: NextRequest) {
-  if (!(await esAdmin())) return errorJson('Solo administradores.', 403)
+  if (!(await puedeVerBom())) return errorJson('Sin permiso.', 403)
   const explosionId = request.nextUrl.searchParams.get('explosion_id')
   if (!explosionId) return errorJson('Falta explosion_id.', 400)
 
@@ -45,11 +46,19 @@ export async function GET(request: NextRequest) {
   ])
   if (error || errL) return errorJson((error ?? errL)!.message, 500)
 
+  // El área de madera solo ve los materiales de madera, salvo ?completa=1 (explosión completa de
+  // "Subir archivos", solo lectura)
+  const soloMadera = request.nextUrl.searchParams.get('completa') !== '1' && (await esSesionMadera())
   const porRevision = new Map<string, typeof lineas>()
-  for (const l of lineas ?? []) porRevision.set(l.revision_id, [...(porRevision.get(l.revision_id) ?? []), l])
+  for (const l of lineas ?? []) if (!soloMadera || esClasifMadera(l.clasificacion)) porRevision.set(l.revision_id, [...(porRevision.get(l.revision_id) ?? []), l])
+  // Almacén no ve costos: la columna costo no sale del servidor
+  const conCostos = await verCostos()
   const revisiones = (revs ?? []).map(r => ({
     ...r,
-    lineas: (porRevision.get(r.id) ?? []).map(l => ({ ...l, costo: Number(l.costo), cantidad: Number(l.cantidad) })),
+    lineas: (porRevision.get(r.id) ?? []).map(l => {
+      const { costo, ...resto } = l
+      return conCostos ? { ...resto, costo: Number(costo), cantidad: Number(l.cantidad) } : { ...resto, cantidad: Number(l.cantidad) }
+    }),
   }))
   return NextResponse.json({ revisiones }, SIN_CACHE)
 }

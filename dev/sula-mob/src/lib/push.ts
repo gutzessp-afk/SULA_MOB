@@ -91,6 +91,39 @@ export async function enviarPushAdmins(mensaje: MensajePush): Promise<number> {
   }
 }
 
+/**
+ * Manda la notificación solo a los dispositivos de ciertos usuarios (push_suscripciones.usuario_id).
+ * La usan los avisos de compras / finanzas / almacén (src/lib/notificar-erp.ts). Devuelve cuántos se
+ * enviaron; si algo falla lo anota en consola y no interrumpe a quien la llama.
+ */
+export async function enviarPushUsuarios(usuarioIds: string[], mensaje: MensajePush): Promise<number> {
+  try {
+    if (!usuarioIds.length || !configurar()) return 0
+    const supabase = supabaseServidor()
+    const { data, error } = await supabase.from('push_suscripciones').select('id, endpoint, p256dh, auth').in('usuario_id', usuarioIds)
+    if (error) { console.error('[push] No se pudieron leer las suscripciones:', error.message); return 0 }
+    if (!data?.length) return 0
+    const carga = JSON.stringify(mensaje)
+    const vencidas: string[] = []
+    let enviadas = 0
+    await Promise.all(data.map(async (s) => {
+      try {
+        await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, carga, { TTL: 60 * 60, urgency: 'high' })
+        enviadas++
+      } catch (err) {
+        const codigo = (err as { statusCode?: number }).statusCode
+        if (codigo === 404 || codigo === 410) vencidas.push(s.id)
+        else console.error('[push] No se pudo enviar:', codigo, (err as Error).message)
+      }
+    }))
+    if (vencidas.length) await supabase.from('push_suscripciones').delete().in('id', vencidas)
+    return enviadas
+  } catch (err) {
+    console.error('[push] Error al enviar notificaciones:', err)
+    return 0
+  }
+}
+
 /** Notificación de prueba a UN dispositivo (botón "Enviar prueba" de Mi perfil) */
 export async function enviarPrueba(sub: { endpoint: string; p256dh: string; auth: string }): Promise<string | null> {
   const problema = problemaLlaves()

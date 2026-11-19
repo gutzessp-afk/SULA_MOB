@@ -51,6 +51,124 @@ export interface LineaRev {
   almacen: boolean
   /** YYYY-MM-DD o null */
   fecha_almacen: string | null
+  /** Columna "SE COMPRA O NO" del Excel: true = SI, false = NO, null = no dice (sql/bom_se_compra.sql) */
+  se_compra?: boolean | null
+  /** FINANZAS: estado del pago de la partida (sql/explosion_estados.sql) */
+  estado_pago?: EstadoPago
+  /** YYYY-MM-DD: se pone sola cada vez que cambia el estado de pago */
+  fecha_estado_pago?: string | null
+  /** ALMACÉN: lo cambia almacén a mano (nunca un pago); RECIBIDO ⇔ almacen = true */
+  estado_almacen?: EstadoAlmacen
+  /** Cuánto llegó (PARCIALMENTE RECIBIDO o RECIBIDO) */
+  cantidad_recibida?: number | null
+}
+
+/* ═══ Estados de FINANZAS y ALMACÉN por partida ═══ */
+
+export const ESTADOS_PAGO = ['PENDIENTE DE PAGO', 'PARCIALMENTE PAGADO', 'PAGADO'] as const
+export const ESTADOS_ALMACEN = ['PENDIENTE DE RECIBIR', 'PARCIALMENTE RECIBIDO', 'RECIBIDO'] as const
+export type EstadoPago = (typeof ESTADOS_PAGO)[number]
+export type EstadoAlmacen = (typeof ESTADOS_ALMACEN)[number]
+
+/**
+ * Texto del Excel o de la API → estado. Acepta minúsculas, acentos, espacios de más y el error de la
+ * plantilla de SULA "PEDIENTE DE RECIBIR". null si no es ningún estado.
+ */
+export function normalizarEstado(texto: unknown): EstadoPago | EstadoAlmacen | null {
+  const t = normalizar(texto).replace(/^pediente/, 'pendiente')
+  if (!t) return null
+  return [...ESTADOS_PAGO, ...ESTADOS_ALMACEN].find(e => normalizar(e) === t) ?? null
+}
+
+export const esEstadoPago = (v: unknown): v is EstadoPago => (ESTADOS_PAGO as readonly unknown[]).includes(v)
+export const esEstadoAlmacen = (v: unknown): v is EstadoAlmacen => (ESTADOS_ALMACEN as readonly unknown[]).includes(v)
+
+/** Colores de la leyenda (rojo = pendiente, ámbar = parcial, verde = completo) */
+export const COLOR_ESTADO: Record<EstadoPago | EstadoAlmacen, { fondo: string; texto: string }> = {
+  'PENDIENTE DE PAGO': { fondo: '#FEE4E2', texto: '#B42318' },
+  'PENDIENTE DE RECIBIR': { fondo: '#FEE4E2', texto: '#B42318' },
+  'PARCIALMENTE PAGADO': { fondo: '#FEF0C7', texto: '#B54708' },
+  'PARCIALMENTE RECIBIDO': { fondo: '#FEF0C7', texto: '#B54708' },
+  PAGADO: { fondo: '#D1FADF', texto: '#05603A' },
+  RECIBIDO: { fondo: '#D1FADF', texto: '#05603A' },
+}
+
+/** Nombre corto para la tabla, el PDF y las pastillas */
+export const ESTADO_CORTO: Record<EstadoPago | EstadoAlmacen, string> = {
+  'PENDIENTE DE PAGO': 'Pend. de pago',
+  'PARCIALMENTE PAGADO': 'Parcial',
+  PAGADO: 'Pagado',
+  'PENDIENTE DE RECIBIR': 'Por recibir',
+  'PARCIALMENTE RECIBIDO': 'Parcial',
+  RECIBIDO: 'Recibido',
+}
+
+export const estadoPagoDe = (l: Pick<LineaRev, 'estado_pago'>): EstadoPago => (esEstadoPago(l.estado_pago) ? l.estado_pago : 'PENDIENTE DE PAGO')
+export const estadoAlmacenDe = (l: Pick<LineaRev, 'estado_almacen' | 'almacen'>): EstadoAlmacen =>
+  esEstadoAlmacen(l.estado_almacen) ? l.estado_almacen : l.almacen ? 'RECIBIDO' : 'PENDIENTE DE RECIBIR'
+
+const redondear3 = (n: number) => Math.round(n * 1000) / 1000
+
+/**
+ * Estado de almacén que corresponde a una cantidad recibida (una sola regla para la hoja, el
+ * servidor y el Excel): 0 o vacío → PENDIENTE DE RECIBIR · menos de lo necesario → PARCIALMENTE
+ * RECIBIDO · lo necesario o más → RECIBIDO.
+ */
+export function estadoAlmacenPorCantidad(recibido: number | null | undefined, necesaria: number): EstadoAlmacen {
+  const r = Number(recibido) || 0
+  if (r <= 0) return 'PENDIENTE DE RECIBIR'
+  return r >= (Number(necesaria) || 0) ? 'RECIBIDO' : 'PARCIALMENTE RECIBIDO'
+}
+
+/** Lo que falta por llegar: max(0, necesaria − recibido) */
+export const faltanDe = (l: Pick<LineaRev, 'cantidad' | 'cantidad_recibida'>) =>
+  redondear3(Math.max(0, (Number(l.cantidad) || 0) - (Number(l.cantidad_recibida) || 0)))
+
+/** Días que puede seguir "por recibir" algo pagado antes de contarlo como pagado incompleto */
+export const DIAS_ESPERA_PAGADO = 3
+
+/**
+ * PAGADO pero no ha llegado completo: parcialmente recibido, o todavía por recibir pasados
+ * DIAS_ESPERA_PAGADO días desde que se pagó.
+ */
+export function pagadoIncompleto(l: Pick<LineaRev, 'estado_pago' | 'fecha_estado_pago' | 'estado_almacen' | 'almacen'>, hoy = hoyMexico()): boolean {
+  if (estadoPagoDe(l) !== 'PAGADO') return false
+  const a = estadoAlmacenDe(l)
+  if (a === 'PARCIALMENTE RECIBIDO') return true
+  if (a !== 'PENDIENTE DE RECIBIR' || !l.fecha_estado_pago) return false
+  const dias = (Date.parse(`${hoy}T12:00:00Z`) - Date.parse(`${l.fecha_estado_pago}T12:00:00Z`)) / 86_400_000
+  return dias >= DIAS_ESPERA_PAGADO
+}
+
+/** 'AAAA-MM-DD' → 'dd/mm/aaaa' en hora de México (sin recorrer el día por zona horaria) */
+export function fechaMx(ymd: string | null | undefined): string {
+  if (!ymd || !/^\d{4}-\d{2}-\d{2}/.test(ymd)) return ''
+  return new Date(`${ymd.slice(0, 10)}T12:00:00Z`).toLocaleDateString('es-MX', { timeZone: 'America/Mexico_City', day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
+/** ¿La columna OC ("5621, 5630") trae ese folio? */
+export function tieneFolio(oc: unknown, folio: string): boolean {
+  const f = folio.trim()
+  return !!f && String(oc ?? '').split(/[,;/]+/).some(x => x.trim() === f)
+}
+
+/** Conteos de pago y de almacén (solo partidas con clave o descripción) */
+export function resumenEstados(lineas: Pick<LineaRev, 'clave' | 'descripcion' | 'estado_pago' | 'fecha_estado_pago' | 'estado_almacen' | 'almacen'>[]) {
+  const r = { pagadas: 0, pagoParcial: 0, pagoPendiente: 0, recibidas: 0, recibidoParcial: 0, porRecibir: 0, pagadoIncompleto: 0 }
+  const hoy = hoyMexico()
+  for (const l of lineas) {
+    if (!(l.clave.trim() || l.descripcion.trim())) continue
+    const p = estadoPagoDe(l)
+    if (p === 'PAGADO') r.pagadas++
+    else if (p === 'PARCIALMENTE PAGADO') r.pagoParcial++
+    else r.pagoPendiente++
+    const a = estadoAlmacenDe(l)
+    if (a === 'RECIBIDO') r.recibidas++
+    else if (a === 'PARCIALMENTE RECIBIDO') r.recibidoParcial++
+    else r.porRecibir++
+    if (pagadoIncompleto(l, hoy)) r.pagadoIncompleto++
+  }
+  return r
 }
 
 export type EstadoRev = 'borrador' | 'cerrada'
@@ -74,7 +192,32 @@ export interface Revision {
 /** Campos de una línea que el admin puede editar (OC y Compra quedan para después) */
 export const CAMPOS_EDITABLES = ['clave', 'descripcion', 'unidad', 'clasificacion', 'moneda', 'costo', 'cantidad'] as const
 export type CampoEditable = (typeof CAMPOS_EDITABLES)[number]
-export type CambiosLinea = Partial<Pick<LineaRev, CampoEditable>>
+export type CambiosLinea = Partial<Pick<LineaRev, CampoEditable | 'se_compra'>>
+
+/* ═══ Estado de compra de cada material ("YA PEDIDO") ═══ */
+
+/** Etapa más avanzada: no se compra · falta pedir · pedido (tiene OC) · comprado · en almacén */
+export type EstadoPedido = 'no_se_compra' | 'falta' | 'pedido' | 'comprado' | 'almacen'
+
+export function estadoPedido(l: Pick<LineaRev, 'oc' | 'comprado' | 'almacen' | 'se_compra'>): EstadoPedido {
+  if (l.almacen) return 'almacen'
+  if (l.comprado) return 'comprado'
+  if (String(l.oc ?? '').trim()) return 'pedido'
+  return l.se_compra === false ? 'no_se_compra' : 'falta'
+}
+
+/** Cuántos materiales ya están pedidos (con OC, comprados o en almacén) de los que se compran */
+export function resumenPedidos(lineas: Pick<LineaRev, 'clave' | 'descripcion' | 'oc' | 'comprado' | 'almacen' | 'se_compra'>[]) {
+  let pedidos = 0, faltan = 0, noSeCompran = 0
+  for (const l of lineas) {
+    if (!(l.clave.trim() || l.descripcion.trim())) continue
+    const e = estadoPedido(l)
+    if (e === 'no_se_compra') noSeCompran++
+    else if (e === 'falta') faltan++
+    else pedidos++
+  }
+  return { pedidos, faltan, noSeCompran, seCompran: pedidos + faltan }
+}
 
 /* ═══ Catálogos ═══ */
 

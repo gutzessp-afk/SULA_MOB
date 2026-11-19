@@ -5,12 +5,24 @@ import { after } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import bcrypt from 'bcryptjs'
 import { registrarActividad } from '@/lib/registrar-actividad'
+import { ROLES_ERP, supabaseServidor } from '@/lib/admin-api'
 
 interface RoleData {
   nombre: string
 }
 
 const SIETE_DIAS = 60 * 60 * 24 * 7
+
+/** Perfiles ERP (compras, finanzas, almacén): entran a /erp con solo Dashboard y BOM */
+const esRolErp = (rol: string | undefined): rol is (typeof ROLES_ERP)[number] => (ROLES_ERP as readonly string[]).includes(rol ?? '')
+
+/** Página de inicio de cada rol */
+function destinoDe(rol: string): string {
+  if (rol === 'admin') return '/admin/dashboard'
+  if (rol === 'madera') return '/madera'
+  if (esRolErp(rol)) return '/erp'
+  return '/operator'
+}
 
 /** Entrada o salida en el Historial (pestaña "Entradas y salidas"), después de responder */
 function registrarSesion(tipo: 'login' | 'logout', usuario: { id?: string; nombre?: string; correo?: string; username?: string; rol?: string; dispositivo?: string }) {
@@ -70,10 +82,28 @@ export async function loginAction(prevState: unknown, formData: FormData) {
         return { error: 'Esta cuenta es de Administrador. Por favor selecciona el perfil Administrador.' }
       }
 
+      // Las cuentas de Supabase Auth son de administrador, SALVO el área de madera y los perfiles ERP
+      // (compras, finanzas, almacén): se revisa el rol de su fila en usuarios (sql/rol_madera.sql,
+      // sql/roles_erp.sql). Si la consulta falla, queda admin como siempre.
+      let rolAuth = 'admin'
+      let nombreAuth = ''
+      try {
+        const { data: fila } = await supabaseServidor()
+          .from('usuarios')
+          .select('nombre, apellidos, roles ( nombre )')
+          .eq('id', authData.user.id)
+          .maybeSingle()
+        const relacion = fila?.roles as unknown as RoleData | RoleData[] | null
+        const nombreRol = (Array.isArray(relacion) ? relacion[0]?.nombre : relacion?.nombre)?.toLowerCase()
+        if (nombreRol === 'madera' || esRolErp(nombreRol)) rolAuth = nombreRol
+        nombreAuth = `${fila?.nombre ?? ''} ${fila?.apellidos ?? ''}`.trim()
+      } catch {}
+
       cookieStore.set('sula_session', JSON.stringify({
         id: authData.user.id,
         correo: authData.user.email,
-        rol: 'admin',
+        ...(nombreAuth && rolAuth !== 'admin' ? { nombre: nombreAuth } : {}),
+        rol: rolAuth,
       }), {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
@@ -82,8 +112,8 @@ export async function loginAction(prevState: unknown, formData: FormData) {
         ...duracion,
       })
 
-      registrarSesion('login', { id: authData.user.id, correo: authData.user.email, rol: 'admin' })
-      return { success: true, redirectUrl: '/admin/dashboard' }
+      registrarSesion('login', { id: authData.user.id, correo: authData.user.email, rol: rolAuth })
+      return { success: true, redirectUrl: destinoDe(rolAuth) }
     }
   } catch {}
 
@@ -117,7 +147,8 @@ export async function loginAction(prevState: unknown, formData: FormData) {
         const userRole = (rawRoleName || 'operador').toLowerCase()
 
         // VALIDACIÓN ESTRICTA DEL ROL SELECCIONADO EN EL LOGIN
-        if (selectedRole === 'admin' && userRole !== 'admin') {
+        // El área de madera y los perfiles ERP entran por el mismo formulario de correo y contraseña
+        if (selectedRole === 'admin' && userRole !== 'admin' && userRole !== 'madera' && !esRolErp(userRole)) {
           return { error: 'Esta cuenta no tiene permisos de Administrador. Cambia el perfil a Operador.' }
         }
 
@@ -141,8 +172,7 @@ export async function loginAction(prevState: unknown, formData: FormData) {
         })
 
         registrarSesion('login', { id: usuario.id, nombre: `${usuario.nombre} ${usuario.apellidos || ''}`.trim(), correo: usuario.correo, rol: userRole })
-        const destination = userRole === 'admin' ? '/admin/dashboard' : '/operator'
-        return { success: true, redirectUrl: destination }
+        return { success: true, redirectUrl: destinoDe(userRole) }
       }
     }
   } catch {

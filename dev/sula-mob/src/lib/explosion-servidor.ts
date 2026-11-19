@@ -77,7 +77,7 @@ export async function encabezadoInicial(supabase: Supabase, proyectoId: string, 
   }
 }
 
-const COLUMNAS_COPIA = 'id, orden, clave, descripcion, unidad, clasificacion, moneda, costo, cantidad, oc, comprado, fecha_compra, almacen, fecha_almacen'
+const COLUMNAS_COPIA = 'id, orden, clave, descripcion, unidad, clasificacion, moneda, costo, cantidad, oc, comprado, fecha_compra, almacen, fecha_almacen, se_compra, estado_pago, fecha_estado_pago, estado_almacen, cantidad_recibida'
 
 /**
  * Revisión donde se escriben los cambios (ver la regla arriba).

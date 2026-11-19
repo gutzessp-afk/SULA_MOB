@@ -17,6 +17,8 @@ export const TIPOS_ACTIVIDAD = [
   'login', 'logout', 'pedido_creado', 'pedido_completado',
   'plano_analizado', 'plano_actualizado', 'despiece_generado',
   'bom_iniciado', 'bom_completado',
+  // Estados de FINANZAS y ALMACÉN de una partida de la explosión (src/app/api/bom/revisiones/compras)
+  'bom_estado_pago', 'bom_estado_almacen',
 ] as const
 
 export type TipoActividad = (typeof TIPOS_ACTIVIDAD)[number]

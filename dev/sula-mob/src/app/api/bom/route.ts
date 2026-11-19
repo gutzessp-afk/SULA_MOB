@@ -6,6 +6,8 @@
  *   GET    /api/bom                        → lista con datos del proyecto, conteos y la revisión
  *                                            actual de la hoja (sin los pedidos terminados, progreso 100%)
  *   GET    /api/bom?estado=pendiente,...   → filtro por estado (coma-separados)
+ *          Sesión de madera: los pedidos con explosión iniciada o con revisiones, contando solo los
+ *          materiales Madera; ?sin_explosion=1 agrega los pendientes sin iniciar (para subirles el Excel)
  *   GET    /api/bom?id=UUID                → una explosión con proyecto, partidas y materiales
  *   GET    /api/bom?proyecto_id=UUID       → la explosión de un proyecto (para el ⚡ de Proyectos)
  *   POST   /api/bom  { proyecto_id }       → crea explosión 'pendiente' (o devuelve la que ya hay)
@@ -15,6 +17,9 @@
  *                                            | cancelar (deshace el inicio: vuelve a 'pendiente' como si
  *                                              nunca se hubiera iniciado; materiales y estatus se quedan)
  *   PATCH  /api/bom  { id, accion: 'editar_tiempo', segundos } → corrige el cronómetro a mano
+ *   PATCH  /api/bom  { id, accion: 'reiniciar_todo', borrar_estatus? } → desde cero: borra la hoja
+ *            (revisiones y materiales), las OC y los detalles, y regresa a 'pendiente' sin tiempos;
+ *            con borrar_estatus también borra los motivos y la descripción
  *   PATCH  /api/bom  { id, accion: 'guardar_estatus', motivos, notas }
  *          → motivos por los que no se puede explosionar (src/lib/bom-motivos.ts); iniciar
  *            se rechaza mientras haya alguno sin resolver
@@ -25,18 +30,27 @@
  *
  * Finalizar exige que la última revisión de la hoja (bom_revisiones) tenga materiales y la cierra.
  * El Historial (bom_iniciado / bom_completado) se registra SOLO aquí, no en la página.
- * Solo administradores.
+ * GET: administradores, área de madera y perfiles ERP (compras, finanzas, almacén; almacén sin importes).
+ * POST/PATCH: solo administradores, salvo PATCH iniciar (lo usan madera y compras al subir el Excel de la
+ * explosión: puede('excel')).
  *
  * RUTA DEL ARCHIVO: src/app/api/bom/route.ts
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { esAdmin, supabaseServidor } from '@/lib/admin-api'
+import { esAdmin, esClasifMadera, esSesionMadera, puede, puedeVerBom, supabaseServidor, verCostos } from '@/lib/admin-api'
+import { vincularPendientes } from '@/lib/explosion-pedido'
 import { registrarActividad, obtenerUsuarioDeSesion, type RegistroActividad } from '@/lib/registrar-actividad'
 import { MOTIVOS_PREDEFINIDOS, motivosDe, motivosSinResolver, type MotivoBloqueo } from '@/lib/bom-motivos'
 import { pausasDe, segundosTrabajados } from '@/lib/bom-tiempo'
+import { hoyMexico, pagadoIncompleto } from '@/lib/explosion-revisiones'
 
 const ESTADOS_VALIDOS = ['pendiente', 'en_proceso', 'completado']
+
+/** Almacén no ve costos: quita de un renglón las columnas de dinero (costo, precio, importe…) */
+function sinDinero<T extends Record<string, unknown>>(fila: T): T {
+  return Object.fromEntries(Object.entries(fila).filter(([k]) => !/costo|precio|importe|monto|pagad/i.test(k))) as T
+}
 
 /**
  * Valida los motivos que manda la página y conserva quién/cuándo los reportó o resolvió.
@@ -74,7 +88,7 @@ function normalizarMotivos(entrada: unknown, anteriores: MotivoBloqueo[], usuari
 const SIN_CACHE = { headers: { 'Cache-Control': 'no-store' } }
 
 export async function GET(request: NextRequest) {
-  if (!(await esAdmin()))
+  if (!(await puedeVerBom()))
     return NextResponse.json({ error: 'Solo administradores.' }, { status: 403 })
 
   const supabase = supabaseServidor()
@@ -85,6 +99,7 @@ export async function GET(request: NextRequest) {
     const { data, error } = await supabase
       .from('bom_explosiones')
       .select('id, proyecto_id, estado, fecha_inicio, fecha_termino, duracion_seg, acumulado_seg, tramo_inicio, checklist')
+      .not('proyecto_id', 'is', null)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     const resumen = Object.fromEntries((data ?? []).map(e => [e.proyecto_id, e]))
     return NextResponse.json({ resumen }, SIN_CACHE)
@@ -119,13 +134,17 @@ export async function GET(request: NextRequest) {
       supabase.from('bom_detalles').select('*').eq('explosion_id', id).order('orden', { ascending: true }),
     ])
 
+    const conCostos = await verCostos()
     return NextResponse.json(
-      { explosion: { ...explosion, proyecto, partidas: partidas ?? [], detalles: detalles ?? [] } },
+      { explosion: { ...explosion, proyecto, partidas: partidas ?? [], detalles: conCostos ? detalles ?? [] : (detalles ?? []).map(sinDinero) } },
       SIN_CACHE,
     )
   }
 
   /* ── Lista ── */
+  // Madera: primero se ligan a su proyecto las explosiones "sin alta" cuyo pedido ya se dio de alta
+  const sesionMadera = await esSesionMadera()
+  const avisosMadera = sesionMadera ? await vincularPendientes(supabase, (await obtenerUsuarioDeSesion()).nombre) : []
   const estadosFiltro = (params.get('estado') || '')
     .split(',')
     .filter(e => ESTADOS_VALIDOS.includes(e))
@@ -139,20 +158,34 @@ export async function GET(request: NextRequest) {
   const { data: explosiones, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const proyectoIds = [...new Set((explosiones ?? []).map(e => e.proyecto_id as string))]
+  // Las explosiones "sin alta" (proyecto_id NULL, panel de madera) no tienen proyecto que buscar
+  const proyectoIds = [...new Set((explosiones ?? []).map(e => e.proyecto_id as string | null).filter((x): x is string => !!x))]
   const explosionIds = (explosiones ?? []).map(e => e.id as string)
   const proyectos: Record<string, { codigo: string; nombre: string; sucursal: string | null; prioridad: string; progreso: number }> = {}
   const partidasPorProyecto: Record<string, number> = {}
   const materiales: Record<string, { total: number; checked: number }> = {}
-  const revisionActual: Record<string, { numero: number; estado: string; lineas: number }> = {}
+  // Avance de compras de la última revisión: total y solo clasificación Madera
+  // pagado_incompleto: PAGADO pero no ha llegado completo (src/lib/explosion-revisiones.ts → pagadoIncompleto)
+  type Compras = { total: number; comprados: number; almacen: number; sin_oc: number; pagado_incompleto: number }
+  const revisionActual: Record<string, { numero: number; estado: string; lineas: number; compras: Compras; madera: Compras }> = {}
+  // Órdenes de compra por explosión: cuántas, total, pagado
+  const ordenesPor: Record<string, { cantidad: number; total: number; pagado: number }> = {}
 
   if (proyectoIds.length > 0) {
-    const [{ data: proys }, { data: pts }, { data: dets }, { data: revs }] = await Promise.all([
+    const [{ data: proys }, { data: pts }, { data: dets }, { data: revs }, { data: ocs }] = await Promise.all([
       supabase.from('proyectos').select('id, codigo, nombre, referencia_sucursal, prioridad, progreso').in('id', proyectoIds),
       supabase.from('partidas').select('proyecto_id').in('proyecto_id', proyectoIds),
       supabase.from('bom_detalles').select('explosion_id, checked').in('explosion_id', explosionIds),
       supabase.from('bom_revisiones').select('id, explosion_id, numero, estado').in('explosion_id', explosionIds),
+      supabase.from('bom_ordenes_compra').select('explosion_id, total, monto_pagado').in('explosion_id', explosionIds),
     ])
+    // Si la tabla o las columnas de pago todavía no existen, ocs viene vacío y la lista sigue funcionando
+    for (const o of ocs ?? []) {
+      const t = (ordenesPor[o.explosion_id] ??= { cantidad: 0, total: 0, pagado: 0 })
+      t.cantidad++
+      t.total += Number(o.total) || 0
+      t.pagado += Math.min(Number(o.monto_pagado) || 0, Number(o.total) || Infinity)
+    }
     for (const p of proys ?? []) {
       proyectos[p.id] = { codigo: p.codigo, nombre: p.nombre, sucursal: p.referencia_sucursal, prioridad: p.prioridad, progreso: Number(p.progreso) || 0 }
     }
@@ -173,11 +206,28 @@ export async function GET(request: NextRequest) {
     if (ultimas.size > 0) {
       const { data: lins } = await supabase
         .from('bom_revision_lineas')
-        .select('revision_id')
+        .select('revision_id, clave, descripcion, clasificacion, oc, comprado, almacen, estado_pago, fecha_estado_pago, estado_almacen')
         .in('revision_id', [...ultimas.values()].map(r => r.id))
-      const porRevision: Record<string, number> = {}
-      for (const l of lins ?? []) porRevision[l.revision_id] = (porRevision[l.revision_id] || 0) + 1
-      for (const [explosionId, r] of ultimas) revisionActual[explosionId] = { numero: r.numero, estado: r.estado, lineas: porRevision[r.id] || 0 }
+      const vacio = (): Compras => ({ total: 0, comprados: 0, almacen: 0, sin_oc: 0, pagado_incompleto: 0 })
+      const hoy = hoyMexico()
+      const porRevision: Record<string, { lineas: number; compras: Compras; madera: Compras }> = {}
+      for (const l of lins ?? []) {
+        if (!String(l.clave ?? '').trim() && !String(l.descripcion ?? '').trim()) continue
+        const c = (porRevision[l.revision_id] ??= { lineas: 0, compras: vacio(), madera: vacio() })
+        c.lineas++
+        const esMadera = esClasifMadera(l.clasificacion)
+        for (const t of esMadera ? [c.compras, c.madera] : [c.compras]) {
+          t.total++
+          if (l.comprado) t.comprados++
+          if (l.almacen) t.almacen++
+          if (!String(l.oc ?? '').trim()) t.sin_oc++
+          if (pagadoIncompleto(l, hoy)) t.pagado_incompleto++
+        }
+      }
+      for (const [explosionId, r] of ultimas) {
+        const c = porRevision[r.id] ?? { lineas: 0, compras: vacio(), madera: vacio() }
+        revisionActual[explosionId] = { numero: r.numero, estado: r.estado, ...c }
+      }
     }
   }
 
@@ -188,7 +238,36 @@ export async function GET(request: NextRequest) {
     total_partidas: partidasPorProyecto[e.proyecto_id] || 0,
     detalles_count: materiales[e.id] || { total: 0, checked: 0 },
     revision: revisionActual[e.id] || null,
+    ordenes: ordenesPor[e.id] || { cantidad: 0, total: 0, pagado: 0 },
   }))
+
+  // Área de madera: ve en vivo los pedidos cuya explosión ya inició el administrador (en proceso o con
+  // REV-xx subida), con sus revisiones; en los números cuentan solo los materiales de madera.
+  // Los pendientes que nadie ha iniciado salen solo con ?sin_explosion=1 (página Subir archivos).
+  if (sesionMadera) {
+    const sinExplosion = params.get('sin_explosion') === '1'
+    // Explosiones "sin alta": el pedido todavía no está en Proyectos (solo en Subir archivos)
+    const sinAlta = sinExplosion
+      ? (explosiones ?? []).filter(e => !e.proyecto_id && e.pedido_numero).map(e => ({
+          ...e,
+          sin_alta: true,
+          proyecto: { codigo: `PED-${e.pedido_numero}`, nombre: '', sucursal: null, prioridad: 'media', progreso: 0 },
+          total_partidas: 0,
+          detalles_count: { total: 0, checked: 0 },
+          revision: revisionActual[e.id] || null,
+          ordenes: ordenesPor[e.id] || { cantidad: 0, total: 0, pagado: 0 },
+        }))
+      : []
+    const deMadera = [...sinAlta, ...resultado]
+      .filter(e => e.revision || e.estado !== 'pendiente' || sinExplosion)
+      .map(e => (e.revision ? { ...e, revision: { ...e.revision, lineas: e.revision.madera.total, compras: e.revision.madera } } : e))
+    return NextResponse.json({ explosiones: deMadera, avisos: avisosMadera }, SIN_CACHE)
+  }
+
+  // Almacén (perfil ERP) no ve el dinero de las OC: solo cuántas hay
+  if (!(await verCostos())) {
+    return NextResponse.json({ explosiones: resultado.map(e => ({ ...e, ordenes: { cantidad: e.ordenes.cantidad, total: 0, pagado: 0 } })) }, SIN_CACHE)
+  }
 
   return NextResponse.json({ explosiones: resultado }, SIN_CACHE)
 }
@@ -223,10 +302,11 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  if (!(await esAdmin()))
+  const body = await request.json().catch(() => null)
+  // Madera y compras solo pueden iniciar (al subir el Excel); todo lo demás es del administrador
+  if (!(await esAdmin()) && !(body?.accion === 'iniciar' && (await puede('excel'))))
     return NextResponse.json({ error: 'Solo administradores.' }, { status: 403 })
 
-  const body = await request.json().catch(() => null)
   const id = body?.id
   if (!id || typeof id !== 'string')
     return NextResponse.json({ error: 'Falta id de la explosión.' }, { status: 400 })
@@ -400,6 +480,22 @@ export async function PATCH(request: NextRequest) {
       updateData = {
         acumulado_seg: segundos,
         tramo_inicio: actual.tramo_inicio ? new Date().toISOString() : null,
+      }
+      break
+    }
+
+    case 'reiniciar_todo': {
+      // Borrar primero lo que cuelga de la explosión; si algo falla, la explosión no se toca
+      for (const tabla of ['bom_revisiones', 'bom_ordenes_compra', 'bom_detalles']) {
+        const { error } = await supabase.from(tabla).delete().eq('explosion_id', id)
+        if (error) return NextResponse.json({ error: `No se pudo borrar ${tabla}: ${error.message}` }, { status: 500 })
+      }
+      const borrarEstatus = body?.borrar_estatus === true
+      updateData = {
+        estado: 'pendiente', fecha_inicio: null, fecha_termino: null, tramo_inicio: null,
+        acumulado_seg: 0, duracion_seg: 0,
+        checklist: borrarEstatus ? {} : { ...(actual.checklist ?? {}), pausas: 0 },
+        ...(borrarEstatus ? { notas: '' } : {}),
       }
       break
     }

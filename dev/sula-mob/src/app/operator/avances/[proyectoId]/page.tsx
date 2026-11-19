@@ -7,7 +7,6 @@ import { useConsultaPeriodica } from '@/hooks/useConsultaPeriodica'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { marcarAreaTerminada } from '../../actions'
 import {
   entrarConClave,
   finalizarPieza,
@@ -24,6 +23,7 @@ import {
   reportarPieza,
   avisarNoPuedoComenzar,
   corregirPieza,
+  terminarArea,
   salirArea,
   subirEvidenciaReporte,
   type AreaOperador,
@@ -1514,8 +1514,9 @@ export default function ProyectoPage() {
   const [historial, setHistorial] = useState<EvidenciaGuardada[]>([])
 
 
+  // Devuelve la vista del área que quedó (además de guardarla) para comprobar lo que se guardó
   const cargar = useCallback(
-    async (area: string | null) => {
+    async (area: string | null): Promise<AreaVista | null> => {
       const { detalle: d, area: r } = await getPantallaOperador(proyectoId, area)
       if (d) {
         setDetalle(d)
@@ -1534,6 +1535,7 @@ export default function ProyectoPage() {
         setVista(null)
       }
       setCargando(false)
+      return area && r?.vista ? r.vista : null
     },
     [proyectoId]
   )
@@ -1582,10 +1584,14 @@ export default function ProyectoPage() {
 
   useConsultaPeriodica(cargarHistorial, null, { recargarCon: proyectoId })
 
+  // recargar: qué área recargar al terminar (null = solo el proyecto, p. ej. un área que se acaba de cerrar).
+  // verificar: revisa la vista ya recargada; si regresa texto, se muestra como error en lugar del aviso.
   async function ejecutar(
     clave: string,
     accion: () => Promise<{ error?: string }>,
-    mensaje?: string
+    mensaje?: string,
+    recargar: string | null = areaId,
+    verificar?: (v: AreaVista | null) => string | null
   ) {
     setError('')
     setAviso('')
@@ -1596,11 +1602,17 @@ export default function ProyectoPage() {
       setOcupado(null)
       if (r.error) {
         setError(r.error)
+        // Si falló, el área sigue como estaba: se recarga la que está abierta
         await cargar(areaId)
         return false
       }
+      const recargada = await cargar(recargar)
+      const problema = verificar?.(recargada) ?? null
+      if (problema) {
+        setError(problema)
+        return false
+      }
       if (mensaje) setAviso(mensaje)
-      await cargar(areaId)
       return true
     } finally {
       accionActiva.current = false
@@ -1694,7 +1706,13 @@ export default function ProyectoPage() {
     await ejecutar(
       `corregir|${id}`,
       () => corregirPieza(proyectoId, areaId, id, tipo, total),
-      `✏️ Corregido: ahora van ${total} piezas hechas.`
+      `✏️ Corregido: ahora van ${total} piezas hechas.`,
+      areaId,
+      // El aviso verde sale solo si la pieza ya recargada trae el número nuevo
+      (v) => {
+        const hechas = v?.piezas.find((p) => p.id === id)?.hechas
+        return hechas === undefined || hechas === total ? null : `No se reflejó la corrección: la pieza sigue en ${hechas}.`
+      }
     )
   }
 
@@ -1789,7 +1807,8 @@ export default function ProyectoPage() {
     ) {
       return
     }
-    const ok = await ejecutar('marcar', () => marcarAreaTerminada(proyectoId, areaId))
+    // Se recarga solo el proyecto: el área ya quedó cerrada y pedirla daría "Esta área está bloqueada"
+    const ok = await ejecutar('marcar', () => terminarArea(proyectoId, areaId), undefined, null)
     if (ok) {
       setAreaId(null)
       setVista(null)
@@ -2236,7 +2255,11 @@ export default function ProyectoPage() {
                   <div className="min-w-0">
                     <p className="text-lg font-extrabold leading-tight tracking-tight text-white">{a.nombre}</p>
                     <p className="mt-1 text-sm text-[#a9b6cf]">
-                      {a.piezas > 0 ? `${a.piezas} ${a.piezas === 1 ? 'pieza' : 'piezas'} por hacer` : 'Sin piezas en este proyecto'}
+                      {a.piezas === 0
+                        ? 'Sin piezas en este proyecto'
+                        : a.pendientes === 0
+                          ? `${a.piezas} ${a.piezas === 1 ? 'pieza' : 'piezas'} · todas listas`
+                          : `${a.pendientes} de ${a.piezas} por hacer`}
                     </p>
                   </div>
                   <span

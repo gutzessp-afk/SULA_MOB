@@ -758,6 +758,7 @@ export async function cancelarProduccion(avanceId: string): Promise<Resultado> {
   return { success: true }
 }
 
+// La pantalla por pieza usa terminarArea (pieza-actions.ts)
 export async function marcarAreaTerminada(proyectoId: string, areaId: string): Promise<Resultado> {
   const usuario = await getUsuarioActual()
   if (!usuario) return { error: 'No autenticado' }
